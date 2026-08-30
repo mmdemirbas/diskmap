@@ -1,0 +1,177 @@
+import XCTest
+@testable import DiskMapCore
+
+final class ScannerTests: XCTestCase {
+    /// Builds a known tree and asserts the aggregate equals the hand-computed sum.
+    func testAggregatesMatchKnownTree() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmtest-\(UUID().uuidString)")
+        let fm = FileManager.default
+        try fm.createDirectory(at: root.appendingPathComponent("a/b"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("c"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let sizes: [(String, Int)] = [("a/one.bin", 100_000), ("a/b/two.bin", 250_000), ("c/three.bin", 30_000)]
+        for (rel, n) in sizes {
+            try Data(count: n).write(to: root.appendingPathComponent(rel))
+        }
+
+        let result = DiskScanner().scan(ScanOptions(rootPath: root.path))
+        let store = result.store
+
+        XCTAssertEqual(result.stats.files, 3)
+        XCTAssertEqual(result.stats.directories, 3)  // a, a/b, c
+        XCTAssertEqual(store.totalLogical[0], Int64(sizes.reduce(0) { $0 + $1.1 }))
+        // Physical is block-rounded, so it must be at least logical.
+        XCTAssertGreaterThanOrEqual(store.totalPhysical[0], store.totalLogical[0])
+
+        // Every child index must exceed its parent: the aggregation pass relies on it.
+        for i in 1..<store.count {
+            XCTAssertLessThan(Int(store.parent[i]), i)
+        }
+    }
+
+    func testHardlinksCountedOnce() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmtest-\(UUID().uuidString)")
+        let fm = FileManager.default
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let original = root.appendingPathComponent("orig.bin")
+        try Data(count: 400_000).write(to: original)
+        try fm.linkItem(at: original, to: root.appendingPathComponent("link.bin"))
+
+        let result = DiskScanner().scan(ScanOptions(rootPath: root.path))
+        XCTAssertEqual(result.stats.files, 2)
+        XCTAssertEqual(result.stats.hardlinkDuplicates, 1)
+        // 400 KB on disk, not 800 KB, even though two names point at it.
+        XCTAssertLessThan(result.store.totalPhysical[0], 500_000)
+    }
+
+    func testFirmlinksAreKnown() {
+        let f = Firmlinks.mountPaths()
+        XCTAssertTrue(f.contains("/Users"), "firmlink table should list /Users")
+    }
+}
+
+final class LiveTreeTests: XCTestCase {
+    private func makeTree() throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmlive-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("keep/deep"),
+                                                withIntermediateDirectories: true)
+        try Data(count: 500_000).write(to: root.appendingPathComponent("keep/deep/big.bin"))
+        try Data(count: 100_000).write(to: root.appendingPathComponent("top.bin"))
+        return root
+    }
+
+    /// Adding a file must show up in every ancestor total, not just its folder.
+    func testRelistPicksUpNewFileAndPropagates() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: root.path)))
+        let before = live.withStore { $0.totalLogical[0] }
+
+        try Data(count: 250_000).write(to: root.appendingPathComponent("keep/added.bin"))
+        live.refresh(directory: root.appendingPathComponent("keep").path)
+
+        let after = live.withStore { $0.totalLogical[0] }
+        XCTAssertEqual(after - before, 250_000)
+    }
+
+    /// A relist of one directory must not rescan or lose untouched subtrees.
+    func testRelistReusesUntouchedSubtree() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: root.path)))
+
+        try Data(count: 1_000).write(to: root.appendingPathComponent("sibling.bin"))
+        live.refresh(directory: root.path)
+
+        let deepStillThere = live.withStore { store -> Bool in
+            store.find(path: root.appendingPathComponent("keep/deep/big.bin").path,
+                       rootPath: root.path) != nil
+        }
+        XCTAssertTrue(deepStillThere, "untouched subtree must survive a parent relist")
+        XCTAssertEqual(live.withStore { $0.totalLogical[0] }, 601_000)
+    }
+
+    func testDeletionRemovesBytesFromAncestors() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: root.path)))
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("keep/deep/big.bin"))
+        live.refresh(directory: root.appendingPathComponent("keep/deep").path)
+
+        XCTAssertEqual(live.withStore { $0.totalLogical[0] }, 100_000)
+    }
+
+    func testMarkRemovedIsImmediate() throws {
+        let root = try makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: root.path)))
+        let node = live.withStore { $0.find(path: root.appendingPathComponent("top.bin").path,
+                                            rootPath: root.path) }
+        live.markRemoved(node!)
+        XCTAssertEqual(live.withStore { $0.totalLogical[0] }, 500_000)
+    }
+}
+
+final class IntegrationTests: XCTestCase {
+    /// Trash must be the real Trash, or Finder's Put Back will not work.
+    func testMoveToTrashUsesRealTrashAndCanRestore() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmtrash-\(UUID().uuidString)")
+        let fm = FileManager.default
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        let victim = dir.appendingPathComponent("victim.bin")
+        try Data(count: 12_345).write(to: victim)
+
+        let (trashed, failures) = try FileActions.moveToTrash(
+            [(url: victim, node: 1, bytes: 12_345)])
+        XCTAssertTrue(failures.isEmpty, "trash failed: \(failures)")
+        XCTAssertEqual(trashed.count, 1)
+        XCTAssertFalse(fm.fileExists(atPath: victim.path), "original should be gone")
+
+        let item = try XCTUnwrap(trashed.first)
+        let inTrash = try XCTUnwrap(item.trashURL)
+        XCTAssertTrue(fm.fileExists(atPath: inTrash.path), "should now be in Trash")
+
+        try FileActions.restore(item)
+        XCTAssertTrue(fm.fileExists(atPath: victim.path), "restore should put it back")
+    }
+
+    /// End-to-end: a write on disk must reach the tree through FSEvents alone.
+    func testFSEventsUpdatesTreeWithoutRescan() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmwatch-\(UUID().uuidString)")
+        let fm = FileManager.default
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(count: 10_000).write(to: root.appendingPathComponent("seed.bin"))
+        defer { try? fm.removeItem(at: root) }
+
+        // Deliberately the unresolved path: NSTemporaryDirectory() hands back
+        // /var/folders/... while FSEvents reports /private/var/folders/...
+        let live = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: root.path)))
+        let resolved = URL(fileURLWithPath: live.rootPath)
+        let before = live.withStore { $0.totalLogical[0] }
+        XCTAssertEqual(before, 10_000)
+
+        let changed = expectation(description: "tree observed the new file")
+        changed.assertForOverFulfill = false
+        live.onChange = { changed.fulfill() }
+        live.startWatching()
+        defer { live.stopWatching() }
+
+        // FSEvents needs the stream to be live before the write lands.
+        Thread.sleep(forTimeInterval: 0.6)
+        try Data(count: 40_000).write(to: resolved.appendingPathComponent("late.bin"))
+
+        wait(for: [changed], timeout: 15)
+        XCTAssertEqual(live.withStore { $0.totalLogical[0] }, 50_000)
+    }
+}
