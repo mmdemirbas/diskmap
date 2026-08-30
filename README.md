@@ -39,17 +39,34 @@ because they are firmlinks onto the Data volume; those paths are excluded.
 ## Install
 
 ```sh
-Scripts/make-signing-cert.sh      # once: stable identity so Full Disk Access sticks
-Scripts/build-app.sh "DiskMap Local Signing"
-open build/DiskMap.app
+./install.sh
 ```
 
-Without the certificate, `Scripts/build-app.sh` ad-hoc signs, and macOS treats
-every rebuild as a new app — you would re-grant Full Disk Access each time.
+That is the whole thing. It checks the toolchain, creates a code-signing
+certificate if you do not have one, builds, installs to `/Applications`, then
+opens the Privacy pane and a Finder window so you can drag the app in to grant
+Full Disk Access.
 
-**Grant Full Disk Access** to `build/DiskMap.app` in System Settings → Privacy &
-Security. Without it, parts of the disk are invisible and the totals come up
-short; the status bar says so explicitly rather than quietly under-reporting.
+`./install.sh --dev` builds and runs from `./build` without installing.
+`make` targets exist for the same steps: `make install`, `make dev`, `make test`.
+
+Two things the installer handles that are easy to get wrong on your own:
+
+- **The certificate.** Full Disk Access is granted to a *signed identity*. An
+  ad-hoc signature changes on every build, so macOS would treat each rebuild as
+  a different app and drop the grant. The installer creates a stable local
+  certificate once, and asks for your login password while doing it.
+- **Full Disk Access itself.** Without it, parts of the disk stay invisible and
+  the totals come up short. The status bar says so explicitly, with a button
+  that opens the right settings pane, rather than quietly under-reporting.
+
+## Appearance and language
+
+Light and dark are both first-class; the treemap uses a separate palette for
+each rather than the same colours at a different opacity. English and Turkish
+ship in the app, switchable from the toolbar or the menu bar without a restart,
+and independently of the system language. Numbers follow the language you pick,
+so sizes read `1.5 GB` in English and `1,5 GB` in Turkish.
 
 ## Using it
 
@@ -94,11 +111,13 @@ machine, not to hardware generally.
   requested); this also shows up as unaccounted.
 - Live updates leave orphaned nodes behind on heavy churn. Memory grows slowly;
   a rescan compacts.
+- A scan can be cancelled, but a cancelled scan is discarded rather than shown
+  as a partial tree, because a partial total would read as a real one.
 
 ## Development
 
 ```sh
-swift test                                   # 9 tests, including FSEvents end-to-end
+swift test                                   # 18 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path>           # throughput and reconciliation
@@ -111,8 +130,10 @@ against `lstat` for every entry in a directory.
 The UI renders offscreen without a window server or Screen Recording permission:
 
 ```sh
-DISKMAP_RENDER="<path>|1400|900|/tmp/ui.png" build/DiskMap.app/Contents/MacOS/DiskMap
+DISKMAP_RENDER="<path>|1400|900|/tmp/ui.png||dark|tr" build/DiskMap.app/Contents/MacOS/DiskMap
 ```
+
+The trailing fields are optional: `subdir`, then `light|dark`, then `en|tr`.
 
 AppKit-backed controls (buttons, pickers, `HSplitView`) draw as placeholders in
 that mode; everything drawn by SwiftUI itself is faithful.

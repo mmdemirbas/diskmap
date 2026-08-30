@@ -90,10 +90,10 @@ public final class LiveTree: @unchecked Sendable {
             roots.append(d)
         }
 
+        // No lock across the loop: relist takes it only for the two short
+        // phases that touch the store.
         var changed = false
-        lock.lock()
         for d in roots where relist(directory: d) { changed = true }
-        lock.unlock()
 
         if changed {
             lastChangeAt = Date()
@@ -102,54 +102,71 @@ public final class LiveTree: @unchecked Sendable {
         }
     }
 
+    private struct DirEntry {
+        var name: String
+        var logical: Int64
+        var physical: Int64
+        var mtime: Int32
+        var flags: NodeFlags
+    }
+
     /// Rebuilds one directory's child list in place. Returns true if anything moved.
+    ///
+    /// Split into three phases so the lock is never held across filesystem work.
+    /// Scanning a newly appeared folder can take seconds; doing that under the
+    /// lock would block every UI read for the whole duration.
     @discardableResult
     private func relist(directory rawPath: String) -> Bool {
-        // Callers hand us whatever path they have. The tree is rooted at the
-        // resolved form, so normalise before looking anything up. realpath
-        // fails for a directory that has just been deleted, hence the fallback.
         let path = canonicalPath(rawPath) ?? rawPath
+
+        // Phase A: locate the node and note the names it already holds.
+        lock.lock()
         guard let node = store.find(path: path, rootPath: rootPath)
-                ?? store.find(path: rawPath, rootPath: rootPath) else { return false }
-        guard store.isDirectory(node) else { return false }
-
-        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        if fd < 0 {
-            // Vanished: drop its whole contribution from the ancestors.
-            let dl = -store.totalLogical[Int(node)], dp = -store.totalPhysical[Int(node)]
-            store.totalLogical[Int(node)] = 0; store.totalPhysical[Int(node)] = 0
-            store.childCount[Int(node)] = 0
-            store.flags[Int(node)] |= NodeFlags.removed.rawValue
-            store.propagate(from: node, logical: dl, physical: dp)
-            return true
-        }
-        defer { close(fd) }
-
-        var existing: [String: Int32] = [:]
+                ?? store.find(path: rawPath, rootPath: rootPath),
+              store.isDirectory(node) else { lock.unlock(); return false }
+        var knownNames = Set<String>()
         for c in store.children(node) where !store.flagSet(c).contains(.removed) {
-            existing[store.name(c)] = c
+            knownNames.insert(store.name(c))
         }
+        lock.unlock()
 
-        struct Entry { var name: String; var logical: Int64; var physical: Int64
-                       var mtime: Int32; var flags: NodeFlags }
-        var entries: [Entry] = []
+        // Phase B: filesystem work, no lock held.
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        if fd < 0 { return markVanished(node) }
+        var entries: [DirEntry] = []
         _ = BulkReader().enumerate(dirFD: fd) { e in
             var fl = NodeFlags()
             if e.isDir { fl.insert(.directory) }
             if e.isSymlink { fl.insert(.symlink) }
             if e.isDataless { fl.insert(.dataless) }
             if e.stFlags & UF_COMPRESSED_FLAG != 0 { fl.insert(.compressed) }
-            entries.append(Entry(name: String(decoding: UnsafeRawBufferPointer(start: e.name, count: e.nameLen), as: UTF8.self),
-                                 logical: e.logicalSize, physical: e.isDataless ? 0 : e.physicalSize,
-                                 mtime: Int32(truncatingIfNeeded: e.mtime), flags: fl))
+            entries.append(DirEntry(
+                name: String(decoding: UnsafeRawBufferPointer(start: e.name, count: e.nameLen), as: UTF8.self),
+                logical: e.logicalSize, physical: e.isDataless ? 0 : e.physicalSize,
+                mtime: Int32(truncatingIfNeeded: e.mtime), flags: fl))
+        }
+        close(fd)
+
+        // Only genuinely new subdirectories need scanning; the rest keep the
+        // subtree they already have.
+        var freshSubtrees: [String: NodeStore] = [:]
+        for e in entries where e.flags.contains(.directory)
+            && !e.flags.contains(.symlink) && !knownNames.contains(e.name) {
+            freshSubtrees[e.name] = DiskScanner().scan(ScanOptions(rootPath: path + "/" + e.name)).store
         }
 
-        let oldLogical = store.totalLogical[Int(node)]
-        let oldPhysical = store.totalPhysical[Int(node)]
-        let oldChildren = Array(store.children(node))
+        // Phase C: commit. Re-read the node, since the tree may have moved on.
+        lock.lock(); defer { lock.unlock() }
+        guard node < Int32(store.count), store.isDirectory(node),
+              !store.flagSet(node).contains(.removed) else { return false }
 
-        // Detect a pure no-op so idle FSEvents traffic does not churn memory.
-        if entries.count == oldChildren.count {
+        var existing: [String: Int32] = [:]
+        for c in store.children(node) where !store.flagSet(c).contains(.removed) {
+            existing[store.name(c)] = c
+        }
+
+        // Skip a no-op so idle event traffic does not churn memory.
+        if entries.count == existing.count {
             var identical = true
             for e in entries {
                 guard let c = existing[e.name] else { identical = false; break }
@@ -161,28 +178,31 @@ public final class LiveTree: @unchecked Sendable {
             if identical { return false }
         }
 
+        let oldLogical = store.totalLogical[Int(node)]
+        let oldPhysical = store.totalPhysical[Int(node)]
+        let oldChildren = Array(store.children(node))
         let base = Int32(store.count)
         var newLogical: Int64 = 0, newPhysical: Int64 = 0
         var reused = Set<Int32>()
 
         for e in entries {
             let nameBytes = Array(e.name.utf8)
+            let isDir = e.flags.contains(.directory)
             let newID: Int32 = nameBytes.withUnsafeBytes { nb -> Int32 in
                 store.append(name: nb.baseAddress ?? UnsafeRawPointer(bitPattern: 1)!,
                              nameLength: nb.count, parent: node,
-                             logical: e.flags.contains(.directory) ? 0 : e.logical,
-                             physical: e.flags.contains(.directory) ? 0 : e.physical,
+                             logical: isDir ? 0 : e.logical,
+                             physical: isDir ? 0 : e.physical,
                              mtime: e.mtime, flags: e.flags)
             }
-            if e.flags.contains(.directory) && !e.flags.contains(.symlink) {
+            if isDir && !e.flags.contains(.symlink) {
                 if let old = existing[e.name], store.isDirectory(old) {
                     store.reattach(oldNode: old, to: newID)   // keep the subtree
                     reused.insert(old)
-                } else {
-                    let sub = DiskScanner().scan(ScanOptions(rootPath: path + "/" + e.name))
-                    store.graft(sub.store, under: newID)
-                    store.totalLogical[Int(newID)] = sub.store.totalLogical[0]
-                    store.totalPhysical[Int(newID)] = sub.store.totalPhysical[0]
+                } else if let sub = freshSubtrees[e.name] {
+                    store.graft(sub, under: newID)
+                    store.totalLogical[Int(newID)] = sub.totalLogical[0]
+                    store.totalPhysical[Int(newID)] = sub.totalPhysical[0]
                 }
             }
             newLogical += store.totalLogical[Int(newID)]
@@ -200,13 +220,25 @@ public final class LiveTree: @unchecked Sendable {
         return true
     }
 
+    /// The directory is gone: drop its whole contribution from the ancestors.
+    private func markVanished(_ node: Int32) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard node < Int32(store.count), !store.flagSet(node).contains(.removed) else { return false }
+        let dl = -store.totalLogical[Int(node)], dp = -store.totalPhysical[Int(node)]
+        store.totalLogical[Int(node)] = 0
+        store.totalPhysical[Int(node)] = 0
+        store.childCount[Int(node)] = 0
+        store.flags[Int(node)] |= NodeFlags.removed.rawValue
+        store.propagate(from: node, logical: dl, physical: dp)
+        return true
+    }
+
     /// Re-reads one directory right now, without waiting for FSEvents. Used
     /// after an action this app itself performed, and by tests that assert on
     /// update logic rather than on event delivery timing.
     @discardableResult
     public func refresh(directory path: String) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        return relist(directory: path)
+        relist(directory: path)
     }
 
     /// Applies a deletion immediately, so the UI reflects a trashed item before

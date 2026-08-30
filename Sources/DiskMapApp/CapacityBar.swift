@@ -4,22 +4,23 @@ import SwiftUI
 /// The honest capacity bar.
 ///
 /// Finder reports `volumeAvailableCapacityForImportantUsage`, which counts
-/// purgeable content as free. This shows the same disk split three ways, with
-/// purgeable drawn as its own segment rather than folded into either side, so
-/// the gap between "free" and "Finder says free" is visible instead of implied.
+/// purgeable content as free. Purgeable is drawn as its own band rather than
+/// folded into either side, so the gap between "free" and "Finder says free"
+/// is visible instead of implied.
 struct CapacityBar: View {
     let volume: VolumeInfo
     var onExplain: () -> Void
 
-    /// Purgeable space is occupied disk that macOS believes it may reclaim, so
-    /// it is a slice *of* used, not a fourth region. Splitting it out shows how
-    /// much of the disk is genuinely committed.
+    @ObservedObject private var loc = L10n.shared
+    @Environment(\.colorScheme) private var scheme
+
+    /// Purgeable is a slice *of* used, not a fourth region of the disk.
     private var segments: [(color: Color, bytes: Int64, label: String)] {
         let purgeable = max(0, min(volume.purgeable, volume.used))
         return [
-            (Palette.used, volume.used - purgeable, "In use"),
-            (Palette.purgeable, purgeable, "Purgeable"),
-            (Palette.free, max(0, volume.trueAvailable), "Free"),
+            (Palette.used(scheme), volume.used - purgeable, loc[.inUse]),
+            (Palette.purgeable(scheme), purgeable, loc[.purgeable]),
+            (Palette.free(scheme), max(0, volume.trueAvailable), loc[.free]),
         ]
     }
 
@@ -29,7 +30,7 @@ struct CapacityBar: View {
                 Text(volume.name).font(.system(size: 15, weight: .semibold))
                 Text(volume.path).font(.caption).foregroundStyle(.tertiary)
                 Spacer()
-                Text("\(shortBytes(volume.used)) of \(shortBytes(volume.total)) used")
+                Text(loc.usedOfTotal(shortBytes(volume.used), shortBytes(volume.total)))
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
             }
 
@@ -37,8 +38,7 @@ struct CapacityBar: View {
                 HStack(spacing: 1) {
                     ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
                         Rectangle().fill(seg.color)
-                            .frame(width: max(0, geo.size.width
-                                              * CGFloat(seg.bytes) / CGFloat(max(volume.total, 1))))
+                            .frame(width: width(seg.bytes, in: geo.size.width))
                     }
                     Spacer(minLength: 0)
                 }
@@ -61,18 +61,24 @@ struct CapacityBar: View {
                 Button(action: onExplain) {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                        Text("Finder says \(shortBytes(volume.finderAvailable)) free. Only \(shortBytes(volume.trueAvailable)) really is.")
+                        Text(loc.finderClaim(shortBytes(volume.finderAvailable),
+                                             shortBytes(volume.trueAvailable)))
                             .fontWeight(.medium)
-                        Text("Why?").underline()
+                        Text(loc[.why]).underline()
                     }
                     .font(.system(size: 12))
-                    .foregroundStyle(Palette.warning)
+                    .foregroundStyle(Palette.warning(scheme))
                 }
                 .buttonStyle(.plain)
-                .help("Finder counts purgeable space as available. Click for the breakdown.")
+                .help(loc[.capacityHelp])
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+
+    private func width(_ bytes: Int64, in total: CGFloat) -> CGFloat {
+        let fraction = CGFloat(bytes) / CGFloat(max(volume.total, 1))
+        return max(0, total * fraction)
     }
 }
 
@@ -82,11 +88,13 @@ struct ReconciliationSheet: View {
     let volume: VolumeInfo
     let reconciliation: Reconciliation?
     let stats: ScanStats?
+
+    @ObservedObject private var loc = L10n.shared
     @Environment(\.dismiss) private var dismiss
 
     private func row(_ label: String, _ value: String, _ note: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label).frame(width: 210, alignment: .leading)
+            Text(label).frame(width: 230, alignment: .leading)
             Text(value).font(.system(.body, design: .monospaced))
                 .frame(width: 110, alignment: .trailing)
             if let note { Text(note).font(.caption).foregroundStyle(.secondary) }
@@ -96,31 +104,30 @@ struct ReconciliationSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Where the space actually is")
-                .font(.title2.weight(.semibold)).padding(.bottom, 4)
-            Text("macOS reports several different numbers for the same disk. These are all of them.")
+            Text(loc[.whereSpaceIs]).font(.title2.weight(.semibold)).padding(.bottom, 4)
+            Text(loc[.whereSpaceIsSubtitle])
                 .font(.callout).foregroundStyle(.secondary).padding(.bottom, 18)
 
             VStack(alignment: .leading, spacing: 7) {
-                row("Capacity", shortBytes(volume.total))
-                row("Used", shortBytes(volume.used))
-                row("Free, really", shortBytes(volume.trueAvailable), "you can write this much now")
-                row("Free, as Finder shows", shortBytes(volume.finderAvailable), "includes purgeable")
+                row(loc[.capacity], shortBytes(volume.total))
+                row(loc[.used], shortBytes(volume.used))
+                row(loc[.freeReally], shortBytes(volume.trueAvailable), loc[.writableNow])
+                row(loc[.freeFinder], shortBytes(volume.finderAvailable), loc[.includesPurgeable])
                 Divider().padding(.vertical, 4)
-                row("Purgeable", shortBytes(volume.purgeable),
-                    "evictable iCloud files, caches, snapshots")
+                row(loc[.purgeable], shortBytes(volume.purgeable), loc[.purgeableNote])
             }
             .padding(.bottom, 18)
 
             if let r = reconciliation {
-                Text("Scan vs. filesystem").font(.headline).padding(.bottom, 8)
+                Text(loc[.scanVsFilesystem]).font(.headline).padding(.bottom, 8)
                 VStack(alignment: .leading, spacing: 7) {
-                    row("Volume reports used", shortBytes(r.volumeUsed))
-                    row("Scan attributed to files", shortBytes(r.scannedPhysical))
-                    row("Unaccounted", shortBytes(r.unaccounted), percentString(r.unaccountedFraction))
+                    row(loc[.volumeReportsUsed], shortBytes(r.volumeUsed))
+                    row(loc[.scanAttributed], shortBytes(r.scannedPhysical))
+                    row(loc[.unaccounted], shortBytes(r.unaccounted),
+                        percentString(r.unaccountedFraction))
                 }
                 .padding(.bottom, 10)
-                ForEach(Array(r.explanations.enumerated()), id: \.offset) { _, e in
+                ForEach(Array(localizedExplanations(r).enumerated()), id: \.offset) { _, e in
                     Label(e, systemImage: "info.circle").font(.callout)
                         .foregroundStyle(.secondary).padding(.bottom, 3)
                 }
@@ -128,12 +135,12 @@ struct ReconciliationSheet: View {
 
             if let s = stats, s.datalessCount > 0 {
                 Divider().padding(.vertical, 12)
-                Label("\(s.datalessCount.formatted()) files are iCloud placeholders: \(shortBytes(s.datalessLogical)) of apparent size, 0 bytes on this disk. Deleting them frees nothing.",
+                Label(loc.datalessNote(s.datalessCount, shortBytes(s.datalessLogical)),
                       systemImage: "icloud.and.arrow.down")
                     .font(.callout).foregroundStyle(.secondary)
             }
             if let s = stats, s.hardlinkDuplicates > 0 {
-                Label("\(s.hardlinkDuplicates.formatted()) hard links point at files already counted: \(shortBytes(s.hardlinkDuplicateLogical)) that only exists once.",
+                Label(loc.hardlinkNote(s.hardlinkDuplicates, shortBytes(s.hardlinkDuplicateLogical)),
                       systemImage: "link")
                     .font(.callout).foregroundStyle(.secondary).padding(.top, 4)
             }
@@ -141,10 +148,30 @@ struct ReconciliationSheet: View {
             Spacer(minLength: 16)
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button(loc[.done]) { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
-        .frame(width: 620, height: 560)
+        .frame(width: 660, height: 580)
+    }
+
+    /// The core builds these in English; translate at the presentation layer so
+    /// the model stays free of UI language.
+    private func localizedExplanations(_ r: Reconciliation) -> [String] {
+        guard loc.active == .tr else { return r.explanations }
+        var out: [String] = []
+        if r.snapshotCount > 0 {
+            out.append("\(r.snapshotCount) APFS anlık görüntüsü, silinmiş dosyaların bloklarını tutuyor.")
+        }
+        if r.unreadableDirectories > 0 {
+            out.append("\(r.unreadableDirectories) klasör okunamadı. Görmek için Tam Disk Erişimi verin.")
+        }
+        if r.unaccounted > 0 {
+            out.append("APFS klonları blokları paylaşır; klonlanmış baytlar disk tarafından bir kez sayılır ama birden çok adla görünebilir.")
+        }
+        if !r.scanRootIsWholeVolume {
+            out.append("Tarama diskin tamamını değil, bir alt klasörü kapsadı.")
+        }
+        return out
     }
 }

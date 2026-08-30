@@ -28,6 +28,16 @@ public struct ScanOptions: Sendable {
     }
 }
 
+/// Cooperative cancellation. A scan of a full volume runs for a minute; the
+/// user must be able to change their mind without waiting it out.
+public final class CancelToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    public init() {}
+    public var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+    public func cancel() { lock.lock(); flag = true; lock.unlock() }
+}
+
 public struct ScanStats: Sendable {
     public var directories = 0
     public var files = 0
@@ -45,6 +55,8 @@ public struct ScanStats: Sendable {
     public var skippedMountPoints = 0
     public var elapsed: TimeInterval = 0
     public var unreadableSamples: [String] = []
+    /// True when the scan stopped early; totals are partial.
+    public var cancelled = false
 }
 
 public struct ScanResult: Sendable {
@@ -101,6 +113,8 @@ public final class DiskScanner {
             cond.unlock()
         }
     }
+
+    public let cancelToken = CancelToken()
 
     public init() {}
 
@@ -179,6 +193,7 @@ public final class DiskScanner {
 
                 while let task = queue.pop() {
                     defer { queue.complete() }
+                    if self.cancelToken.isCancelled { continue }
 
                     let fd = open(task.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                     if fd < 0 {
@@ -286,6 +301,7 @@ public final class DiskScanner {
         progressTimer?.cancel()
 
         store.aggregate()
+        stats.cancelled = cancelToken.isCancelled
         stats.elapsed = Date().timeIntervalSince(started)
         stats.totalLogical = store.totalLogical[0]
         stats.totalPhysical = store.totalPhysical[0]

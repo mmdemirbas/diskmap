@@ -73,7 +73,8 @@ public enum Treemap {
     public static func layout(store: NodeStore, root: Int32, in rect: CGRect,
                               usePhysicalSize: Bool = true,
                               minCellArea: CGFloat = 26,
-                              maxDepth: Int = 6) -> [TreemapCell] {
+                              maxDepth: Int = 6,
+                              includeAtRoot: ((Int32) -> Bool)? = nil) -> [TreemapCell] {
         var cells: [TreemapCell] = []
         cells.reserveCapacity(4096)
         var stack: [(node: Int32, rect: CGRect, depth: Int)] = [(root, rect, 0)]
@@ -83,34 +84,54 @@ public enum Treemap {
             guard frame.depth < maxDepth,
                   frame.rect.width > 1, frame.rect.height > 1 else { continue }
 
-            let kids = store.children(frame.node)
+            var kids = Array(store.children(frame.node))
+            // A filter applies to the level the user is looking at, so the map
+            // and the list on the right always describe the same set.
+            if frame.depth == 0, let include = includeAtRoot {
+                kids = kids.filter(include)
+            }
             guard !kids.isEmpty else { continue }
 
-            var ranked = kids.filter { sizes[Int($0)] > 0 && !store.flagSet($0).contains(.removed) }
-            guard !ranked.isEmpty else { continue }
-            ranked.sort { sizes[Int($0)] > sizes[Int($1)] }
-
-            let total = ranked.reduce(0.0) { $0 + Double(sizes[Int($1)]) }
+            // Total first, so the visibility threshold can be expressed in
+            // bytes and applied in one pass. A directory with a million entries
+            // then sorts only the handful that could occupy a visible cell,
+            // instead of sorting a million ids on every resize.
+            var total = 0.0
+            for id in kids where !store.flagSet(id).contains(.removed) {
+                let b = sizes[Int(id)]
+                if b > 0 { total += Double(b) }
+            }
             guard total > 0 else { continue }
             let area = Double(frame.rect.width * frame.rect.height)
             let scale = area / total
+            let minBytes = Double(minCellArea) / scale
 
-            // Drop the tail that could not be seen anyway, but keep it visible
-            // as one cell so nothing silently disappears from the picture.
             var visible: [Int32] = []
             var tailBytes = 0.0
             var tailCount = 0
-            for id in ranked {
-                let a = Double(sizes[Int(id)]) * scale
-                if a < Double(minCellArea) && !visible.isEmpty {
-                    tailBytes += a; tailCount += 1
+            var largestBelow: Int32 = -1
+            for id in kids where !store.flagSet(id).contains(.removed) {
+                let b = Double(sizes[Int(id)])
+                if b <= 0 { continue }
+                if b < minBytes {
+                    tailBytes += b
+                    tailCount += 1
+                    if largestBelow < 0 || b > Double(sizes[Int(largestBelow)]) { largestBelow = id }
                 } else {
                     visible.append(id)
                 }
             }
+            // Never render a folder as nothing but an anonymous tail.
+            if visible.isEmpty, largestBelow >= 0 {
+                visible.append(largestBelow)
+                tailBytes -= Double(sizes[Int(largestBelow)])
+                tailCount -= 1
+            }
+            guard !visible.isEmpty else { continue }
+            visible.sort { sizes[Int($0)] > sizes[Int($1)] }
 
             var areas = visible.map { Double(sizes[Int($0)]) * scale }
-            if tailCount > 0 { areas.append(tailBytes) }
+            if tailCount > 0 { areas.append(tailBytes * scale) }
 
             let rects = squarify(areas: areas, in: frame.rect)
             for (k, id) in visible.enumerated() {
@@ -132,7 +153,8 @@ public enum Treemap {
                     }
                 }
             }
-            if tailCount > 0, let r = rects.last, r.width > 0.5, r.height > 0.5 {
+            if tailCount > 0, rects.count == areas.count, let r = rects.last,
+               r.width > 0.5, r.height > 0.5 {
                 cells.append(TreemapCell(node: -1, rect: r, depth: frame.depth + 1,
                                          isDirectory: false, aggregatedCount: tailCount))
             }

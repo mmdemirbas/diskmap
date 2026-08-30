@@ -8,7 +8,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IDENTITY="${1:--}"
+# Prefer the stable local certificate if it exists, so Full Disk Access
+# survives rebuilds without the caller having to remember the name.
+DEFAULT_ID="DiskMap Local Signing"
+if [ $# -ge 1 ]; then
+    IDENTITY="$1"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "$DEFAULT_ID"; then
+    IDENTITY="$DEFAULT_ID"
+else
+    IDENTITY="-"
+fi
 APP="build/DiskMap.app"
 CONTENTS="$APP/Contents"
 

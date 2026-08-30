@@ -28,8 +28,8 @@ struct TreemapLayout: Sendable {
     var info: [Int32: CellInfo]
 }
 
-/// Holds the most recent treemap layout outside the published state, so the
-/// Canvas can read it during a draw without triggering another render pass.
+/// Holds the most recent treemap layout outside published state, so the Canvas
+/// can read it during a draw without provoking another render pass.
 final class LayoutCache: @unchecked Sendable {
     private let lock = NSLock()
     private var current: TreemapLayout?
@@ -53,6 +53,16 @@ struct ItemInfo: Equatable {
     var modified: Date
     var fractionOfVolume: Double
     var childCount: Int
+}
+
+/// A destructive action waiting for confirmation.
+struct PendingTrash: Identifiable, Equatable {
+    let id = UUID()
+    var node: Int32
+    var name: String
+    var bytes: Int64
+    var itemCount: Int
+    var isDirectory: Bool
 }
 
 enum Phase: Equatable {
@@ -88,20 +98,25 @@ final class AppModel: ObservableObject {
     @Published var filterText = ""
 
     @Published var liveActive = false
-    @Published var lastChange: Date?
     @Published var toast: String?
     @Published var undoStack: [TrashedItem] = []
+    @Published var pendingTrash: PendingTrash?
     @Published var hasFullDiskAccess = FileActions.hasFullDiskAccess()
 
+    @AppStorage("appearance") var appearance: Appearance = .system {
+        willSet { objectWillChange.send() }
+    }
+
     let layoutCache = LayoutCache()
-    /// Bumped after an async layout lands, to make the Canvas redraw.
     @Published private(set) var layoutToken = 0
     /// Offscreen rendering has no async phase, so layout must run inline.
     var renderMode = false
 
     private(set) var tree: LiveTree?
-    /// Bumped whenever the tree changes so views recompute their layout.
     @Published private(set) var revision = 0
+
+    private var activeScanner: DiskScanner?
+    private var scanTask: Task<Void, Never>?
 
     init() {
         volumes = VolumeInfo.mountedVolumes()
@@ -111,32 +126,49 @@ final class AppModel: ObservableObject {
         refreshVolume()
     }
 
-    func refreshVolume() {
-        volume = VolumeInfo.forPath(selectedVolumePath)
-    }
+    func refreshVolume() { volume = VolumeInfo.forPath(selectedVolumePath) }
+
+    var isScanning: Bool { if case .scanning = phase { return true }; return false }
 
     // MARK: - Scanning
 
     func scan() {
+        cancelScan()
         let path = selectedVolumePath
         tree?.stopWatching()
         tree = nil
+        liveActive = false
+        layoutCache.set(TreemapLayout(key: "", cells: [], info: [:]))
         phase = .scanning(ScanProgressSnapshot(nodes: 0, directories: 0, bytes: 0, path: path, fraction: 0))
 
-        Task.detached(priority: .userInitiated) { [weak self] in
+        let scanner = DiskScanner()
+        activeScanner = scanner
+        scanTask = Task.detached(priority: .userInitiated) { [weak self] in
             var options = ScanOptions(rootPath: path)
             options.threadCount = min(12, ProcessInfo.processInfo.activeProcessorCount)
-            let result = DiskScanner().scan(options) { p in
+            let result = scanner.scan(options) { p in
                 let snap = ScanProgressSnapshot(nodes: p.nodes, directories: p.directories,
                                                 bytes: p.bytes, path: p.currentPath, fraction: p.fraction)
-                Task { @MainActor in
-                    guard let self, case .scanning = self.phase else { return }
+                Task { @MainActor [weak self] in
+                    guard let self, self.isScanning else { return }
                     self.phase = .scanning(snap)
                 }
             }
-            let live = LiveTree(result: result)
-            await MainActor.run { self?.adopt(live) }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.activeScanner = nil
+                // A cancelled scan holds a partial tree; showing it as complete
+                // would be a lie about what is on disk.
+                if result.stats.cancelled { self.phase = .idle } else { self.adopt(LiveTree(result: result)) }
+            }
         }
+    }
+
+    func cancelScan() {
+        activeScanner?.cancelToken.cancel()
+        scanTask?.cancel()
+        activeScanner = nil
+        scanTask = nil
     }
 
     func adopt(_ live: LiveTree) {
@@ -161,12 +193,12 @@ final class AppModel: ObservableObject {
         hasFullDiskAccess = FileActions.hasFullDiskAccess()
         currentDirectory = 0
         selection = nil
+        selectedInfo = nil
         phase = .ready
         rebuild()
     }
 
     private func treeChanged() {
-        lastChange = tree?.lastChangeAt
         refreshVolume()
         rebuild()
     }
@@ -174,15 +206,18 @@ final class AppModel: ObservableObject {
     // MARK: - Navigation
 
     func enter(_ node: Int32) {
-        guard let tree, tree.withStore({ $0.isDirectory(node) }) else { return }
+        guard let tree, tree.withStore({ node < Int32($0.count) && $0.isDirectory(node) }) else { return }
         currentDirectory = node
         selection = nil
+        selectedInfo = nil
         rebuild()
     }
 
     func goUp() {
         guard let tree, currentDirectory > 0 else { return }
         currentDirectory = tree.withStore { $0.parent[Int(currentDirectory)] }
+        selection = nil
+        selectedInfo = nil
         rebuild()
     }
 
@@ -194,8 +229,9 @@ final class AppModel: ObservableObject {
     private func info(for node: Int32) -> ItemInfo? {
         guard let tree, let volume else { return nil }
         return tree.withStore { store -> ItemInfo? in
-            guard node >= 0, node < Int32(store.count) else { return nil }
-            let name = node == 0 ? store.name(0) : store.name(node)
+            guard node >= 0, node < Int32(store.count),
+                  !store.flagSet(node).contains(.removed) else { return nil }
+            let name = store.name(node)
             let isDir = store.isDirectory(node)
             let path = store.path(node, rootPath: tree.rootPath)
             return ItemInfo(
@@ -214,11 +250,16 @@ final class AppModel: ObservableObject {
 
     func rebuild() {
         guard let tree else { rows = []; breadcrumb = []; return }
-        let dir = currentDirectory
         let physical = usePhysicalSize
         let filter = filterText.lowercased()
 
-        let (newRows, crumbs) = tree.withStore { store -> ([Row], [(Int32, String)]) in
+        let (dir, newRows, crumbs) = tree.withStore { store -> (Int32, [Row], [(Int32, String)]) in
+            // If the folder we were looking at has been deleted, climb to the
+            // nearest ancestor that still exists rather than showing a blank.
+            var dir = currentDirectory
+            if dir < 0 || dir >= Int32(store.count) { dir = 0 }
+            while dir > 0 && store.flagSet(dir).contains(.removed) { dir = store.parent[Int(dir)] }
+
             let sizes = physical ? store.totalPhysical : store.totalLogical
             let parentTotal = max(sizes[Int(dir)], 1)
             var out: [Row] = []
@@ -241,30 +282,32 @@ final class AppModel: ObservableObject {
             var cur = dir
             while cur > 0 { chain.append((cur, store.name(cur))); cur = store.parent[Int(cur)] }
             chain.append((0, store.name(0)))
-            return (out, chain.reversed())
+            return (dir, out, chain.reversed())
         }
+        if dir != currentDirectory { currentDirectory = dir }
         rows = newRows
         breadcrumb = crumbs.map { (id: $0.0, name: $0.1) }
-        if let s = selection { selectedInfo = info(for: s) }
+        selectedInfo = selection.flatMap(info(for:))
+        if selectedInfo == nil { selection = nil }
         revision &+= 1
     }
 
     // MARK: - Treemap layout
 
     func layoutKey(size: CGSize) -> String {
-        "\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)"
+        "\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)"
     }
 
-    func cachedLayout(for size: CGSize) -> TreemapLayout? {
-        layoutCache.get(layoutKey(size: size))
-    }
+    func cachedLayout(for size: CGSize) -> TreemapLayout? { layoutCache.get(layoutKey(size: size)) }
 
-    /// Pure function of the tree; safe to call from any thread.
     nonisolated static func compute(tree: LiveTree, root: Int32, size: CGSize,
-                                    physical: Bool, key: String) -> TreemapLayout {
+                                    physical: Bool, filter: String, key: String) -> TreemapLayout {
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
+        let needle = filter.lowercased()
         return tree.withStore { store in
-            let laid = Treemap.layout(store: store, root: root, in: rect, usePhysicalSize: physical)
+            let laid = Treemap.layout(
+                store: store, root: root, in: rect, usePhysicalSize: physical,
+                includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
             var map: [Int32: CellInfo] = [:]
             map.reserveCapacity(laid.count)
             for c in laid where c.node >= 0 {
@@ -284,7 +327,8 @@ final class AppModel: ObservableObject {
     func computeLayoutSync(size: CGSize) -> TreemapLayout? {
         guard let tree, size.width > 8, size.height > 8 else { return nil }
         let l = Self.compute(tree: tree, root: currentDirectory, size: size,
-                             physical: usePhysicalSize, key: layoutKey(size: size))
+                             physical: usePhysicalSize, filter: filterText,
+                             key: layoutKey(size: size))
         layoutCache.set(l)
         return l
     }
@@ -295,9 +339,12 @@ final class AppModel: ObservableObject {
         if layoutCache.get(key) != nil { return }
         let root = currentDirectory
         let physical = usePhysicalSize
+        let filter = filterText
         let l = await Task.detached(priority: .userInitiated) {
-            Self.compute(tree: tree, root: root, size: size, physical: physical, key: key)
+            Self.compute(tree: tree, root: root, size: size, physical: physical,
+                         filter: filter, key: key)
         }.value
+        guard !Task.isCancelled else { return }
         layoutCache.set(l)
         layoutToken &+= 1
     }
@@ -320,10 +367,35 @@ final class AppModel: ObservableObject {
     func copyPath(_ node: Int32) {
         guard let tree else { return }
         FileActions.copyToPasteboard(tree.withStore { $0.path(node, rootPath: tree.rootPath) })
-        toast = "Path copied"
+        toast = L10n.shared[.pathCopied]
     }
 
-    func moveToTrash(_ node: Int32) {
+    /// Folders and large files ask first. Everything smaller goes straight to
+    /// the Trash, which is recoverable and undoable anyway.
+    func requestTrash(_ node: Int32) {
+        guard let tree else { return }
+        let info = tree.withStore { store -> (String, Int64, Int, Bool)? in
+            guard node > 0, node < Int32(store.count),
+                  !store.flagSet(node).contains(.removed) else { return nil }
+            return (store.name(node), store.totalPhysical[Int(node)],
+                    store.children(node).count, store.isDirectory(node))
+        }
+        guard let (name, bytes, children, isDir) = info else { return }
+        if isDir || bytes >= 5_000_000_000 {
+            pendingTrash = PendingTrash(node: node, name: name, bytes: bytes,
+                                        itemCount: children, isDirectory: isDir)
+        } else {
+            performTrash(node)
+        }
+    }
+
+    func confirmPendingTrash() {
+        guard let p = pendingTrash else { return }
+        pendingTrash = nil
+        performTrash(p.node)
+    }
+
+    private func performTrash(_ node: Int32) {
         guard let tree else { return }
         let (path, bytes) = tree.withStore {
             ($0.path(node, rootPath: tree.rootPath), $0.totalPhysical[Int(node)])
@@ -336,7 +408,7 @@ final class AppModel: ObservableObject {
             tree.markRemoved(node)
             undoStack.append(contentsOf: trashed)
             if selection == node { select(nil) }
-            toast = "Moved to Trash · freed \(shortBytes(bytes))"
+            toast = L10n.shared.freedBytes(shortBytes(bytes))
             refreshVolume()
             rebuild()
         } catch {
@@ -348,14 +420,12 @@ final class AppModel: ObservableObject {
         guard let item = undoStack.popLast() else { return }
         do {
             try FileActions.restore(item)
-            toast = "Restored \(item.originalURL.lastPathComponent)"
-            if let tree {
-                tree.refresh(directory: item.originalURL.deletingLastPathComponent().path)
-            }
+            toast = L10n.shared.restored(item.originalURL.lastPathComponent)
+            tree?.refresh(directory: item.originalURL.deletingLastPathComponent().path)
             refreshVolume()
             rebuild()
         } catch {
-            toast = "Could not restore: \(error.localizedDescription)"
+            toast = L10n.shared.couldNotRestore(error.localizedDescription)
         }
     }
 }

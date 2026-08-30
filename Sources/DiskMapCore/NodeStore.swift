@@ -52,9 +52,14 @@ public final class NodeStore {
     func append(name: UnsafeRawPointer, nameLength: Int, parent p: Int32,
                 logical: Int64, physical: Int64, mtime t: Int32, flags fl: NodeFlags) -> Int32 {
         let id = Int32(parent.count)
-        nameOffset.append(UInt32(nameBytes.count))
-        nameLen.append(UInt16(min(nameLength, Int(UInt16.max))))
-        nameBytes.append(contentsOf: UnsafeRawBufferPointer(start: name, count: nameLength))
+        // Offsets are 32-bit to keep the row small; refuse to wrap rather than
+        // corrupt every name after the 4 GB mark.
+        let room = nameBytes.count <= Int(UInt32.max) - nameLength
+        nameOffset.append(room ? UInt32(nameBytes.count) : 0)
+        nameLen.append(room ? UInt16(min(nameLength, Int(UInt16.max))) : 0)
+        if room {
+            nameBytes.append(contentsOf: UnsafeRawBufferPointer(start: name, count: nameLength))
+        }
         self.parent.append(p)
         firstChild.append(-1); childCount.append(0)
         totalLogical.append(logical); totalPhysical.append(physical)

@@ -2,10 +2,12 @@ import DiskMapCore
 import SwiftUI
 
 /// Area is proportional to bytes on disk, so the biggest rectangle is always
-/// the thing worth deleting. Nesting shows which folder it sits in without
-/// making the reader expand a tree.
+/// the thing worth deleting. Folder frames and headers show which folder owns a
+/// block, so nesting stays readable without expanding a tree.
 struct TreemapView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var loc = L10n.shared
+    @Environment(\.colorScheme) private var scheme
 
     @State private var hovered: Int32?
     @State private var canvasSize: CGSize = .zero
@@ -22,7 +24,13 @@ struct TreemapView: View {
             .background(Color(nsColor: .underPageBackgroundColor))
             .onAppear { canvasSize = geo.size }
             .onChange(of: geo.size) { _, new in canvasSize = new }
-            .task(id: model.layoutKey(size: geo.size)) { await model.relayout(size: geo.size) }
+            .task(id: model.layoutKey(size: geo.size)) {
+                // Debounce: a window drag emits a size on every frame, and each
+                // one would otherwise start a full layout.
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                guard !Task.isCancelled else { return }
+                await model.relayout(size: geo.size)
+            }
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let p): hovered = hit(p)
@@ -36,12 +44,16 @@ struct TreemapView: View {
             .contextMenu { menu(for: hovered ?? model.selection) }
             .overlay(alignment: .topLeading) { tooltip }
             .overlay { if model.rows.isEmpty { emptyState } }
+            .onChange(of: model.filterText) { _, _ in hovered = nil }
         }
     }
 
+    private var currentLayout: TreemapLayout? {
+        model.cachedLayout(for: canvasSize) ?? model.layoutCache.any()
+    }
 
     private func hit(_ point: CGPoint) -> Int32? {
-        guard let layout = model.cachedLayout(for: canvasSize) ?? model.layoutCache.any() else { return nil }
+        guard let layout = currentLayout else { return nil }
         var best: Int32?
         var bestArea = CGFloat.greatestFiniteMagnitude
         for c in layout.cells where c.node >= 0 && c.rect.contains(point) {
@@ -56,7 +68,7 @@ struct TreemapView: View {
     private func draw(_ layout: TreemapLayout, in ctx: inout GraphicsContext) {
         let info = layout.info
 
-        // Pass 1: the areas themselves. Colour says what kind of file it is.
+        // Pass 1: the areas. Colour says what kind of thing it is.
         for cell in layout.cells {
             let r = cell.rect
             guard r.width > 0.7, r.height > 0.7 else { continue }
@@ -64,50 +76,54 @@ struct TreemapView: View {
 
             guard cell.node >= 0, let meta = info[cell.node] else {
                 ctx.fill(path, with: .color(.gray.opacity(0.16)))   // aggregated tail
+                if cell.aggregatedCount > 0, r.width > 90, r.height > 18 {
+                    ctx.draw(ctx.resolve(Text(loc.moreItems(cell.aggregatedCount))
+                        .font(.system(size: 9)).foregroundStyle(.secondary)),
+                        at: CGPoint(x: r.minX + 5, y: r.midY), anchor: .leading)
+                }
                 continue
             }
 
-            var base = meta.category.color
+            var base = meta.category.color(scheme)
             if meta.flags.contains(.dataless) { base = base.opacity(0.30) }
             let lift = min(Double(cell.depth) * 0.05, 0.25)
-            ctx.fill(path, with: .color(base.opacity(meta.isDirectory ? 0.28 : 0.62 + lift)))
-            if !meta.isDirectory {
-                ctx.fill(path, with: .linearGradient(
-                    Gradient(colors: [.white.opacity(0.18), .clear]),
-                    startPoint: CGPoint(x: r.minX, y: r.minY),
-                    endPoint: CGPoint(x: r.minX, y: r.maxY)))
-                if r.width > 3, r.height > 3 {
-                    ctx.stroke(path, with: .color(.black.opacity(0.20)), lineWidth: 0.5)
-                }
-                if r.width > 58, r.height > 20 {
-                    var clipped = ctx
-                    clipped.clip(to: path)
-                    clipped.draw(ctx.resolve(Text(meta.name)
-                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.white)),
-                        at: CGPoint(x: r.minX + 5, y: r.minY + 9), anchor: .leading)
-                    if r.height > 32 {
-                        clipped.draw(ctx.resolve(Text(shortBytes(meta.bytes))
-                            .font(.system(size: 9)).foregroundStyle(.white.opacity(0.85))),
-                            at: CGPoint(x: r.minX + 5, y: r.minY + 22), anchor: .leading)
-                    }
+            ctx.fill(path, with: .color(base.opacity(meta.isDirectory ? 0.26 : 0.62 + lift)))
+            guard !meta.isDirectory else { continue }
+
+            ctx.fill(path, with: .linearGradient(
+                Gradient(colors: [.white.opacity(scheme == .dark ? 0.14 : 0.20), .clear]),
+                startPoint: CGPoint(x: r.minX, y: r.minY),
+                endPoint: CGPoint(x: r.minX, y: r.maxY)))
+            if r.width > 3, r.height > 3 {
+                ctx.stroke(path, with: .color(.black.opacity(0.20)), lineWidth: 0.5)
+            }
+            if r.width > 58, r.height > 20 {
+                var clipped = ctx
+                clipped.clip(to: path)
+                clipped.draw(ctx.resolve(Text(meta.name)
+                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.white)),
+                    at: CGPoint(x: r.minX + 5, y: r.minY + 9), anchor: .leading)
+                if r.height > 32 {
+                    clipped.draw(ctx.resolve(Text(shortBytes(meta.bytes))
+                        .font(.system(size: 9)).foregroundStyle(.white.opacity(0.85))),
+                        at: CGPoint(x: r.minX + 5, y: r.minY + 22), anchor: .leading)
                 }
             }
         }
 
-        // Pass 2: folder frames and their names, drawn over the contents so the
-        // structure stays readable however deep the nesting goes.
+        // Pass 2: folder frames and names, over their contents.
         for cell in layout.cells where cell.isDirectory && cell.depth <= 2 {
             let r = cell.rect
             guard r.width > 26, r.height > 20, cell.node >= 0, let meta = info[cell.node] else { continue }
             let path = Path(roundedRect: r, cornerRadius: 4)
-            ctx.stroke(path, with: .color(.black.opacity(cell.depth == 1 ? 0.55 : 0.35)),
+            ctx.stroke(path, with: .color(Palette.folderStroke(scheme)),
                        lineWidth: cell.depth == 1 ? 1.5 : 1)
             ctx.stroke(Path(roundedRect: r.insetBy(dx: 1, dy: 1), cornerRadius: 4),
-                       with: .color(.white.opacity(0.22)), lineWidth: 0.75)
+                       with: .color(.white.opacity(0.20)), lineWidth: 0.75)
 
             guard cell.depth < 2, r.height > 46, r.width > 70 else { continue }
             let header = CGRect(x: r.minX + 1, y: r.minY + 1, width: r.width - 2, height: 14)
-            ctx.fill(Path(roundedRect: header, cornerRadius: 3), with: .color(.black.opacity(0.45)))
+            ctx.fill(Path(roundedRect: header, cornerRadius: 3), with: .color(.black.opacity(0.48)))
             var clipped = ctx
             clipped.clip(to: Path(roundedRect: header, cornerRadius: 3))
             clipped.draw(ctx.resolve(Text("\(meta.name)  \(shortBytes(meta.bytes))")
@@ -115,7 +131,7 @@ struct TreemapView: View {
                 at: CGPoint(x: header.minX + 5, y: header.midY), anchor: .leading)
         }
 
-        // Selection and hover last, so neither is painted over.
+        // Selection and hover last, so neither gets painted over.
         for cell in layout.cells where cell.node == model.selection || cell.node == hovered {
             let path = Path(roundedRect: cell.rect, cornerRadius: 3)
             if cell.node == model.selection {
@@ -130,14 +146,15 @@ struct TreemapView: View {
     // MARK: - Overlays
 
     @ViewBuilder private var tooltip: some View {
-        if let h = hovered, let meta = (model.cachedLayout(for: canvasSize) ?? model.layoutCache.any())?.info[h] {
+        if let h = hovered, let meta = currentLayout?.info[h] {
             VStack(alignment: .leading, spacing: 2) {
                 Text(meta.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 HStack(spacing: 8) {
                     Text(shortBytes(meta.bytes)).font(.system(size: 11, design: .monospaced))
-                    Text(meta.category.label).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(meta.category.localizedLabel).font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                     if meta.flags.contains(.dataless) {
-                        Label("iCloud, 0 bytes here", systemImage: "icloud")
+                        Label(loc[.icloudZero], systemImage: "icloud")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                 }
@@ -152,22 +169,22 @@ struct TreemapView: View {
 
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Image(systemName: "square.grid.2x2").font(.system(size: 26)).foregroundStyle(.tertiary)
-            Text("This folder is empty").foregroundStyle(.secondary)
+            Image(systemName: model.filterText.isEmpty ? "square.grid.2x2" : "magnifyingglass")
+                .font(.system(size: 26)).foregroundStyle(.tertiary)
+            Text(model.filterText.isEmpty ? loc[.emptyFolder] : loc[.noMatches])
+                .foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder private func menu(for node: Int32?) -> some View {
-        if let n = node, let meta = (model.cachedLayout(for: canvasSize) ?? model.layoutCache.any())?.info[n] {
+        if let n = node, let meta = currentLayout?.info[n] {
             Text(meta.name)
             Divider()
-            if meta.isDirectory {
-                Button("Open in Disk Map") { model.enter(n) }
-            }
-            Button("Reveal in Finder") { model.reveal(n) }
-            Button("Copy Path") { model.copyPath(n) }
+            if meta.isDirectory { Button(loc[.openHere]) { model.enter(n) } }
+            Button(loc[.revealInFinder]) { model.reveal(n) }
+            Button(loc[.copyPath]) { model.copyPath(n) }
             Divider()
-            Button("Move to Trash") { model.moveToTrash(n) }
+            Button(loc[.moveToTrash]) { model.requestTrash(n) }
         }
     }
 }

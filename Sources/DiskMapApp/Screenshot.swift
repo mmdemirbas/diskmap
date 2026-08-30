@@ -5,7 +5,7 @@ import SwiftUI
 /// Renders the real UI to a PNG without a window server or Screen Recording
 /// permission, so the interface can be checked in CI or over SSH.
 ///
-///   DISKMAP_RENDER="<scanPath>|<width>|<height>|<out.png>[|<relative/subdir>]"
+///   DISKMAP_RENDER="<path>|<w>|<h>|<out.png>[|<subdir>[|light|dark[|en|tr]]]"
 @MainActor
 enum OffscreenRenderer {
     static func runIfRequested() -> Bool {
@@ -23,6 +23,11 @@ enum OffscreenRenderer {
         model.refreshVolume()
         model.scanSynchronously()
 
+        if parts.count >= 6, let mode = Appearance(rawValue: parts[5]) { model.appearance = mode }
+        if parts.count >= 7, let lang = L10n.Language(rawValue: parts[6]) {
+            L10n.shared.preference = lang
+        }
+
         if parts.count >= 5, !parts[4].isEmpty, let tree = model.tree {
             let target = parts[0] + "/" + parts[4]
             if let node = tree.withStore({ $0.find(path: target, rootPath: tree.rootPath) }) {
@@ -31,10 +36,21 @@ enum OffscreenRenderer {
         }
         if let biggest = model.rows.first { model.select(biggest.id) }
 
-        let view = ContentView(model: model).frame(width: width, height: height)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
-        guard let cg = renderer.cgImage else {
+        let scheme: ColorScheme = model.appearance == .dark ? .dark : .light
+        let view = ContentView(model: model)
+            .environment(\.colorScheme, scheme)
+            .frame(width: width, height: height)
+
+        // System colours resolve through NSAppearance, not the SwiftUI
+        // environment, so both have to be set for an offscreen render.
+        let nsAppearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)!
+        var image: CGImage?
+        nsAppearance.performAsCurrentDrawingAppearance {
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            image = renderer.cgImage
+        }
+        guard let cg = image else {
             FileHandle.standardError.write(Data("render produced no image\n".utf8))
             return true
         }
