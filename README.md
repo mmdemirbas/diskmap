@@ -168,18 +168,33 @@ Six ways to look at the same scan, because they answer different questions.
   "what should I delete", which is usually one huge file six levels down.
 - **By type / by age.** Where the space went by kind of file, and by how long
   ago it was touched, with a line like *"29.3 GB untouched for over two years"*.
-- **Copies.** Files below the current folder that share a name *and* a byte
-  length, ordered by what deleting the extras would free. Nothing is read from
-  disk, which is what keeps it as fast as the rest of the app and safe on iCloud
-  placeholders — reading one would pull it down from the network. The cost of
-  not reading is that this cannot prove two files are identical, only that they
-  are strong candidates, and the panel says so above the list. Hard links are
-  excluded: they are already one set of bytes under two names, so deleting one
-  frees nothing and listing them would promise space that does not exist.
+- **Copies.** Duplicate *folders* first, then duplicate files, ordered by what
+  deleting the extras would free.
 
-Colours mean one of two things, switchable from the toolbar menu: **by type**
-(video, model, database, code…) or **by age**, a cool-to-warm ramp so a folder
-nobody has opened in years reads as one warm block.
+  A folder is reduced to a hash of everything below it: each file contributes
+  its name and byte length, each folder the combined hash of its children. A
+  folder's own name is left out, so a renamed copy still matches, and children
+  combine commutatively because directory order is not stable between two
+  copies of the same tree. Two folders with the same hash hold the same names
+  at the same sizes in the same shape. Folders that share *most* of their
+  children are reported too — "3 of 4 items shared" — which is the case that
+  actually turns up: two copies of a library where one has a few more files in
+  it.
+
+  Files are matched the same way, on name and size together, and a file inside
+  a folder that already matched is not listed again. Hard links are excluded:
+  they are already one set of bytes under two names, so deleting one frees
+  nothing and listing them would promise space that does not exist. Nothing is
+  read from disk for any of this, which is what keeps it as fast as the rest of
+  the app and safe on iCloud placeholders — reading one would pull it down from
+  the network.
+
+  **Verify** is the answer to what metadata cannot settle. Open a match and it
+  reads every byte of every copy, hashes them, and says whether the contents
+  actually agree. The button says what it will read before you press it, the
+  run reports progress and can be stopped, and files that exist only in iCloud
+  are counted rather than downloaded — a match with unread files is reported as
+  "matched, but N files were not read", not as identical.
 
 Age colouring works on the treemap, the sunburst and the icicle alike.
 
@@ -253,16 +268,29 @@ usage from 1.32 GB to 0.69 GB without dropping a single file:
   `Resources`, `package.json` recur endlessly — so storing each once cut the
   name blob from 238 MB to 105 MB.
 
-The report panels walk the subtree again rather than caching per-node totals.
-On the home folder above — 9.58M nodes — the duplicate pass took **0.07 s** and
-returned 7,602 candidate groups totalling 281 GB, so it runs on demand when the
-panel opens rather than as part of the scan.
+The report panels walk the subtree again rather than caching per-node totals,
+on demand when a panel opens rather than as part of the scan. On the home folder
+above — 9.58M nodes:
+
+| | |
+|---|---|
+| Duplicate files | **0.07 s**, 7,602 candidate groups, 281 GB |
+| Duplicate folders | **0.58 s**, 399 identical and 1,369 partial, 323 GB |
+| Verifying a match | 9.29 GB read in **4.5 s** (2.05 GB/s), confirmed identical |
+
+The folder pass hashes every node, so it costs 8 bytes per node while it runs
+(77 MB on that tree) and is kept across navigations, since the hashes only
+change when the tree does.
 
 Run `dmbench scan <path>` for the same breakdown on any tree, or
 `dmbench dupes <path>` for the duplicate pass on its own.
 
 ## Known limits
 
+- **A match nested inside a partial match is still listed** when it is exact,
+  because "most of these two folders is the same" and "this 14 GB subfolder is
+  the same" are different findings. Matches nested inside an *identical* folder
+  are dropped, since they say nothing new.
 - **APFS clones cannot be detected** through any public API. Cloned blocks are
   counted once by the volume but can appear under several names, so they land in
   the "unaccounted" line of the reconciliation panel rather than being silently
@@ -281,7 +309,9 @@ swift test                                   # 60 tests, including FSEvents end-
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation
-.build/release/dmbench dupes <path>          # duplicate candidates and pass cost
+.build/release/dmbench dupes <path>          # duplicate files and folders, and pass cost
+.build/release/dmbench verify <a> <b>        # read both and compare contents
+.build/release/dmbench verifytop <path> <GB> # verify the largest match under a budget
 ```
 
 `dmbench validate` exists because `getattrlistbulk` returns a packed buffer whose

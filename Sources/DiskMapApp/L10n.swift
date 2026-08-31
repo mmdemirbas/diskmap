@@ -50,6 +50,23 @@ final class L10n: ObservableObject {
     func itemCount(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) öğe" : "\(fmt(n)) items"
     }
+    func sharedItems(_ shared: Int, _ of: Int) -> String {
+        active == .tr ? "\(of) öğenin \(shared)'i ortak" : "\(shared) of \(of) items shared"
+    }
+    func readsBytes(_ size: String) -> String {
+        active == .tr ? "\(size) okur" : "reads \(size)"
+    }
+    func readSoFar(_ done: String, _ total: String) -> String {
+        active == .tr ? "\(total) içinden \(done)" : "\(done) of \(total)"
+    }
+    func verifyDiffer(_ distinct: Int) -> String {
+        active == .tr ? "içerikler farklı (\(distinct) ayrı sürüm)"
+                      : "contents differ (\(distinct) different)"
+    }
+    func verifyPartial(_ n: Int) -> String {
+        active == .tr ? "eşleşti, ancak \(fmt(n)) dosya okunamadı"
+                      : "matched, but \(fmt(n)) files were not read"
+    }
     func copyCount(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) kopya" : "\(fmt(n)) copies"
     }
@@ -132,7 +149,8 @@ final class L10n: ObservableObject {
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
         case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
-        case duplicatesNote, duplicatesEmpty, reclaimable
+        case duplicatesNote, duplicatesEmpty, reclaimable, sectionFolders, sectionFiles
+        case matchExact, verify, verifyAgain, verifyIdentical, verifyStopped
         case ageWeek, ageMonth, ageHalfYear, ageYear, ageTwoYears, ageOlder, staleNote
         case goBack, goForward, expandFolder, collapseFolder, foldersOnlyNote, chooseFolders, choosePanelMessage, dropFolders, orWord, scanWholeDisk
         case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
@@ -222,10 +240,17 @@ final class L10n: ObservableObject {
         .panelLargest: ("Largest", "En büyük"),
         .panelTypes: ("Types", "Türler"),
         .panelDuplicates: ("Copies", "Kopyalar"),
-        .duplicatesNote: ("Same name and same size. Not compared byte by byte, so check before deleting.",
-                          "Aynı ad, aynı boyut. İçerikleri karşılaştırılmadı, silmeden önce kontrol edin."),
-        .duplicatesEmpty: ("No files here share a name and a size.",
-                           "Burada adı ve boyutu aynı olan dosya yok."),
+        .duplicatesNote: ("Matched on names and sizes only. Open a match and press Verify to compare the contents.",
+                          "Yalnızca ad ve boyut karşılaştırıldı. Eşleşmeyi açıp Doğrula ile içerikleri karşılaştırın."),
+        .duplicatesEmpty: ("Nothing here has a copy elsewhere below this folder.",
+                           "Bu klasörün altında kopyası olan bir şey yok."),
+        .sectionFolders: ("Folders", "Klasörler"),
+        .sectionFiles: ("Files", "Dosyalar"),
+        .matchExact: ("identical", "birebir aynı"),
+        .verify: ("Verify", "Doğrula"),
+        .verifyAgain: ("Check again", "Yeniden bak"),
+        .verifyIdentical: ("contents match", "içerikler aynı"),
+        .verifyStopped: ("stopped", "durduruldu"),
         .reclaimable: ("could be freed", "boşaltılabilir"),
         .computing: ("Working…", "Hesaplanıyor…"),
         .ofSubtree: ("everything below this folder", "bu klasörün altındaki her şey"),

@@ -27,9 +27,13 @@ public struct DuplicateGroup: Sendable, Identifiable {
 /// two names, so removing one frees nothing, and listing them as duplicates
 /// would promise space that does not exist.
 public enum Duplicates {
+    /// `insideMatched` suppresses files whose folders are already reported as
+    /// copies of each other: every file in a matched folder has a twin in its
+    /// counterpart, and listing them again says nothing the folder row did not.
     public static func find(store: NodeStore, root: Int32,
                             minimumSize: Int64 = 1_000_000,
-                            limit: Int = 200) -> [DuplicateGroup] {
+                            limit: Int = 200,
+                            insideMatched: [FolderMatch] = []) -> [DuplicateGroup] {
         struct Key: Hashable { let name: String; let size: Int64 }
         var groups: [Key: [Int32]] = [:]
         var stack: [Int32] = [root]
@@ -48,8 +52,18 @@ public enum Duplicates {
             }
         }
 
+        var folderOf: [Int32: Set<Int>] = [:]
+        for (index, match) in insideMatched.enumerated() {
+            for node in match.nodes { folderOf[node, default: []].insert(index) }
+        }
+
         return groups
             .filter { $0.value.count > 1 }
+            .filter { _, nodes in
+                guard !folderOf.isEmpty else { return true }
+                let owners = nodes.map { folderOf[store.parent[Int($0)]] ?? [] }
+                return owners.dropFirst().reduce(owners[0]) { $0.intersection($1) }.isEmpty
+            }
             .map { DuplicateGroup(nodes: $0.value, name: $0.key.name, bytes: $0.key.size) }
             .sorted { $0.reclaimable > $1.reclaimable }
             .prefix(limit)

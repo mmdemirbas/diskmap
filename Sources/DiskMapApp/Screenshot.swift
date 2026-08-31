@@ -55,6 +55,10 @@ enum OffscreenRenderer {
             model.panel = mode
             model.refreshSummarySync()
         }
+        // After the report, or there is nothing to open yet.
+        if env["DISKMAP_EXPAND"] != nil, let first = model.folderMatches.first {
+            model.openMatches.insert(first.id)
+        }
 
         // Open the two largest folders so the render shows the tree nesting.
         for _ in 0..<2 {

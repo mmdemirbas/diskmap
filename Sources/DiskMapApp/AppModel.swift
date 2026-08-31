@@ -114,15 +114,70 @@ final class LayoutStore<L: KeyedLayout>: @unchecked Sendable {
     func set(_ layout: L) { lock.lock(); current = layout; lock.unlock() }
 }
 
+struct PathRef: Identifiable { let id: Int32; let path: String }
+
+/// A match is identified by the set of things it matches, not by any one of
+/// them: the same folder can appear in several matches.
+func matchKey(_ nodes: [Int32]) -> Int64 {
+    nodes.reduce(Int64(bitPattern: 0xcbf2_9ce4_8422_2325)) {
+        ($0 ^ Int64($1)) &* 0x100_0000_01b3
+    }
+}
+
 /// One group of files that share a name and a byte length. See `Duplicates`
 /// for why that is a candidate rather than a proven copy.
 struct DuplicateEntry: Identifiable {
-    struct Copy: Identifiable { let id: Int32; let path: String }
-    let id: Int32
+    let id: Int64
     let name: String
     let bytes: Int64
     let reclaimable: Int64
-    let copies: [Copy]
+    let copies: [PathRef]
+}
+
+/// One set of folders holding the same thing. See `FolderMatches`.
+struct FolderEntry: Identifiable {
+    let id: Int64
+    let name: String
+    let bytes: Int64
+    let reclaimable: Int64
+    let exact: Bool
+    let sharedItems: Int
+    let comparedItems: Int
+    /// What verifying this match would read, so the button can say the price.
+    let readBytes: Int64
+    let copies: [PathRef]
+}
+
+/// Progress and verdict of a content check, keyed by the match it belongs to.
+struct VerifyStatus {
+    var read: Int64 = 0
+    var total: Int64 = 0
+    var outcome: VerifyOutcome?
+    var running: Bool { outcome == nil }
+}
+
+/// The folder hashes cover the whole tree and only change when the tree does,
+/// so browsing with the panel open should not pay for them again each time.
+final class SignatureCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var revision = -1
+    private var values: [UInt64] = []
+
+    func signatures(for store: NodeStore, revision: Int) -> [UInt64] {
+        lock.lock(); defer { lock.unlock() }
+        if self.revision == revision, values.count == store.count { return values }
+        values = FolderMatches.signatures(store)
+        self.revision = revision
+        return values
+    }
+}
+
+/// Everything the report panels show, produced by one walk of the subtree.
+struct ReportData {
+    var summary: SubtreeSummary
+    var largest: [LargeFile]
+    var duplicates: [DuplicateEntry]
+    var folders: [FolderEntry]
 }
 
 struct ItemInfo: Equatable {
@@ -207,6 +262,11 @@ final class AppModel: ObservableObject {
     @Published var panel: PanelMode = .contents
     @Published var summary: SubtreeSummary?
     @Published var duplicates: [DuplicateEntry] = []
+    @Published var folderMatches: [FolderEntry] = []
+    @Published var verifications: [Int64: VerifyStatus] = [:]
+    @Published var openMatches: Set<Int64> = []
+    private var verifyTokens: [Int64: CancelToken] = [:]
+    private let signatureCache = SignatureCache()
     @Published var largeFiles: [LargeFile] = []
     @Published var summarizing = false
 
@@ -719,11 +779,15 @@ final class AppModel: ObservableObject {
         let root = currentDirectory
         let physical = usePhysicalSize
         let wantsDuplicates = panel == .duplicates
+        if wantsDuplicates { verifications.removeAll() }
         summarizing = true
+        let cache = signatureCache
+        let revision = revision
         Task { [weak self] in
             let computed = await Task.detached(priority: .userInitiated) {
                 Self.report(tree: tree, root: root, physical: physical,
-                            includeDuplicates: wantsDuplicates)
+                            includeDuplicates: wantsDuplicates,
+                            cache: cache, revision: revision)
             }.value
             guard let self else { return }
             self.apply(computed)
@@ -734,23 +798,25 @@ final class AppModel: ObservableObject {
     func refreshSummarySync() {
         guard let tree else { return }
         apply(Self.report(tree: tree, root: currentDirectory, physical: usePhysicalSize,
-                          includeDuplicates: panel == .duplicates))
+                          includeDuplicates: panel == .duplicates,
+                          cache: signatureCache, revision: revision))
     }
 
-    private func apply(_ computed: (SubtreeSummary, [LargeFile], [DuplicateEntry])) {
-        summary = computed.0
-        largeFiles = computed.1
-        duplicates = computed.2
+    private func apply(_ computed: ReportData) {
+        summary = computed.summary
+        largeFiles = computed.largest
+        duplicates = computed.duplicates
+        folderMatches = computed.folders
         summarizing = false
     }
 
     /// Duplicate detection is a second walk, so it only runs for the panel that
     /// shows it rather than on every report refresh.
     nonisolated static func report(tree: LiveTree, root: Int32, physical: Bool,
-                                   includeDuplicates: Bool)
-    -> (SubtreeSummary, [LargeFile], [DuplicateEntry]) {
+                                   includeDuplicates: Bool,
+                                   cache: SignatureCache, revision: Int) -> ReportData {
         // One lock acquisition: the store must not escape it.
-        tree.withStore { store -> (SubtreeSummary, [LargeFile], [DuplicateEntry]) in
+        tree.withStore { store -> ReportData in
             let summary = Aggregate.summarize(store: store, root: root, usePhysicalSize: physical)
             let files = summary.largestFiles.map { id -> LargeFile in
                 let name = store.name(id)
@@ -760,16 +826,68 @@ final class AppModel: ObservableObject {
                     category: Categorizer.of(name: name, isDirectory: false),
                     modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(id)])))
             }
-            guard includeDuplicates else { return (summary, files, []) }
-            let groups = Duplicates.find(store: store, root: root).map { group in
-                DuplicateEntry(id: group.nodes[0], name: group.name, bytes: group.bytes,
+            guard includeDuplicates else {
+                return ReportData(summary: summary, largest: files, duplicates: [], folders: [])
+            }
+            let matches = FolderMatches.find(store: store, root: root,
+                                             precomputed: cache.signatures(for: store,
+                                                                          revision: revision))
+            let folders = matches.map { match in
+                FolderEntry(id: matchKey(match.nodes), name: store.name(match.nodes[0]),
+                            bytes: match.bytes, reclaimable: match.reclaimable,
+                            exact: match.exact, sharedItems: match.sharedItems,
+                            comparedItems: match.comparedItems,
+                            readBytes: match.nodes.reduce(0) { $0 + store.totalPhysical[Int($1)] },
+                            copies: match.nodes.map { PathRef(id: $0, path: store.path($0)) })
+            }
+            let groups = Duplicates.find(store: store, root: root,
+                                         insideMatched: matches).map { group in
+                DuplicateEntry(id: matchKey(group.nodes), name: group.name, bytes: group.bytes,
                                reclaimable: group.reclaimable,
                                copies: group.nodes
-                                   .map { DuplicateEntry.Copy(id: $0, path: store.path($0)) }
+                                   .map { PathRef(id: $0, path: store.path($0)) }
                                    .sorted { $0.path < $1.path })
             }
-            return (summary, files, groups)
+            return ReportData(summary: summary, largest: files, duplicates: groups, folders: folders)
         }
+    }
+
+    // MARK: - Deep verification
+
+    /// Reads every file in the match and compares the contents, which is the
+    /// only way to answer "are these really the same". Off by default because
+    /// it costs the bytes; the button says how many before you press it.
+    func verifyMatch(id: Int64, nodes: [Int32]) {
+        guard let tree, verifications[id]?.running != true else { return }
+        let plan = tree.withStore { DeepVerify.plan(store: $0, nodes: nodes) }
+        let token = CancelToken()
+        verifyTokens[id] = token
+        verifications[id] = VerifyStatus(read: 0, total: plan.bytes)
+
+        Task { [weak self] in
+            let outcome = await Task.detached(priority: .utility) { () -> VerifyOutcome in
+                DeepVerify.run(plan, cancel: token) { read in
+                    Task { @MainActor [weak self] in
+                        guard self?.verifications[id]?.running == true else { return }
+                        self?.verifications[id]?.read = read
+                    }
+                }
+            }.value
+            guard let self else { return }
+            self.verifyTokens[id] = nil
+            self.verifications[id]?.read = plan.bytes
+            self.verifications[id]?.outcome = outcome
+        }
+    }
+
+    func cancelVerify(id: Int64) {
+        verifyTokens[id]?.cancel()
+        verifyTokens[id] = nil
+    }
+
+    func clearVerification(id: Int64) {
+        cancelVerify(id: id)
+        verifications[id] = nil
     }
 
     /// Blocking scan used by the offscreen renderer.

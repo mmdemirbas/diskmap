@@ -151,10 +151,76 @@ func cmdDupes(_ paths: [String]) {
     print("  reclaimable        \(fmt(reclaimable))")
     print("  pass took          \(String(format: "%.2fs", elapsed))")
     print("\ntop groups")
-    for group in groups.prefix(12) {
+    for group in groups.prefix(8) {
         print("  \(fmt(group.reclaimable).padding(toLength: 11, withPad: " ", startingAt: 0))"
               + "  \(group.nodes.count) x \(fmt(group.bytes))  \(group.name)")
     }
+
+    let folderStart = DispatchTime.now().uptimeNanoseconds
+    let folders = FolderMatches.find(store: store, root: 0, limit: 10_000)
+    let folderElapsed = Double(DispatchTime.now().uptimeNanoseconds - folderStart) / 1e9
+    print("\nfolder matches")
+    print("  exact              \(folders.filter(\.exact).count)")
+    print("  partial            \(folders.filter { !$0.exact }.count)")
+    print("  reclaimable        \(fmt(folders.reduce(Int64(0)) { $0 + $1.reclaimable }))")
+    print("  pass took          \(String(format: "%.2fs", folderElapsed))")
+    for match in folders.prefix(10) {
+        let shape = match.exact ? "identical"
+            : "\(match.sharedItems)/\(match.comparedItems) shared"
+        print("  \(fmt(match.reclaimable).padding(toLength: 11, withPad: " ", startingAt: 0))"
+              + "  \(match.nodes.count) x \(fmt(match.bytes))  \(shape)")
+        for node in match.nodes.prefix(3) { print("      \(store.path(node))") }
+    }
+}
+
+/// End-to-end check of the deep path: plan two or more real folders, read every
+/// byte, and say whether they are the same.
+func cmdVerify(_ paths: [String]) {
+    guard paths.count > 1 else { print("usage: dmbench verify <path> <path> [path...]"); exit(1) }
+    let parent = (paths[0] as NSString).deletingLastPathComponent
+    let store = DiskScanner().scan(ScanOptions(roots: paths)).store
+    let nodes = paths.compactMap { store.find(path: $0) }
+    guard nodes.count == paths.count else { print("could not locate all paths under \(parent)"); exit(1) }
+
+    let plan = DeepVerify.plan(store: store, nodes: nodes)
+    print("verify \(paths.count) paths")
+    print("  files              \(plan.files)")
+    print("  to read            \(fmt(plan.bytes))")
+    print("  skipped (iCloud)   \(plan.skipped)")
+
+    let start = DispatchTime.now().uptimeNanoseconds
+    let outcome = DeepVerify.run(plan)
+    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+    print("  read in            \(String(format: "%.1fs", elapsed))"
+          + "  (\(fmt(Int64(Double(plan.bytes) / max(elapsed, 0.001))))/s)")
+    print("  distinct contents  \(outcome.distinct)")
+    print("  identical          \(outcome.identical)")
+    for result in outcome.results {
+        print("    \(result.digest.prefix(16))  \(store.path(result.node))")
+    }
+}
+
+/// Finds folder matches under a path and verifies the largest one that fits a
+/// read budget, which is the whole pipeline end to end on real data.
+func cmdVerifyTop(_ path: String, budget: Int64) {
+    let store = DiskScanner().scan(ScanOptions(rootPath: path)).store
+    let matches = FolderMatches.find(store: store, root: 0, limit: 10_000)
+    let plans = matches.map { ($0, $0.nodes.reduce(Int64(0)) { $0 + store.totalPhysical[Int($1)] }) }
+    guard let (match, cost) = plans.filter({ $0.1 <= budget }).max(by: { $0.0.reclaimable < $1.0.reclaimable })
+    else { print("no match under \(fmt(budget))"); exit(1) }
+
+    print("verifying \(match.exact ? "an identical" : "a partial") match, \(fmt(cost)) to read")
+    for node in match.nodes { print("  \(store.path(node))") }
+    let plan = DeepVerify.plan(store: store, nodes: match.nodes)
+    print("  files \(plan.files), skipped (iCloud) \(plan.skipped)")
+
+    let start = DispatchTime.now().uptimeNanoseconds
+    let outcome = DeepVerify.run(plan)
+    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+    print("  read \(fmt(plan.bytes)) in \(String(format: "%.1fs", elapsed))"
+          + "  (\(fmt(Int64(Double(plan.bytes) / max(elapsed, 0.001))))/s)")
+    print("  distinct contents \(outcome.distinct), identical \(outcome.identical),"
+          + " unread \(outcome.unread)")
 }
 
 let args = CommandLine.arguments
@@ -163,5 +229,9 @@ case "volume": cmdVolume()
 case "validate": cmdValidate(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "scan": cmdScan(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
 case "dupes": cmdDupes(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
-default: print("usage: dmbench [volume | validate <path> | scan <path> [path...] | dupes <path>]")
+case "verify": cmdVerify(Array(args.dropFirst(2)))
+case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                               budget: args.count > 3 ? (Int64(args[3]) ?? 0) << 30 : 12 << 30)
+default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
+               + " | dupes <path> | verify <path> <path>]")
 }
