@@ -50,6 +50,9 @@ final class L10n: ObservableObject {
     func itemCount(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) öğe" : "\(fmt(n)) items"
     }
+    func copyCount(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) kopya" : "\(fmt(n)) copies"
+    }
     func folderCount(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) klasör" : "\(fmt(n)) folders"
     }
@@ -127,8 +130,9 @@ final class L10n: ObservableObject {
         case apparentMismatch, openHere, revealInFinder, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
-        case treemapView, sunburstView, colourBy, colourByType, colourByAge
-        case panelContents, panelLargest, panelTypes, computing, ofSubtree
+        case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
+        case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
+        case duplicatesNote, duplicatesEmpty, reclaimable
         case ageWeek, ageMonth, ageHalfYear, ageYear, ageTwoYears, ageOlder, staleNote
         case goBack, goForward, expandFolder, collapseFolder, foldersOnlyNote, chooseFolders, choosePanelMessage, dropFolders, orWord, scanWholeDisk
         case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
@@ -210,12 +214,19 @@ final class L10n: ObservableObject {
         .appearanceDark: ("Dark", "Koyu"),
         .treemapView: ("Treemap", "Alan haritası"),
         .sunburstView: ("Sunburst", "Halka grafik"),
+        .icicleView: ("Icicle", "Katman grafiği"),
         .colourBy: ("Colour by", "Renklendirme"),
         .colourByType: ("By type", "Türe göre"),
         .colourByAge: ("By age", "Yaşa göre"),
-        .panelContents: ("Contents", "İçindekiler"),
-        .panelLargest: ("Largest files", "En büyük dosyalar"),
-        .panelTypes: ("By type", "Türlere göre"),
+        .panelContents: ("Contents", "İçerik"),
+        .panelLargest: ("Largest", "En büyük"),
+        .panelTypes: ("Types", "Türler"),
+        .panelDuplicates: ("Copies", "Kopyalar"),
+        .duplicatesNote: ("Same name and same size. Not compared byte by byte, so check before deleting.",
+                          "Aynı ad, aynı boyut. İçerikleri karşılaştırılmadı, silmeden önce kontrol edin."),
+        .duplicatesEmpty: ("No files here share a name and a size.",
+                           "Burada adı ve boyutu aynı olan dosya yok."),
+        .reclaimable: ("could be freed", "boşaltılabilir"),
         .computing: ("Working…", "Hesaplanıyor…"),
         .ofSubtree: ("everything below this folder", "bu klasörün altındaki her şey"),
         .ageWeek: ("This week", "Bu hafta"),

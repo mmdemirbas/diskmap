@@ -87,6 +87,7 @@ struct ContentView: View {
         switch model.visualization {
         case .treemap: TreemapView(model: model)
         case .sunburst: SunburstView(model: model)
+        case .icicle: IcicleView(model: model)
         }
     }
 
@@ -105,6 +106,7 @@ struct ContentView: View {
             case .contents: ContentsList(model: model)
             case .largest: LargestFilesView(model: model)
             case .types: TypeBreakdownView(model: model)
+            case .duplicates: DuplicatesView(model: model)
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
@@ -156,7 +158,7 @@ struct ContentView: View {
                     Image(systemName: v.symbol).tag(v).help(loc[v.key])
                 }
             }
-            .pickerStyle(.segmented).frame(width: 76).labelsHidden()
+            .pickerStyle(.segmented).frame(width: 112).labelsHidden()
 
             Picker("", selection: $model.usePhysicalSize) {
                 Text(loc[.onDisk]).tag(true)

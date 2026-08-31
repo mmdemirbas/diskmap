@@ -31,10 +31,22 @@ struct CellInfo: Sendable {
 }
 
 enum Visualization: String, CaseIterable, Identifiable {
-    case treemap, sunburst
+    case treemap, sunburst, icicle
     var id: String { rawValue }
-    var key: L10n.K { self == .treemap ? .treemapView : .sunburstView }
-    var symbol: String { self == .treemap ? "square.grid.2x2.fill" : "circle.circle" }
+    var key: L10n.K {
+        switch self {
+        case .treemap: .treemapView
+        case .sunburst: .sunburstView
+        case .icicle: .icicleView
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .treemap: "square.grid.2x2.fill"
+        case .sunburst: "circle.circle"
+        case .icicle: "chart.bar.doc.horizontal"
+        }
+    }
 }
 
 /// What the colours mean. Type answers "what kind of thing is this"; age
@@ -47,32 +59,30 @@ enum ColourMode: String, CaseIterable, Identifiable {
 }
 
 enum PanelMode: String, CaseIterable, Identifiable {
-    case contents, largest, types
+    case contents, largest, types, duplicates
     var id: String { rawValue }
     var key: L10n.K {
         switch self {
         case .contents: .panelContents
         case .largest: .panelLargest
         case .types: .panelTypes
+        case .duplicates: .panelDuplicates
         }
     }
 }
 
-struct SunburstLayout: Sendable {
+protocol KeyedLayout: Sendable { var key: String { get } }
+
+struct SunburstLayout: KeyedLayout {
     var key: String
     var segments: [SunburstSegment]
     var info: [Int32: CellInfo]
 }
 
-final class SunburstCache: @unchecked Sendable {
-    private let lock = NSLock()
-    private var current: SunburstLayout?
-    func get(_ key: String) -> SunburstLayout? {
-        lock.lock(); defer { lock.unlock() }
-        return current?.key == key ? current : nil
-    }
-    func any() -> SunburstLayout? { lock.lock(); defer { lock.unlock() }; return current }
-    func set(_ layout: SunburstLayout) { lock.lock(); current = layout; lock.unlock() }
+struct IcicleLayout: KeyedLayout {
+    var key: String
+    var cells: [IcicleCell]
+    var info: [Int32: CellInfo]
 }
 
 /// One entry of the largest-files report.
@@ -85,23 +95,34 @@ struct LargeFile: Identifiable {
     let modified: Date
 }
 
-struct TreemapLayout: Sendable {
+struct TreemapLayout: KeyedLayout {
     var key: String
     var cells: [TreemapCell]
     var info: [Int32: CellInfo]
 }
 
-/// Holds the most recent treemap layout outside published state, so the Canvas
-/// can read it during a draw without provoking another render pass.
-final class LayoutCache: @unchecked Sendable {
+/// Holds the most recent layout outside published state, so the Canvas can read
+/// it during a draw without provoking another render pass.
+final class LayoutStore<L: KeyedLayout>: @unchecked Sendable {
     private let lock = NSLock()
-    private var current: TreemapLayout?
-    func get(_ key: String) -> TreemapLayout? {
+    private var current: L?
+    func get(_ key: String) -> L? {
         lock.lock(); defer { lock.unlock() }
         return current?.key == key ? current : nil
     }
-    func any() -> TreemapLayout? { lock.lock(); defer { lock.unlock() }; return current }
-    func set(_ l: TreemapLayout) { lock.lock(); current = l; lock.unlock() }
+    func any() -> L? { lock.lock(); defer { lock.unlock() }; return current }
+    func set(_ layout: L) { lock.lock(); current = layout; lock.unlock() }
+}
+
+/// One group of files that share a name and a byte length. See `Duplicates`
+/// for why that is a candidate rather than a proven copy.
+struct DuplicateEntry: Identifiable {
+    struct Copy: Identifiable { let id: Int32; let path: String }
+    let id: Int32
+    let name: String
+    let bytes: Int64
+    let reclaimable: Int64
+    let copies: [Copy]
 }
 
 struct ItemInfo: Equatable {
@@ -185,11 +206,13 @@ final class AppModel: ObservableObject {
     @Published var colourMode: ColourMode = .type
     @Published var panel: PanelMode = .contents
     @Published var summary: SubtreeSummary?
+    @Published var duplicates: [DuplicateEntry] = []
     @Published var largeFiles: [LargeFile] = []
     @Published var summarizing = false
 
-    let layoutCache = LayoutCache()
-    let sunburstCache = SunburstCache()
+    let layoutCache = LayoutStore<TreemapLayout>()
+    let sunburstCache = LayoutStore<SunburstLayout>()
+    let icicleCache = LayoutStore<IcicleLayout>()
     @Published private(set) var layoutToken = 0
     /// Offscreen rendering has no async phase, so layout must run inline.
     var renderMode = false
@@ -602,6 +625,36 @@ final class AppModel: ObservableObject {
         }
     }
 
+    nonisolated static func computeIcicle(tree: LiveTree, root: Int32, size: CGSize,
+                                          physical: Bool, filter: String,
+                                          key: String) -> IcicleLayout {
+        let rect = CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 4)
+        let needle = filter.lowercased()
+        return tree.withStore { store in
+            let cells = Icicle.layout(
+                store: store, root: root, in: rect, usePhysicalSize: physical,
+                includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
+            var map: [Int32: CellInfo] = [:]
+            map.reserveCapacity(cells.count)
+            for cell in cells where cell.node >= 0 {
+                map[cell.node] = cellInfo(store, cell.node, physical: physical)
+            }
+            return IcicleLayout(key: key, cells: cells, info: map)
+        }
+    }
+
+    func cachedIcicle(for size: CGSize) -> IcicleLayout? { icicleCache.get(layoutKey(size: size)) }
+
+    @discardableResult
+    func computeIcicleSync(size: CGSize) -> IcicleLayout? {
+        guard let tree, size.width > 16, size.height > 16 else { return nil }
+        let layout = Self.computeIcicle(tree: tree, root: currentDirectory, size: size,
+                                        physical: usePhysicalSize, filter: filterText,
+                                        key: layoutKey(size: size))
+        icicleCache.set(layout)
+        return layout
+    }
+
     func cachedSunburst(for size: CGSize) -> SunburstLayout? { sunburstCache.get(layoutKey(size: size)) }
 
     @discardableResult
@@ -647,6 +700,14 @@ final class AppModel: ObservableObject {
             }.value
             guard !Task.isCancelled else { return }
             sunburstCache.set(layout)
+        case .icicle:
+            if icicleCache.get(key) != nil { return }
+            let layout = await Task.detached(priority: .userInitiated) {
+                Self.computeIcicle(tree: tree, root: root, size: size, physical: physical,
+                                   filter: filter, key: key)
+            }.value
+            guard !Task.isCancelled else { return }
+            icicleCache.set(layout)
         }
         layoutToken &+= 1
     }
@@ -657,38 +718,39 @@ final class AppModel: ObservableObject {
         guard let tree, panel != .contents else { return }
         let root = currentDirectory
         let physical = usePhysicalSize
+        let wantsDuplicates = panel == .duplicates
         summarizing = true
         Task { [weak self] in
             let computed = await Task.detached(priority: .userInitiated) {
-                () -> (SubtreeSummary, [LargeFile]) in
-                // One lock acquisition: the store must not escape it.
-                tree.withStore { store -> (SubtreeSummary, [LargeFile]) in
-                    let summary = Aggregate.summarize(store: store, root: root,
-                                                      usePhysicalSize: physical)
-                    let files = summary.largestFiles.map { id -> LargeFile in
-                        let name = store.name(id)
-                        return LargeFile(
-                            id: id, name: name, path: store.path(id),
-                            bytes: physical ? store.totalPhysical[Int(id)] : store.totalLogical[Int(id)],
-                            category: Categorizer.of(name: name, isDirectory: false),
-                            modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(id)])))
-                    }
-                    return (summary, files)
-                }
+                Self.report(tree: tree, root: root, physical: physical,
+                            includeDuplicates: wantsDuplicates)
             }.value
             guard let self else { return }
-            self.summary = computed.0
-            self.largeFiles = computed.1
-            self.summarizing = false
+            self.apply(computed)
         }
     }
 
     /// Blocking report used by the offscreen renderer, which has no async pass.
     func refreshSummarySync() {
         guard let tree else { return }
-        let root = currentDirectory
-        let physical = usePhysicalSize
-        let computed = tree.withStore { store -> (SubtreeSummary, [LargeFile]) in
+        apply(Self.report(tree: tree, root: currentDirectory, physical: usePhysicalSize,
+                          includeDuplicates: panel == .duplicates))
+    }
+
+    private func apply(_ computed: (SubtreeSummary, [LargeFile], [DuplicateEntry])) {
+        summary = computed.0
+        largeFiles = computed.1
+        duplicates = computed.2
+        summarizing = false
+    }
+
+    /// Duplicate detection is a second walk, so it only runs for the panel that
+    /// shows it rather than on every report refresh.
+    nonisolated static func report(tree: LiveTree, root: Int32, physical: Bool,
+                                   includeDuplicates: Bool)
+    -> (SubtreeSummary, [LargeFile], [DuplicateEntry]) {
+        // One lock acquisition: the store must not escape it.
+        tree.withStore { store -> (SubtreeSummary, [LargeFile], [DuplicateEntry]) in
             let summary = Aggregate.summarize(store: store, root: root, usePhysicalSize: physical)
             let files = summary.largestFiles.map { id -> LargeFile in
                 let name = store.name(id)
@@ -698,11 +760,16 @@ final class AppModel: ObservableObject {
                     category: Categorizer.of(name: name, isDirectory: false),
                     modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(id)])))
             }
-            return (summary, files)
+            guard includeDuplicates else { return (summary, files, []) }
+            let groups = Duplicates.find(store: store, root: root).map { group in
+                DuplicateEntry(id: group.nodes[0], name: group.name, bytes: group.bytes,
+                               reclaimable: group.reclaimable,
+                               copies: group.nodes
+                                   .map { DuplicateEntry.Copy(id: $0, path: store.path($0)) }
+                                   .sorted { $0.path < $1.path })
+            }
+            return (summary, files, groups)
         }
-        summary = computed.0
-        largeFiles = computed.1
-        summarizing = false
     }
 
     /// Blocking scan used by the offscreen renderer.

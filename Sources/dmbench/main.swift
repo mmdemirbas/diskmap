@@ -135,10 +135,33 @@ func cmdScan(_ paths: [String]) {
     }
 }
 
+/// Times the duplicate pass on a real tree. It is a second walk over the
+/// scanned nodes, so its cost is worth knowing separately from the scan.
+func cmdDupes(_ paths: [String]) {
+    let result = DiskScanner().scan(ScanOptions(roots: paths))
+    let store = result.store
+    let start = DispatchTime.now().uptimeNanoseconds
+    let groups = Duplicates.find(store: store, root: 0, limit: 10_000)
+    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+
+    let reclaimable = groups.reduce(Int64(0)) { $0 + $1.reclaimable }
+    print("duplicate candidates in \(paths.joined(separator: ", "))")
+    print("  nodes scanned      \(result.stats.files + result.stats.directories)")
+    print("  groups             \(groups.count)")
+    print("  reclaimable        \(fmt(reclaimable))")
+    print("  pass took          \(String(format: "%.2fs", elapsed))")
+    print("\ntop groups")
+    for group in groups.prefix(12) {
+        print("  \(fmt(group.reclaimable).padding(toLength: 11, withPad: " ", startingAt: 0))"
+              + "  \(group.nodes.count) x \(fmt(group.bytes))  \(group.name)")
+    }
+}
+
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
 case "validate": cmdValidate(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "scan": cmdScan(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
-default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]]")
+case "dupes": cmdDupes(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
+default: print("usage: dmbench [volume | validate <path> | scan <path> [path...] | dupes <path>]")
 }

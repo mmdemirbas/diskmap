@@ -149,7 +149,7 @@ number.
 
 ## Views
 
-Four ways to look at the same scan, because they answer different questions.
+Six ways to look at the same scan, because they answer different questions.
 
 - **Treemap.** Area is bytes, so the biggest rectangle is the thing worth
   deleting. Best for "what is taking the space".
@@ -157,22 +157,36 @@ Four ways to look at the same scan, because they answer different questions.
   spends every pixel on area and buries depth; here depth *is* the radius, so a
   long chain of nested folders shows as a spoke instead of vanishing into a
   block. Best for "what shape is this tree".
+- **Icicle.** Stacked bars, one row per level, width proportional to size. The
+  treemap and the sunburst both ask you to judge two dimensions at once; here
+  size is length and nothing else, so siblings at the same depth line up as a
+  row you can read across and a path reads top to bottom as a column. Depth is
+  bounded by the window rather than a constant, so a taller window shows more
+  levels. Best for "how does this compare to its siblings".
 - **Largest files.** The biggest files anywhere below the current folder, with
   their paths. The tree table answers "what is in this folder"; this answers
   "what should I delete", which is usually one huge file six levels down.
 - **By type / by age.** Where the space went by kind of file, and by how long
   ago it was touched, with a line like *"29.3 GB untouched for over two years"*.
+- **Copies.** Files below the current folder that share a name *and* a byte
+  length, ordered by what deleting the extras would free. Nothing is read from
+  disk, which is what keeps it as fast as the rest of the app and safe on iCloud
+  placeholders — reading one would pull it down from the network. The cost of
+  not reading is that this cannot prove two files are identical, only that they
+  are strong candidates, and the panel says so above the list. Hard links are
+  excluded: they are already one set of bytes under two names, so deleting one
+  frees nothing and listing them would promise space that does not exist.
 
 Colours mean one of two things, switchable from the toolbar menu: **by type**
 (video, model, database, code…) or **by age**, a cool-to-warm ramp so a folder
-nobody has opened in years reads as one warm block. Age colouring works on both
-the treemap and the sunburst.
+nobody has opened in years reads as one warm block.
 
-Considered and not built, with reasons: an **icicle/flame** layout adds a third
-geometry for little that the treemap and sunburst do not already cover;
-**duplicate detection** needs content hashing, which is a different kind of
-work from a metadata scan; **scan comparison over time** needs persisted
-snapshots. Any of the three is a reasonable next step.
+Age colouring works on the treemap, the sunburst and the icicle alike.
+
+Considered and not built: **scan comparison over time** — persisting a scan and
+diffing a later one against it, to answer "what grew since last week" rather
+than only "what is big now". It needs snapshot storage and a diff view, so it is
+a larger piece than the rest.
 
 ## Using it
 
@@ -239,7 +253,13 @@ usage from 1.32 GB to 0.69 GB without dropping a single file:
   `Resources`, `package.json` recur endlessly — so storing each once cut the
   name blob from 238 MB to 105 MB.
 
-Run `dmbench scan <path>` for the same breakdown on any tree.
+The report panels walk the subtree again rather than caching per-node totals.
+On the home folder above — 9.58M nodes — the duplicate pass took **0.07 s** and
+returned 7,602 candidate groups totalling 281 GB, so it runs on demand when the
+panel opens rather than as part of the scan.
+
+Run `dmbench scan <path>` for the same breakdown on any tree, or
+`dmbench dupes <path>` for the duplicate pass on its own.
 
 ## Known limits
 
@@ -261,6 +281,7 @@ swift test                                   # 60 tests, including FSEvents end-
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation
+.build/release/dmbench dupes <path>          # duplicate candidates and pass cost
 ```
 
 `dmbench validate` exists because `getattrlistbulk` returns a packed buffer whose
