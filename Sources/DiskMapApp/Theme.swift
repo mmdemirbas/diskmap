@@ -40,6 +40,7 @@ extension FileCategory {
         case .diskImage:      ((0.80, 0.46, 0.22), (0.90, 0.58, 0.32))
         case .virtualMachine: ((0.76, 0.32, 0.28), (0.86, 0.44, 0.40))
         case .model:          ((0.64, 0.32, 0.68), (0.76, 0.45, 0.80))
+        case .database:       ((0.18, 0.44, 0.48), (0.30, 0.58, 0.62))
         case .cache:          ((0.52, 0.49, 0.44), (0.60, 0.57, 0.52))
         case .other:          ((0.46, 0.49, 0.53), (0.54, 0.57, 0.61))
         }
@@ -54,8 +55,34 @@ extension FileCategory {
         case .archive: t(.archiveLabel);        case .document: t(.documentLabel)
         case .code: t(.codeLabel);              case .application: t(.appLabel)
         case .diskImage: t(.diskImageLabel);    case .virtualMachine: t(.vmLabel)
-        case .model: t(.modelLabel);            case .cache: t(.cacheLabel)
+        case .model: t(.modelLabel);            case .database: t(.databaseLabel)
+        case .cache: t(.cacheLabel)
         case .other: t(.otherLabel)
+        }
+    }
+}
+
+/// A sequential ramp, cool for fresh and warm for stale, so a folder full of
+/// things nobody has opened in years reads as one warm block.
+extension AgeBucket {
+    func color(_ scheme: ColorScheme) -> Color {
+        let (l, d): ((Double, Double, Double), (Double, Double, Double)) = switch self {
+        case .week:     ((0.20, 0.55, 0.72), (0.32, 0.68, 0.85))
+        case .month:    ((0.28, 0.60, 0.60), (0.40, 0.73, 0.72))
+        case .halfYear: ((0.55, 0.62, 0.40), (0.66, 0.74, 0.50))
+        case .year:     ((0.76, 0.62, 0.30), (0.86, 0.72, 0.40))
+        case .twoYears: ((0.80, 0.48, 0.24), (0.90, 0.60, 0.34))
+        case .older:    ((0.74, 0.30, 0.26), (0.86, 0.44, 0.38))
+        }
+        let c = scheme == .dark ? d : l
+        return Color(red: c.0, green: c.1, blue: c.2)
+    }
+
+    @MainActor var localizedLabel: String {
+        switch self {
+        case .week: t(.ageWeek);         case .month: t(.ageMonth)
+        case .halfYear: t(.ageHalfYear); case .year: t(.ageYear)
+        case .twoYears: t(.ageTwoYears); case .older: t(.ageOlder)
         }
     }
 }

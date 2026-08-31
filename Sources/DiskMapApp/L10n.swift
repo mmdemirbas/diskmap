@@ -127,10 +127,13 @@ final class L10n: ObservableObject {
         case apparentMismatch, openHere, revealInFinder, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
+        case treemapView, sunburstView, colourBy, colourByType, colourByAge
+        case panelContents, panelLargest, panelTypes, computing, ofSubtree
+        case ageWeek, ageMonth, ageHalfYear, ageYear, ageTwoYears, ageOlder, staleNote
         case goBack, goForward, expandFolder, collapseFolder, foldersOnlyNote, chooseFolders, choosePanelMessage, dropFolders, orWord, scanWholeDisk
         case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
         case folderLabel, videoLabel, imageLabel, audioLabel, archiveLabel, documentLabel
-        case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, cacheLabel, otherLabel
+        case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, databaseLabel, cacheLabel, otherLabel
     }
 
     static let table: [K: (String, String)] = [
@@ -205,6 +208,23 @@ final class L10n: ObservableObject {
         .appearanceSystem: ("System", "Sistem"),
         .appearanceLight: ("Light", "Açık"),
         .appearanceDark: ("Dark", "Koyu"),
+        .treemapView: ("Treemap", "Alan haritası"),
+        .sunburstView: ("Sunburst", "Halka grafik"),
+        .colourBy: ("Colour by", "Renklendirme"),
+        .colourByType: ("By type", "Türe göre"),
+        .colourByAge: ("By age", "Yaşa göre"),
+        .panelContents: ("Contents", "İçindekiler"),
+        .panelLargest: ("Largest files", "En büyük dosyalar"),
+        .panelTypes: ("By type", "Türlere göre"),
+        .computing: ("Working…", "Hesaplanıyor…"),
+        .ofSubtree: ("everything below this folder", "bu klasörün altındaki her şey"),
+        .ageWeek: ("This week", "Bu hafta"),
+        .ageMonth: ("This month", "Bu ay"),
+        .ageHalfYear: ("6 months", "6 ay"),
+        .ageYear: ("1 year", "1 yıl"),
+        .ageTwoYears: ("2 years", "2 yıl"),
+        .ageOlder: ("Older", "Daha eski"),
+        .staleNote: ("untouched for over two years", "iki yıldan uzun süredir dokunulmamış"),
         .goBack: ("Back", "Geri"),
         .goForward: ("Forward", "İleri"),
         .expandFolder: ("Show contents", "İçindekileri göster"),
@@ -234,6 +254,7 @@ final class L10n: ObservableObject {
         .diskImageLabel: ("Disk image", "Disk kalıbı"),
         .vmLabel: ("Virtual machine", "Sanal makine"),
         .modelLabel: ("AI model", "Yapay zekâ modeli"),
+        .databaseLabel: ("Database", "Veritabanı"),
         .cacheLabel: ("Cache", "Önbellek"),
         .otherLabel: ("Other", "Diğer"),
     ]

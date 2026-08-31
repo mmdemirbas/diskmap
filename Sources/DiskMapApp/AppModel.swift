@@ -27,6 +27,62 @@ struct CellInfo: Sendable {
     var bytes: Int64
     var isDirectory: Bool
     var flags: NodeFlags
+    var age: AgeBucket
+}
+
+enum Visualization: String, CaseIterable, Identifiable {
+    case treemap, sunburst
+    var id: String { rawValue }
+    var key: L10n.K { self == .treemap ? .treemapView : .sunburstView }
+    var symbol: String { self == .treemap ? "square.grid.2x2.fill" : "circle.circle" }
+}
+
+/// What the colours mean. Type answers "what kind of thing is this"; age
+/// answers "how much of this have I not touched in years", which is usually
+/// the more useful question when you are trying to free space.
+enum ColourMode: String, CaseIterable, Identifiable {
+    case type, age
+    var id: String { rawValue }
+    var key: L10n.K { self == .type ? .colourByType : .colourByAge }
+}
+
+enum PanelMode: String, CaseIterable, Identifiable {
+    case contents, largest, types
+    var id: String { rawValue }
+    var key: L10n.K {
+        switch self {
+        case .contents: .panelContents
+        case .largest: .panelLargest
+        case .types: .panelTypes
+        }
+    }
+}
+
+struct SunburstLayout: Sendable {
+    var key: String
+    var segments: [SunburstSegment]
+    var info: [Int32: CellInfo]
+}
+
+final class SunburstCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: SunburstLayout?
+    func get(_ key: String) -> SunburstLayout? {
+        lock.lock(); defer { lock.unlock() }
+        return current?.key == key ? current : nil
+    }
+    func any() -> SunburstLayout? { lock.lock(); defer { lock.unlock() }; return current }
+    func set(_ layout: SunburstLayout) { lock.lock(); current = layout; lock.unlock() }
+}
+
+/// One entry of the largest-files report.
+struct LargeFile: Identifiable {
+    let id: Int32
+    let name: String
+    let path: String
+    let bytes: Int64
+    let category: FileCategory
+    let modified: Date
 }
 
 struct TreemapLayout: Sendable {
@@ -125,7 +181,15 @@ final class AppModel: ObservableObject {
         willSet { objectWillChange.send() }
     }
 
+    @Published var visualization: Visualization = .treemap
+    @Published var colourMode: ColourMode = .type
+    @Published var panel: PanelMode = .contents
+    @Published var summary: SubtreeSummary?
+    @Published var largeFiles: [LargeFile] = []
+    @Published var summarizing = false
+
     let layoutCache = LayoutCache()
+    let sunburstCache = SunburstCache()
     @Published private(set) var layoutToken = 0
     /// Offscreen rendering has no async phase, so layout must run inline.
     var renderMode = false
@@ -151,6 +215,16 @@ final class AppModel: ObservableObject {
     }
 
     var isMultiRoot: Bool { (tree?.roots.count ?? 0) > 1 }
+
+    /// Total of the folder currently on screen, for the sunburst hub.
+    var currentDirectoryBytes: Int64 {
+        guard let tree else { return 0 }
+        let node = currentDirectory
+        return tree.withStore { store in
+            guard node >= 0, node < Int32(store.count) else { return 0 }
+            return usePhysicalSize ? store.totalPhysical[Int(node)] : store.totalLogical[Int(node)]
+        }
+    }
 
     /// The startup disk arrives as two volumes. Showing "2 locations" for what
     /// the user asked to scan as one disk would be needless jargon.
@@ -336,6 +410,7 @@ final class AppModel: ObservableObject {
         selection = nil
         selectedInfo = nil
         rebuild()
+        refreshSummary()
     }
 
     /// Opens or closes a folder inside the table, leaving the view where it is.
@@ -474,7 +549,7 @@ final class AppModel: ObservableObject {
     // MARK: - Treemap layout
 
     func layoutKey(size: CGSize) -> String {
-        "\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)"
+        "\(visualization.rawValue)-\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)"
     }
 
     func cachedLayout(for size: CGSize) -> TreemapLayout? { layoutCache.get(layoutKey(size: size)) }
@@ -490,16 +565,53 @@ final class AppModel: ObservableObject {
             var map: [Int32: CellInfo] = [:]
             map.reserveCapacity(laid.count)
             for c in laid where c.node >= 0 {
-                let n = store.name(c.node)
-                map[c.node] = CellInfo(
-                    name: abbreviatedName(n),
-                    category: Categorizer.of(name: n, isDirectory: c.isDirectory),
-                    bytes: physical ? store.totalPhysical[Int(c.node)] : store.totalLogical[Int(c.node)],
-                    isDirectory: c.isDirectory,
-                    flags: store.flagSet(c.node))
+                map[c.node] = cellInfo(store, c.node, physical: physical)
             }
             return TreemapLayout(key: key, cells: laid, info: map)
         }
+    }
+
+    nonisolated static func cellInfo(_ store: NodeStore, _ node: Int32, physical: Bool) -> CellInfo {
+        let name = store.name(node)
+        let isDir = store.isDirectory(node)
+        let age = AgeBucket.of(secondsAgo: Date().timeIntervalSince1970
+                               - Double(store.mtime[Int(node)]))
+        return CellInfo(name: abbreviatedName(name),
+                        category: Categorizer.of(name: name, isDirectory: isDir),
+                        bytes: physical ? store.totalPhysical[Int(node)] : store.totalLogical[Int(node)],
+                        isDirectory: isDir,
+                        flags: store.flagSet(node),
+                        age: age)
+    }
+
+    nonisolated static func computeSunburst(tree: LiveTree, root: Int32, size: CGSize,
+                                            physical: Bool, filter: String,
+                                            key: String) -> SunburstLayout {
+        let rect = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
+        let needle = filter.lowercased()
+        return tree.withStore { store in
+            let segments = Sunburst.layout(
+                store: store, root: root, in: rect, usePhysicalSize: physical,
+                includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
+            var map: [Int32: CellInfo] = [:]
+            map.reserveCapacity(segments.count)
+            for segment in segments where segment.node >= 0 {
+                map[segment.node] = cellInfo(store, segment.node, physical: physical)
+            }
+            return SunburstLayout(key: key, segments: segments, info: map)
+        }
+    }
+
+    func cachedSunburst(for size: CGSize) -> SunburstLayout? { sunburstCache.get(layoutKey(size: size)) }
+
+    @discardableResult
+    func computeSunburstSync(size: CGSize) -> SunburstLayout? {
+        guard let tree, size.width > 16, size.height > 16 else { return nil }
+        let layout = Self.computeSunburst(tree: tree, root: currentDirectory, size: size,
+                                          physical: usePhysicalSize, filter: filterText,
+                                          key: layoutKey(size: size))
+        sunburstCache.set(layout)
+        return layout
     }
 
     @discardableResult
@@ -515,17 +627,82 @@ final class AppModel: ObservableObject {
     func relayout(size: CGSize) async {
         guard let tree, size.width > 8, size.height > 8 else { return }
         let key = layoutKey(size: size)
-        if layoutCache.get(key) != nil { return }
         let root = currentDirectory
         let physical = usePhysicalSize
         let filter = filterText
-        let l = await Task.detached(priority: .userInitiated) {
-            Self.compute(tree: tree, root: root, size: size, physical: physical,
-                         filter: filter, key: key)
-        }.value
-        guard !Task.isCancelled else { return }
-        layoutCache.set(l)
+        switch visualization {
+        case .treemap:
+            if layoutCache.get(key) != nil { return }
+            let layout = await Task.detached(priority: .userInitiated) {
+                Self.compute(tree: tree, root: root, size: size, physical: physical,
+                             filter: filter, key: key)
+            }.value
+            guard !Task.isCancelled else { return }
+            layoutCache.set(layout)
+        case .sunburst:
+            if sunburstCache.get(key) != nil { return }
+            let layout = await Task.detached(priority: .userInitiated) {
+                Self.computeSunburst(tree: tree, root: root, size: size, physical: physical,
+                                     filter: filter, key: key)
+            }.value
+            guard !Task.isCancelled else { return }
+            sunburstCache.set(layout)
+        }
         layoutToken &+= 1
+    }
+
+    /// Whole-subtree reports. Walking 11M nodes takes a moment, so it runs off
+    /// the main thread and only when a report panel is actually showing.
+    func refreshSummary() {
+        guard let tree, panel != .contents else { return }
+        let root = currentDirectory
+        let physical = usePhysicalSize
+        summarizing = true
+        Task { [weak self] in
+            let computed = await Task.detached(priority: .userInitiated) {
+                () -> (SubtreeSummary, [LargeFile]) in
+                // One lock acquisition: the store must not escape it.
+                tree.withStore { store -> (SubtreeSummary, [LargeFile]) in
+                    let summary = Aggregate.summarize(store: store, root: root,
+                                                      usePhysicalSize: physical)
+                    let files = summary.largestFiles.map { id -> LargeFile in
+                        let name = store.name(id)
+                        return LargeFile(
+                            id: id, name: name, path: store.path(id),
+                            bytes: physical ? store.totalPhysical[Int(id)] : store.totalLogical[Int(id)],
+                            category: Categorizer.of(name: name, isDirectory: false),
+                            modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(id)])))
+                    }
+                    return (summary, files)
+                }
+            }.value
+            guard let self else { return }
+            self.summary = computed.0
+            self.largeFiles = computed.1
+            self.summarizing = false
+        }
+    }
+
+    /// Blocking report used by the offscreen renderer, which has no async pass.
+    func refreshSummarySync() {
+        guard let tree else { return }
+        let root = currentDirectory
+        let physical = usePhysicalSize
+        let computed = tree.withStore { store -> (SubtreeSummary, [LargeFile]) in
+            let summary = Aggregate.summarize(store: store, root: root, usePhysicalSize: physical)
+            let files = summary.largestFiles.map { id -> LargeFile in
+                let name = store.name(id)
+                return LargeFile(
+                    id: id, name: name, path: store.path(id),
+                    bytes: physical ? store.totalPhysical[Int(id)] : store.totalLogical[Int(id)],
+                    category: Categorizer.of(name: name, isDirectory: false),
+                    modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(id)])))
+            }
+            return (summary, files)
+        }
+        summary = computed.0
+        largeFiles = computed.1
+        summarizing = false
     }
 
     /// Blocking scan used by the offscreen renderer.

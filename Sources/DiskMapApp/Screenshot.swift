@@ -48,6 +48,14 @@ enum OffscreenRenderer {
                 model.enter(node)
             }
         }
+        let env = ProcessInfo.processInfo.environment
+        if let v = env["DISKMAP_VIEW"], let mode = Visualization(rawValue: v) { model.visualization = mode }
+        if let c = env["DISKMAP_COLOUR"], let mode = ColourMode(rawValue: c) { model.colourMode = mode }
+        if let p = env["DISKMAP_PANEL"], let mode = PanelMode(rawValue: p) {
+            model.panel = mode
+            model.refreshSummarySync()
+        }
+
         // Open the two largest folders so the render shows the tree nesting.
         for _ in 0..<2 {
             if let folder = model.rows.first(where: { $0.hasChildren && !$0.isExpanded }) {

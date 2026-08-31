@@ -165,7 +165,7 @@ public enum Treemap {
 
 public enum FileCategory: Int, Sendable, CaseIterable {
     case folder, video, image, audio, archive, document, code, application
-    case diskImage, virtualMachine, model, cache, other
+    case diskImage, virtualMachine, model, database, cache, other
 
     public var label: String {
         switch self {
@@ -174,25 +174,77 @@ public enum FileCategory: Int, Sendable, CaseIterable {
         case .archive: "Archive";         case .document: "Document"
         case .code: "Code";               case .application: "App"
         case .diskImage: "Disk image";    case .virtualMachine: "Virtual machine"
-        case .model: "AI model";          case .cache: "Cache"
-        case .other: "Other"
+        case .model: "AI model";          case .database: "Database"
+        case .cache: "Cache";             case .other: "Other"
         }
     }
 }
 
 public enum Categorizer {
-    private static let table: [String: FileCategory] = {
+    /// Extension hashes, so a file can be classified straight from the name
+    /// bytes. Building a String for each of 9.4M files to read its extension
+    /// costs more than the whole rest of the pass.
+    private static let byExtensionHash: [UInt64: FileCategory] = {
+        var out: [UInt64: FileCategory] = [:]
+        for (extension_, category) in table { out[fnv(Array(extension_.utf8))] = category }
+        return out
+    }()
+
+    private static func fnv(_ bytes: [UInt8]) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in bytes { hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3 }
+        return hash
+    }
+
+    private static func hasSuffix(_ base: UnsafePointer<UInt8>, _ length: Int, _ suffix: [UInt8]) -> Bool {
+        guard length >= suffix.count else { return false }
+        for (i, byte) in suffix.enumerated() {
+            var c = base[length - suffix.count + i]
+            if c >= 65, c <= 90 { c &+= 32 }
+            if c != byte { return false }
+        }
+        return true
+    }
+
+    /// Allocation-free classification from raw name bytes.
+    public static func category(bytes base: UnsafePointer<UInt8>, length: Int,
+                                isDirectory: Bool) -> FileCategory {
+        if isDirectory {
+            if hasSuffix(base, length, Array(".app".utf8)) { return .application }
+            if hasSuffix(base, length, Array(".pvm".utf8))
+                || hasSuffix(base, length, Array(".utm".utf8)) { return .virtualMachine }
+            if hasSuffix(base, length, Array("caches".utf8)) { return .cache }
+            return .folder
+        }
+        var dot = -1
+        var i = length - 1
+        while i > 0 {
+            if base[i] == 0x2E { dot = i; break }
+            i -= 1
+        }
+        guard dot > 0, length - dot - 1 > 0, length - dot - 1 <= 16 else { return .other }
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for k in (dot + 1)..<length {
+            var c = base[k]
+            if c >= 65, c <= 90 { c &+= 32 }
+            hash = (hash ^ UInt64(c)) &* 0x100_0000_01b3
+        }
+        return byExtensionHash[hash] ?? .other
+    }
+
+    static let table: [String: FileCategory] = {
         var m: [String: FileCategory] = [:]
         let groups: [(FileCategory, [String])] = [
             (.video, ["mov","mp4","m4v","avi","mkv","insv","mts","m2ts","webm","mpg","mpeg","braw","r3d","prores"]),
             (.image, ["jpg","jpeg","png","gif","heic","heif","tif","tiff","raw","cr2","cr3","nef","arw","dng","webp","psd","svg","bmp"]),
             (.audio, ["mp3","aac","m4a","wav","aiff","flac","ogg","opus","caf"]),
-            (.archive,["zip","tar","gz","bz2","xz","7z","rar","zst","tgz","pkg","jar"]),
+            (.archive,["zip","tar","gz","bz2","xz","7z","rar","zst","tgz","pkg","jar","pack","whl","deb","aar"]),
             (.document,["pdf","doc","docx","xls","xlsx","ppt","pptx","key","numbers","pages","txt","md","epub","csv"]),
-            (.code, ["swift","c","h","cpp","hpp","m","mm","java","kt","scala","go","rs","py","js","ts","tsx","jsx","rb","sh","sql","json","yaml","yml","xml","html","css"]),
+            (.code, ["swift","c","h","cpp","hpp","m","mm","java","kt","scala","go","rs","py","js","ts","tsx","jsx","rb","sh","sql","json","yaml","yml","xml","html","css","o","a","dylib","so","wasm","class","pyc","lock","toml","gradle"]),
             (.diskImage,["dmg","iso","sparsebundle","sparseimage","img","raw"]),
             (.virtualMachine,["hds","pvm","vmdk","vdi","qcow2","utm"]),
-            (.model, ["gguf","safetensors","ckpt","pt","pth","onnx","mlmodel","mlpackage","bin"]),
+            (.model, ["gguf","safetensors","ckpt","pt","pth","onnx","mlmodel","mlpackage","gguf2"]),
+            (.database,["db","sqlite","sqlite3","mdb","realm","dat","idx","leveldb","wal","shm"]),
         ]
         for (cat, exts) in groups { for e in exts { m[e] = cat } }
         return m

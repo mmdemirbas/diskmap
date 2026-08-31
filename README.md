@@ -147,6 +147,33 @@ The scan total is not compared against the volume's used space in that case:
 subtracting a few folders from a whole disk yields a precise, meaningless
 number.
 
+## Views
+
+Four ways to look at the same scan, because they answer different questions.
+
+- **Treemap.** Area is bytes, so the biggest rectangle is the thing worth
+  deleting. Best for "what is taking the space".
+- **Sunburst.** One ring per level, arc length proportional to size. A treemap
+  spends every pixel on area and buries depth; here depth *is* the radius, so a
+  long chain of nested folders shows as a spoke instead of vanishing into a
+  block. Best for "what shape is this tree".
+- **Largest files.** The biggest files anywhere below the current folder, with
+  their paths. The tree table answers "what is in this folder"; this answers
+  "what should I delete", which is usually one huge file six levels down.
+- **By type / by age.** Where the space went by kind of file, and by how long
+  ago it was touched, with a line like *"29.3 GB untouched for over two years"*.
+
+Colours mean one of two things, switchable from the toolbar menu: **by type**
+(video, model, database, code…) or **by age**, a cool-to-warm ramp so a folder
+nobody has opened in years reads as one warm block. Age colouring works on both
+the treemap and the sunburst.
+
+Considered and not built, with reasons: an **icicle/flame** layout adds a third
+geometry for little that the treemap and sunburst do not already cover;
+**duplicate detection** needs content hashing, which is a different kind of
+work from a metadata scan; **scan comparison over time** needs persisted
+snapshots. Any of the three is a reasonable next step.
+
 ## Using it
 
 - **Tree table.** Folders open in place with the disclosure triangle, so you can
@@ -230,7 +257,7 @@ Run `dmbench scan <path>` for the same breakdown on any tree.
 ## Development
 
 ```sh
-swift test                                   # 50 tests, including FSEvents end-to-end
+swift test                                   # 60 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation

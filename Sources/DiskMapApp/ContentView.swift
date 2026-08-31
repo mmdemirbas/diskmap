@@ -63,13 +63,13 @@ struct ContentView: View {
             // so offscreen rendering uses a fixed split instead.
             if model.renderMode {
                 HStack(spacing: 0) {
-                    TreemapView(model: model)
+                    visualization
                     Divider()
                     sidePanel.frame(width: 470)
                 }
             } else {
                 HSplitView {
-                    TreemapView(model: model).frame(minWidth: 420)
+                    visualization.frame(minWidth: 420)
                     sidePanel.frame(minWidth: 340, idealWidth: 470, maxWidth: 680)
                 }
             }
@@ -83,11 +83,29 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder private var visualization: some View {
+        switch model.visualization {
+        case .treemap: TreemapView(model: model)
+        case .sunburst: SunburstView(model: model)
+        }
+    }
+
     private var sidePanel: some View {
         VStack(spacing: 0) {
             DetailsPanel(model: model)
             Divider()
-            ContentsList(model: model)
+            Picker("", selection: $model.panel) {
+                ForEach(PanelMode.allCases) { mode in Text(loc[mode.key]).tag(mode) }
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .onChange(of: model.panel) { _, _ in model.refreshSummary() }
+            Divider()
+            switch model.panel {
+            case .contents: ContentsList(model: model)
+            case .largest: LargestFilesView(model: model)
+            case .types: TypeBreakdownView(model: model)
+            }
         }
         .background(Color(nsColor: .controlBackgroundColor))
     }
@@ -130,14 +148,21 @@ struct ContentView: View {
             Spacer(minLength: 8)
 
             TextField(loc[.filter], text: $model.filterText)
-                .textFieldStyle(.roundedBorder).frame(width: 150)
+                .textFieldStyle(.roundedBorder).frame(width: 120)
                 .onChange(of: model.filterText) { _, _ in model.rebuild() }
+
+            Picker("", selection: $model.visualization) {
+                ForEach(Visualization.allCases) { v in
+                    Image(systemName: v.symbol).tag(v).help(loc[v.key])
+                }
+            }
+            .pickerStyle(.segmented).frame(width: 76).labelsHidden()
 
             Picker("", selection: $model.usePhysicalSize) {
                 Text(loc[.onDisk]).tag(true)
                 Text(loc[.apparent]).tag(false)
             }
-            .pickerStyle(.segmented).frame(width: 170).labelsHidden()
+            .pickerStyle(.segmented).frame(width: 148).labelsHidden()
             .onChange(of: model.usePhysicalSize) { _, _ in model.rebuild() }
             .help(loc[.sizeMetricHelp])
 
@@ -157,6 +182,10 @@ struct ContentView: View {
 
     private var settingsMenu: some View {
         Menu {
+            Picker(loc[.colourBy], selection: $model.colourMode) {
+                ForEach(ColourMode.allCases) { c in Text(loc[c.key]).tag(c) }
+            }
+            Divider()
             Picker(loc[.appearance], selection: $model.appearance) {
                 ForEach(Appearance.allCases) { a in Text(loc[a.key]).tag(a) }
             }

@@ -90,7 +90,8 @@ struct TreemapView: View {
                 continue
             }
 
-            var base = meta.category.color(scheme)
+            var base = model.colourMode == .age ? meta.age.color(scheme)
+                                                : meta.category.color(scheme)
             if meta.flags.contains(.dataless) { base = base.opacity(0.30) }
             let lift = min(Double(cell.depth) * 0.05, 0.25)
             ctx.fill(path, with: .color(base.opacity(meta.isDirectory ? 0.26 : 0.62 + lift)))
@@ -157,8 +158,9 @@ struct TreemapView: View {
                 Text(meta.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 HStack(spacing: 8) {
                     Text(shortBytes(meta.bytes)).font(.system(size: 11, design: .monospaced))
-                    Text(meta.category.localizedLabel).font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    Text(model.colourMode == .age ? meta.age.localizedLabel
+                                                  : meta.category.localizedLabel)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                     if meta.flags.contains(.dataless) {
                         Label(loc[.icloudZero], systemImage: "icloud")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
