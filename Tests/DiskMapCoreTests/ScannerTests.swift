@@ -173,3 +173,62 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(live.withStore { $0.totalLogical[0] }, 50_000)
     }
 }
+
+final class NameInterningTests: XCTestCase {
+    /// Interning shares one copy of each distinct name. If the table ever
+    /// returned the wrong offset, names would silently swap between files.
+    func testRepeatedNamesStillReadBackCorrectly() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmintern-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+
+        // The same handful of names repeated across many folders, plus names
+        // that differ only in their last byte.
+        var expected = Set<String>()
+        for i in 0..<40 {
+            let dir = root.appendingPathComponent("pkg-\(i)/Contents/Resources")
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            for name in ["Info.plist", "package.json", ".DS_Store", "readme", "readmf"] {
+                try Data(count: 16).write(to: dir.appendingPathComponent(name))
+                expected.insert(name)
+            }
+            expected.formUnion(["pkg-\(i)", "Contents", "Resources"])
+        }
+
+        let store = DiskScanner().scan(ScanOptions(rootPath: root.path)).store
+        var seen = Set<String>()
+        for id in 1..<Int32(store.count) { seen.insert(store.name(id)) }
+        XCTAssertEqual(seen, expected)
+
+        // Every file must still resolve by its full path.
+        for i in 0..<40 {
+            let path = root.appendingPathComponent("pkg-\(i)/Contents/Resources/readme").path
+            let node = try XCTUnwrap(store.find(path: path), "missing \(path)")
+            XCTAssertEqual(store.name(node), "readme")
+        }
+    }
+
+    /// Names are compared against what the filesystem actually stored, not
+    /// against what we asked for: Foundation normalises to NFD, so a 100-char
+    /// "ä" name becomes 300 bytes and the filesystem truncates it at NAME_MAX
+    /// (255). That truncation is also why one byte is the right width for the
+    /// stored length.
+    func testLongAndMultibyteNamesSurviveInterning() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmlong-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        try Data(count: 8).write(to: root.appendingPathComponent(String(repeating: "a", count: 200)))
+        try Data(count: 8).write(to: root.appendingPathComponent(String(repeating: "ä", count: 60)))
+        try Data(count: 8).write(to: root.appendingPathComponent("üñïçø∂é-ﬁle"))
+
+        let onDisk = Set(try fm.contentsOfDirectory(atPath: root.path))
+        let store = DiskScanner().scan(ScanOptions(rootPath: root.path)).store
+        let scanned = Set((1..<Int32(store.count)).map { store.name($0) })
+        XCTAssertEqual(scanned, onDisk)
+        XCTAssertTrue(scanned.contains(String(repeating: "a", count: 200)))
+    }
+}

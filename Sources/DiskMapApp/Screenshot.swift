@@ -48,6 +48,12 @@ enum OffscreenRenderer {
                 model.enter(node)
             }
         }
+        // Open the two largest folders so the render shows the tree nesting.
+        for _ in 0..<2 {
+            if let folder = model.rows.first(where: { $0.hasChildren && !$0.isExpanded }) {
+                model.toggleExpanded(folder.id)
+            }
+        }
         if let biggest = model.rows.first { model.select(biggest.id) }
 
         let scheme: ColorScheme = model.appearance == .dark ? .dark : .light

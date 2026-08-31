@@ -149,6 +149,13 @@ number.
 
 ## Using it
 
+- **Tree table.** Folders open in place with the disclosure triangle, so you can
+  compare two branches without losing your position. Indentation is applied
+  *after* the size and share columns, so those stay in one straight track
+  however deep you go and can still be scanned down the page.
+- **Navigation.** Back and Forward (`⌘[` / `⌘]`) retrace where you have been,
+  `⌘↑` goes to the enclosing folder, the breadcrumb jumps to any ancestor in one
+  click, and double-clicking empty space in the treemap goes back out.
 - **Treemap** — area is bytes on disk. The biggest rectangle is the thing worth
   deleting. Folder frames and headers show which folder owns a block.
 - **Double-click** a folder to descend, breadcrumb or ⌘↑ to go back up.
@@ -180,6 +187,33 @@ number.
 Numbers are from an M-series Mac with an 8 TB APFS volume; they scope to that
 machine, not to hardware generally.
 
+## Cost, measured
+
+A full scan of an 8 TB startup disk holding 11.6 million files:
+
+| | |
+|---|---|
+| Time | 66-70 s (~166k entries/s, 12 threads) |
+| Peak memory | 0.69 GB, max RSS 0.78 GB |
+| Tree in memory | 568 MB — 49 bytes per node |
+| CPU split | **user 12.7 s, sys 288 s** |
+
+That last row is the one that decides where optimisation is worth doing: 96% of
+the CPU is the kernel reading directories. Rewriting the Swift side could move
+about 4%, so the effort went into memory instead, where three changes took peak
+usage from 1.32 GB to 0.69 GB without dropping a single file:
+
+- **Scan straight into the destination store.** Scanning each volume into its
+  own store and grafting it afterwards kept two full copies alive at the
+  moment of the copy.
+- **Size the arrays once**, from the volumes' own used-inode counts, instead of
+  growing 11.6M nodes geometrically and leaving 350 MB of slack behind.
+- **Intern names.** 11.6M nodes carry only 3.4M distinct names — `Contents`,
+  `Resources`, `package.json` recur endlessly — so storing each once cut the
+  name blob from 238 MB to 105 MB.
+
+Run `dmbench scan <path>` for the same breakdown on any tree.
+
 ## Known limits
 
 - **APFS clones cannot be detected** through any public API. Cloned blocks are
@@ -196,7 +230,7 @@ machine, not to hardware generally.
 ## Development
 
 ```sh
-swift test                                   # 32 tests, including FSEvents end-to-end
+swift test                                   # 50 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation

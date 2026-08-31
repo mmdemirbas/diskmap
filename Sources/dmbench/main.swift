@@ -114,6 +114,9 @@ func cmdScan(_ paths: [String]) {
         rec.explanations.forEach { print("  - \($0)") }
     }
 
+    print("\nmemory")
+    r.store.memoryReport().lines.forEach { print("  \($0)") }
+
     // Top 15 by bytes actually on disk.
     let st = r.store
     var idx = Array(0..<Int32(st.count))

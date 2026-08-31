@@ -103,6 +103,9 @@ final class L10n: ObservableObject {
     func moreItems(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) küçük öğe daha" : "\(fmt(n)) smaller items"
     }
+    func moreRows(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) öğe daha (listede gösterilmiyor)" : "\(fmt(n)) more items, not listed"
+    }
 
     private func fmt(_ n: Int) -> String {
         let f = NumberFormatter()
@@ -124,7 +127,7 @@ final class L10n: ObservableObject {
         case apparentMismatch, openHere, revealInFinder, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
-        case foldersOnlyNote, chooseFolders, choosePanelMessage, dropFolders, orWord, scanWholeDisk
+        case goBack, goForward, expandFolder, collapseFolder, foldersOnlyNote, chooseFolders, choosePanelMessage, dropFolders, orWord, scanWholeDisk
         case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
         case folderLabel, videoLabel, imageLabel, audioLabel, archiveLabel, documentLabel
         case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, cacheLabel, otherLabel
@@ -202,6 +205,10 @@ final class L10n: ObservableObject {
         .appearanceSystem: ("System", "Sistem"),
         .appearanceLight: ("Light", "Açık"),
         .appearanceDark: ("Dark", "Koyu"),
+        .goBack: ("Back", "Geri"),
+        .goForward: ("Forward", "İleri"),
+        .expandFolder: ("Show contents", "İçindekileri göster"),
+        .collapseFolder: ("Hide contents", "İçindekileri gizle"),
         .foldersOnlyNote: ("The scan covered the folders you chose, so its total is not compared with the volume.",
                            "Tarama seçtiğiniz klasörleri kapsadı, bu yüzden toplamı diskle karşılaştırılmıyor."),
         .chooseFolders: ("Choose Folders…", "Klasör seç…"),

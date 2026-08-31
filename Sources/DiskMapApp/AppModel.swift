@@ -13,6 +13,12 @@ struct Row: Identifiable, Equatable {
     let fractionOfParent: Double
     let flags: NodeFlags
     let modified: Date
+    /// Nesting level below the folder on screen. 0 is a direct child.
+    let depth: Int
+    let hasChildren: Bool
+    let isExpanded: Bool
+    /// Set on the synthetic trailing row standing in for a truncated level.
+    let hiddenSiblings: Int
 }
 
 struct CellInfo: Sendable {
@@ -95,6 +101,13 @@ final class AppModel: ObservableObject {
     @Published var stats: ScanStats?
 
     @Published var currentDirectory: Int32 = 0
+    /// Folders opened in place in the tree table, without navigating into them.
+    @Published var expanded: Set<Int32> = []
+    private var backStack: [Int32] = []
+    private var forwardStack: [Int32] = []
+    /// Rows shown per level. Far beyond what anyone scrolls, but it stops a
+    /// folder with a million entries from building a million row structs.
+    private let rowsPerLevel = 5000
     @Published var breadcrumb: [(id: Int32, name: String)] = []
     @Published var rows: [Row] = []
     @Published var selection: Int32?
@@ -287,18 +300,65 @@ final class AppModel: ObservableObject {
 
     func enter(_ node: Int32) {
         guard let tree, tree.withStore({ node < Int32($0.count) && $0.isDirectory(node) }) else { return }
+        guard node != currentDirectory else { return }
+        backStack.append(currentDirectory)
+        forwardStack.removeAll()
+        moveTo(node)
+    }
+
+    func goUp() {
+        guard let tree, currentDirectory > 0 else { return }
+        let parent = tree.withStore { $0.parent[Int(currentDirectory)] }
+        guard parent >= 0 else { return }
+        backStack.append(currentDirectory)
+        forwardStack.removeAll()
+        moveTo(parent)
+    }
+
+    var canGoBack: Bool { !backStack.isEmpty }
+    var canGoForward: Bool { !forwardStack.isEmpty }
+
+    func goBack() {
+        guard let previous = backStack.popLast() else { return }
+        forwardStack.append(currentDirectory)
+        moveTo(previous)
+    }
+
+    func goForward() {
+        guard let next = forwardStack.popLast() else { return }
+        backStack.append(currentDirectory)
+        moveTo(next)
+    }
+
+    private func moveTo(_ node: Int32) {
         currentDirectory = node
+        expanded.removeAll()
         selection = nil
         selectedInfo = nil
         rebuild()
     }
 
-    func goUp() {
-        guard let tree, currentDirectory > 0 else { return }
-        currentDirectory = tree.withStore { $0.parent[Int(currentDirectory)] }
-        selection = nil
-        selectedInfo = nil
+    /// Opens or closes a folder inside the table, leaving the view where it is.
+    func toggleExpanded(_ node: Int32) {
+        if expanded.contains(node) {
+            // Close descendants too, so reopening does not restore a deep tree.
+            expanded = expanded.filter { !isDescendant($0, of: node) && $0 != node }
+        } else {
+            expanded.insert(node)
+        }
         rebuild()
+    }
+
+    private func isDescendant(_ node: Int32, of ancestor: Int32) -> Bool {
+        guard let tree else { return false }
+        return tree.withStore { store in
+            var cur = node
+            while cur > 0 {
+                cur = store.parent[Int(cur)]
+                if cur == ancestor { return true }
+            }
+            return false
+        }
     }
 
     func select(_ node: Int32?) {
@@ -341,28 +401,13 @@ final class AppModel: ObservableObject {
             if dir < 0 || dir >= Int32(store.count) { dir = 0 }
             while dir > 0 && store.flagSet(dir).contains(.removed) { dir = store.parent[Int(dir)] }
 
-            let sizes = physical ? store.totalPhysical : store.totalLogical
-            let parentTotal = max(sizes[Int(dir)], 1)
             var out: [Row] = []
-            for c in store.children(dir) where !store.flagSet(c).contains(.removed) {
-                let nm = store.name(c)
-                if !filter.isEmpty && !nm.lowercased().contains(filter) { continue }
-                let isDir = store.isDirectory(c)
-                out.append(Row(id: c, name: abbreviatedName(nm),
-                               physical: store.totalPhysical[Int(c)],
-                               logical: store.totalLogical[Int(c)],
-                               isDirectory: isDir,
-                               category: Categorizer.of(name: nm, isDirectory: isDir),
-                               fractionOfParent: Double(sizes[Int(c)]) / Double(parentTotal),
-                               flags: store.flagSet(c),
-                               modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(c)]))))
-            }
-            out.sort { (physical ? $0.physical : $0.logical) > (physical ? $1.physical : $1.logical) }
+            appendRows(store, parent: dir, depth: 0, physical: physical,
+                       filter: filter, into: &out)
 
             var chain: [(Int32, String)] = []
             var cur = dir
             while cur > 0 { chain.append((cur, store.name(cur))); cur = store.parent[Int(cur)] }
-            // The synthetic root of a multi-folder scan has no path of its own.
             chain.append((0, store.isMultiRoot ? "" : store.name(0)))
             return (dir, out, chain.reversed())
         }
@@ -372,6 +417,58 @@ final class AppModel: ObservableObject {
         selectedInfo = selection.flatMap(info(for:))
         if selectedInfo == nil { selection = nil }
         revision &+= 1
+    }
+
+    /// Flattens the visible part of the tree: every child of `parent`, and the
+    /// children of any folder the user has opened, in one array the list can
+    /// render without knowing anything about the tree.
+    private func appendRows(_ store: NodeStore, parent: Int32, depth: Int,
+                            physical: Bool, filter: String, into out: inout [Row]) {
+        let sizes = physical ? store.totalPhysical : store.totalLogical
+        let parentTotal = max(sizes[Int(parent)], 1)
+
+        var kids: [Int32] = []
+        for c in store.children(parent) where !store.flagSet(c).contains(.removed) {
+            // The filter applies to the level being browsed; once a folder is
+            // opened, everything inside it is shown.
+            if depth == 0, !filter.isEmpty, !store.name(c).lowercased().contains(filter) { continue }
+            kids.append(c)
+        }
+        kids.sort { sizes[Int($0)] > sizes[Int($1)] }
+
+        let shown = kids.prefix(rowsPerLevel)
+        for c in shown {
+            let name = abbreviatedName(store.name(c))
+            let isDir = store.isDirectory(c)
+            let childCount = store.children(c).count
+            let isOpen = expanded.contains(c)
+            out.append(Row(id: c, name: name,
+                           physical: store.totalPhysical[Int(c)],
+                           logical: store.totalLogical[Int(c)],
+                           isDirectory: isDir,
+                           category: Categorizer.of(name: name, isDirectory: isDir),
+                           fractionOfParent: Double(sizes[Int(c)]) / Double(parentTotal),
+                           flags: store.flagSet(c),
+                           modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(c)])),
+                           depth: depth,
+                           hasChildren: isDir && childCount > 0,
+                           isExpanded: isOpen,
+                           hiddenSiblings: 0))
+            if isOpen && childCount > 0 {
+                appendRows(store, parent: c, depth: depth + 1, physical: physical,
+                           filter: "", into: &out)
+            }
+        }
+        if kids.count > shown.count {
+            let rest = kids.dropFirst(shown.count)
+            let bytes = rest.reduce(Int64(0)) { $0 + sizes[Int($1)] }
+            out.append(Row(id: -(parent + 2), name: "", physical: bytes, logical: bytes,
+                           isDirectory: false, category: .other,
+                           fractionOfParent: Double(bytes) / Double(parentTotal),
+                           flags: [], modified: Date(timeIntervalSince1970: 0),
+                           depth: depth, hasChildren: false, isExpanded: false,
+                           hiddenSiblings: rest.count))
+        }
     }
 
     // MARK: - Treemap layout

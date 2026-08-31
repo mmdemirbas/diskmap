@@ -1,12 +1,14 @@
 import DiskMapCore
 import SwiftUI
 
-/// One column track per field, so a folder's size is read by scanning straight
-/// down rather than re-parsing every row. Name goes last: it is the only field
-/// of unbounded width.
+/// A tree table: folders open in place instead of replacing the view, so you
+/// can compare two branches without losing your position. One column track per
+/// field, so sizes are read by scanning down rather than re-parsing each row.
 struct ContentsList: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared
+
+    private static let rowHeight: CGFloat = 22
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +22,7 @@ struct ContentsList: View {
         HStack(spacing: 8) {
             Text(loc[.size]).frame(width: 78, alignment: .trailing)
             Text(loc[.share]).frame(width: 50, alignment: .trailing)
-            Color.clear.frame(width: 62, height: 1)
+            Color.clear.frame(width: 44, height: 1)
             Text(loc[.name]).frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 10, weight: .semibold))
@@ -34,13 +36,11 @@ struct ContentsList: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private static let rowHeight: CGFloat = 22
-
     @ViewBuilder private var list: some View {
         if model.renderMode {
             // A GeometryReader claims the space it is given instead of asking
-            // for the height of its content, so the rows cannot push the rest
-            // of the window out of frame.
+            // for the height of its content, so rows cannot push the rest of
+            // the window out of frame when there is no scroll view.
             GeometryReader { geo in
                 let fits = max(1, Int(geo.size.height / Self.rowHeight))
                 VStack(spacing: 0) {
@@ -57,27 +57,60 @@ struct ContentsList: View {
         }
     }
 
-    private func rowView(_ row: Row) -> some View {
-        RowView(row: row, selected: model.selection == row.id)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) { if row.isDirectory { model.enter(row.id) } }
-            .onTapGesture { model.select(row.id) }
-            .contextMenu { menu(row) }
+    @ViewBuilder private func rowView(_ row: Row) -> some View {
+        if row.hiddenSiblings > 0 {
+            TruncationRow(row: row)
+        } else {
+            RowView(row: row,
+                    selected: model.selection == row.id,
+                    onToggle: { model.toggleExpanded(row.id) })
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { if row.isDirectory { model.enter(row.id) } }
+                .onTapGesture { model.select(row.id) }
+                .contextMenu { menu(row) }
+        }
     }
 
     @ViewBuilder private func menu(_ row: Row) -> some View {
+        if row.hasChildren {
+            Button(row.isExpanded ? loc[.collapseFolder] : loc[.expandFolder]) {
+                model.toggleExpanded(row.id)
+            }
+        }
         if row.isDirectory { Button(loc[.openHere]) { model.enter(row.id) } }
         Button(loc[.revealInFinder]) { model.reveal(row.id) }
         Button(loc[.copyPath]) { model.copyPath(row.id) }
         Divider()
         Button(loc[.moveToTrash]) { model.requestTrash(row.id) }
     }
+}
 
+/// Stands in for entries beyond the per-level cap, so a truncated list still
+/// says how much it is not showing.
+private struct TruncationRow: View {
+    let row: Row
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(shortBytes(row.physical))
+                .font(.system(size: 11, design: .monospaced))
+                .frame(width: 78, alignment: .trailing)
+            Text(percentString(row.fractionOfParent))
+                .font(.system(size: 10, design: .monospaced))
+                .frame(width: 50, alignment: .trailing)
+            Color.clear.frame(width: 44, height: 1)
+            Text(L10n.shared.moreRows(row.hiddenSiblings)).font(.system(size: 11))
+            Spacer(minLength: 4)
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.leading, CGFloat(row.depth) * 14)
+        .padding(.horizontal, 12).padding(.vertical, 3)
+    }
 }
 
 private struct RowView: View {
     let row: Row
     let selected: Bool
+    let onToggle: () -> Void
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -93,13 +126,37 @@ private struct RowView: View {
                 .foregroundStyle(.secondary)
 
             bar
-            icon
-            Text(row.name).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
-            badges
-            Spacer(minLength: 4)
+
+            // Indentation lives here, after the fixed columns, so the numbers
+            // stay in one straight track however deep the tree goes.
+            HStack(spacing: 4) {
+                Color.clear.frame(width: CGFloat(row.depth) * 14, height: 1)
+                disclosure
+                icon
+                Text(row.name).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                badges
+                Spacer(minLength: 4)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 3)
         .background(selected ? Color.accentColor.opacity(0.22) : Color.clear)
+    }
+
+    @ViewBuilder private var disclosure: some View {
+        if row.hasChildren {
+            Button(action: onToggle) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(row.isExpanded ? 90 : 0))
+                    .frame(width: 12, height: 12)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(row.isExpanded ? L10n.shared[.collapseFolder] : L10n.shared[.expandFolder])
+        } else {
+            Color.clear.frame(width: 12, height: 12)
+        }
     }
 
     private var bar: some View {
@@ -112,7 +169,7 @@ private struct RowView: View {
             }
             .frame(height: g.size.height, alignment: .center)
         }
-        .frame(width: 62, height: 16)
+        .frame(width: 44, height: 16)
     }
 
     private var icon: some View {
@@ -148,7 +205,6 @@ private struct RowView: View {
         }
     }
 }
-
 struct DetailsPanel: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared

@@ -180,61 +180,66 @@ public final class DiskScanner {
             return ScanResult(store: NodeStore(), stats: ScanStats(), roots: [],
                               rejectedRoots: normalized.rejected)
         }
-        let inodes = InodeSet()
 
-        if normalized.roots.count == 1 {
-            let part = scanOne(root: normalized.roots[0], options: rawOptions,
-                               inodes: inodes, carry: Carry(), progress: progress)
-            part.store.roots = normalized.roots
-            part.store.aggregate()
-            var stats = part.stats
-            stats.cancelled = cancelToken.isCancelled
-            stats.totalLogical = part.store.totalLogical[0]
-            stats.totalPhysical = part.store.totalPhysical[0]
-            stats.elapsed = Date().timeIntervalSince(started)
-            return ScanResult(store: part.store, stats: stats, roots: normalized.roots,
-                              rejectedRoots: normalized.rejected)
-        }
-
-        // Several roots: node 0 is synthetic and the roots hang off it. They are
-        // appended up front so they form one contiguous block, which is what
-        // children(0) and path lookup depend on.
         let store = NodeStore()
         store.roots = normalized.roots
-        _ = [UInt8]().withUnsafeBytes {
-            store.append(name: $0.baseAddress ?? UnsafeRawPointer(bitPattern: 1)!, nameLength: 0,
-                         parent: -1, logical: 0, physical: 0, mtime: 0, flags: .directory)
-        }
-        let rootBlock = Int32(store.count)
-        for root in normalized.roots {
-            let bytes = Array(root.utf8)
-            _ = bytes.withUnsafeBytes {
-                store.append(name: $0.baseAddress!, nameLength: $0.count, parent: 0,
-                             logical: 0, physical: 0, mtime: 0, flags: .directory)
+        let inodes = InodeSet()
+        let multi = normalized.roots.count > 1
+
+        // One allocation up front for the whole tree, sized from the volumes'
+        // own used-inode counts. Growing 11M nodes geometrically instead would
+        // copy hundreds of megabytes and leave as much again in slack.
+        let estimate = normalized.roots.reduce(0) { $0 + usedInodeCount($1) }
+        let capacity = estimate > 0 ? min(Int(Double(estimate) * 1.05) + 1024, 80_000_000) : 1 << 20
+        store.reserve(capacity)
+        store.beginInterning(expectedNodes: capacity)
+
+        var hosts: [Int32] = []
+        if multi {
+            // Node 0 is synthetic; the roots hang off it as one contiguous block.
+            _ = [UInt8]().withUnsafeBytes {
+                store.append(name: $0.baseAddress ?? UnsafeRawPointer(bitPattern: 1)!, nameLength: 0,
+                             parent: -1, logical: 0, physical: 0, mtime: 0, flags: .directory)
             }
+            let block = Int32(store.count)
+            for root in normalized.roots {
+                let bytes = Array(root.utf8)
+                let id = bytes.withUnsafeBytes {
+                    store.append(name: $0.baseAddress!, nameLength: $0.count, parent: 0,
+                                 logical: 0, physical: 0, mtime: 0, flags: .directory)
+                }
+                hosts.append(id)
+            }
+            store.firstChild[0] = block
+            store.childCount[0] = Int32(normalized.roots.count)
+        } else {
+            let root = normalized.roots[0]
+            var rootStat = stat()
+            _ = lstat(root, &rootStat)
+            let bytes = Array(root.utf8)
+            let id = bytes.withUnsafeBytes {
+                store.append(name: $0.baseAddress!, nameLength: $0.count, parent: -1,
+                             logical: 0, physical: 0,
+                             mtime: Int32(truncatingIfNeeded: rootStat.st_mtimespec.tv_sec),
+                             flags: .directory)
+            }
+            hosts.append(id)
         }
-        store.firstChild[0] = rootBlock
-        store.childCount[0] = Int32(normalized.roots.count)
 
         var merged = ScanStats()
         var carry = Carry()
         for (index, root) in normalized.roots.enumerated() {
             if cancelToken.isCancelled { break }
-            let part = scanOne(root: root, options: rawOptions, inodes: inodes,
-                               carry: carry, progress: progress)
-            let host = rootBlock + Int32(index)
-            let base = store.graft(part.store, under: host)
-            if part.store.childCount[0] > 0, base >= 0 {
-                store.firstChild[Int(host)] = base + part.store.firstChild[0] - 1
-                store.childCount[Int(host)] = part.store.childCount[0]
-            }
-            merged.merge(part.stats)
-            carry.nodes += part.store.count
+            // Straight into the destination store: no second copy to graft.
+            let part = scanOne(root: root, into: store, hostNode: hosts[index],
+                               options: rawOptions, inodes: inodes,
+                               estimate: estimate, carry: carry, progress: progress)
+            merged.merge(part)
+            carry.nodes = store.count
             carry.bytes = merged.totalPhysical
         }
 
-        // Subtree totals are computed once over the combined tree, so the
-        // grafted parts do not each need their own aggregation pass.
+        store.endInterning()
         store.aggregate()
         var stats = merged
         stats.cancelled = cancelToken.isCancelled
@@ -245,17 +250,17 @@ public final class DiskScanner {
                           rejectedRoots: normalized.rejected)
     }
 
-    /// Walks exactly one root. Leaves aggregation to the caller.
-    private func scanOne(root: String, options: ScanOptions, inodes: InodeSet,
+    /// Walks one root into an existing store, beneath a node the caller made.
+    /// Aggregation is left to the caller so the combined tree is summed once.
+    private func scanOne(root: String, into store: NodeStore, hostNode: Int32,
+                         options: ScanOptions, inodes: InodeSet, estimate: Int,
                          carry: Carry,
-                         progress: (@Sendable (ScanProgress) -> Void)?) -> (store: NodeStore, stats: ScanStats) {
-        let store = NodeStore()
-        store.roots = [root]
+                         progress: (@Sendable (ScanProgress) -> Void)?) -> ScanStats {
         var stats = ScanStats()
         let exclusions = options.exclusions(for: root)
 
         var rootStat = stat()
-        guard lstat(root, &rootStat) == 0 else { return (store, stats) }
+        guard lstat(root, &rootStat) == 0 else { return stats }
         let rootDev = rootStat.st_dev
         // st_dev cannot separate APFS volumes inside one container, so mount
         // points are matched by path instead. The root itself is normally a
@@ -263,22 +268,7 @@ public final class DiskScanner {
         var crossings = options.followMountPoints ? [] : MountTable.mountPoints()
         crossings.remove(root)
 
-        // statfs knows how many inodes are in use. For a whole-volume scan that
-        // is the node count, so the arrays can be sized once instead of growing
-        // through ~24 reallocations, and progress can show a real fraction.
-        let inodeEstimate = usedInodeCount(root)
-        let isVolumeRoot = Self.isVolumeRoot(root)
-        store.reserve(isVolumeRoot && inodeEstimate > 0 ? min(inodeEstimate, 60_000_000) : 1 << 20)
-
-        let rootName = Array(root.utf8)
-        _ = rootName.withUnsafeBytes { buf in
-            store.append(name: buf.baseAddress!, nameLength: buf.count, parent: -1,
-                         logical: 0, physical: 0,
-                         mtime: Int32(truncatingIfNeeded: rootStat.st_mtimespec.tv_sec),
-                         flags: .directory)
-        }
-
-        let queue = Queue(seed: Task(path: root, node: 0))
+        let queue = Queue(seed: Task(path: root, node: hostNode))
         let lock = NSLock()
         var currentPath = root
 
@@ -287,12 +277,11 @@ public final class DiskScanner {
             timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
             timer.setEventHandler {
                 lock.lock()
-                let nodes = carry.nodes + store.count
+                let nodes = store.count
                 let snapshot = ScanProgress(
                     nodes: nodes, directories: stats.directories,
                     bytes: carry.bytes + stats.totalPhysical, currentPath: currentPath,
-                    fraction: isVolumeRoot && inodeEstimate > 0
-                        ? min(1.0, Double(nodes) / Double(inodeEstimate)) : nil)
+                    fraction: estimate > 0 ? min(1.0, Double(nodes) / Double(estimate)) : nil)
                 lock.unlock()
                 callback(snapshot)
             }
@@ -426,7 +415,7 @@ public final class DiskScanner {
         }
         group.wait()
         progressTimer?.cancel()
-        return (store, stats)
+        return stats
     }
 }
 

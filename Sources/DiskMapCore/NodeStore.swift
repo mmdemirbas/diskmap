@@ -34,7 +34,8 @@ public final class NodeStore {
 
     public internal(set) var nameBytes: [UInt8] = []
     public internal(set) var nameOffset: [UInt32] = []
-    public internal(set) var nameLen: [UInt16] = []
+    /// A filesystem name is at most 255 bytes, so one byte is enough.
+    public internal(set) var nameLen: [UInt8] = []
     public internal(set) var parent: [Int32] = []
     public internal(set) var firstChild: [Int32] = []
     public internal(set) var childCount: [Int32] = []
@@ -47,12 +48,77 @@ public final class NodeStore {
 
     public var count: Int { parent.count }
 
+    // MARK: - Name interning
+    //
+    // 11.5M nodes carry only 3.4M distinct names: "Contents", "Resources",
+    // "package.json", ".DS_Store" recur endlessly. Storing each distinct name
+    // once cuts the name blob by more than half. The lookup table is open
+    // addressed rather than a Dictionary, whose per-entry overhead would cost
+    // more than the saving, and it is discarded once the scan finishes.
+    private var internTable: [UInt64] = []
+    private var internMask: Int = 0
+
+    func beginInterning(expectedNodes: Int) {
+        var slots = 1 << 12
+        while slots < expectedNodes && slots < (1 << 24) { slots <<= 1 }
+        internTable = [UInt64](repeating: 0, count: slots)
+        internMask = slots - 1
+    }
+
+    func endInterning() {
+        internTable = []
+        internMask = 0
+    }
+
+    @inline(__always)
+    private func hashName(_ name: UnsafeRawPointer, _ length: Int) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for k in 0..<length {
+            hash = (hash ^ UInt64(name.load(fromByteOffset: k, as: UInt8.self))) &* 0x100_0000_01b3
+        }
+        return hash
+    }
+
+    /// Offset of `name` in the blob, appending it only if it is new.
+    /// Hits are confirmed byte-for-byte, so a hash collision cannot swap names.
+    @inline(__always)
+    private func internedOffset(_ name: UnsafeRawPointer, _ length: Int) -> UInt32 {
+        guard internMask > 0, length > 0, length <= 255 else { return appendNameBytes(name, length) }
+        var slot = Int(hashName(name, length) & UInt64(internMask))
+        while true {
+            let entry = internTable[slot]
+            if entry == 0 {
+                let offset = appendNameBytes(name, length)
+                internTable[slot] = (UInt64(offset) &+ 1) << 8 | UInt64(length)
+                return offset
+            }
+            if Int(entry & 0xFF) == length {
+                let offset = UInt32((entry >> 8) &- 1)
+                let same = nameBytes.withUnsafeBufferPointer { buf -> Bool in
+                    guard let base = buf.baseAddress else { return false }
+                    return memcmp(base + Int(offset), name, length) == 0
+                }
+                if same { return offset }
+            }
+            slot = (slot &+ 1) & internMask
+        }
+    }
+
+    @inline(__always)
+    private func appendNameBytes(_ name: UnsafeRawPointer, _ length: Int) -> UInt32 {
+        let offset = UInt32(nameBytes.count)
+        nameBytes.append(contentsOf: UnsafeRawBufferPointer(start: name, count: length))
+        return offset
+    }
+
     func reserve(_ n: Int) {
         nameOffset.reserveCapacity(n); nameLen.reserveCapacity(n)
         parent.reserveCapacity(n); firstChild.reserveCapacity(n); childCount.reserveCapacity(n)
         totalLogical.reserveCapacity(n); totalPhysical.reserveCapacity(n)
         mtime.reserveCapacity(n); flags.reserveCapacity(n)
-        nameBytes.reserveCapacity(n * 16)
+        // Interned names measure ~9 bytes per node; 12 leaves headroom without
+        // reserving a blob twice the size actually needed.
+        nameBytes.reserveCapacity(n * 12)
     }
 
     @inline(__always)
@@ -62,11 +128,8 @@ public final class NodeStore {
         // Offsets are 32-bit to keep the row small; refuse to wrap rather than
         // corrupt every name after the 4 GB mark.
         let room = nameBytes.count <= Int(UInt32.max) - nameLength
-        nameOffset.append(room ? UInt32(nameBytes.count) : 0)
-        nameLen.append(room ? UInt16(min(nameLength, Int(UInt16.max))) : 0)
-        if room {
-            nameBytes.append(contentsOf: UnsafeRawBufferPointer(start: name, count: nameLength))
-        }
+        nameOffset.append(room ? internedOffset(name, nameLength) : 0)
+        nameLen.append(room ? UInt8(min(nameLength, Int(UInt8.max))) : 0)
         self.parent.append(p)
         firstChild.append(-1); childCount.append(0)
         totalLogical.append(logical); totalPhysical.append(physical)

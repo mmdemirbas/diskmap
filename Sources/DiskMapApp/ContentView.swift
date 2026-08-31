@@ -65,12 +65,12 @@ struct ContentView: View {
                 HStack(spacing: 0) {
                     TreemapView(model: model)
                     Divider()
-                    sidePanel.frame(width: 360)
+                    sidePanel.frame(width: 470)
                 }
             } else {
                 HSplitView {
                     TreemapView(model: model).frame(minWidth: 420)
-                    sidePanel.frame(minWidth: 320, idealWidth: 380, maxWidth: 560)
+                    sidePanel.frame(minWidth: 340, idealWidth: 470, maxWidth: 680)
                 }
             }
             Divider()
@@ -94,9 +94,15 @@ struct ContentView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Button { model.goUp() } label: { Image(systemName: "chevron.up") }
-                .disabled(model.currentDirectory == 0)
-                .help(loc[.enclosingFolder])
+            HStack(spacing: 2) {
+                Button { model.goBack() } label: { Image(systemName: "chevron.left") }
+                    .disabled(!model.canGoBack).help(loc[.goBack])
+                Button { model.goForward() } label: { Image(systemName: "chevron.right") }
+                    .disabled(!model.canGoForward).help(loc[.goForward])
+                Button { model.goUp() } label: { Image(systemName: "chevron.up") }
+                    .disabled(model.currentDirectory == 0)
+                    .help(loc[.enclosingFolder])
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 3) {
@@ -112,6 +118,11 @@ struct ContentView: View {
                             .foregroundStyle(idx == model.breadcrumb.count - 1
                                              ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                             .lineLimit(1)
+                            .padding(.horizontal, 5).padding(.vertical, 3)
+                            .background(RoundedRectangle(cornerRadius: 4)
+                                .fill(idx == model.breadcrumb.count - 1
+                                      ? Color.secondary.opacity(0.14) : Color.clear))
+                            .contentShape(Rectangle())
                     }
                 }
             }

@@ -38,7 +38,13 @@ struct TreemapView: View {
                 }
             }
             .onTapGesture(count: 2) { p in
-                if let n = hit(p), model.tree?.withStore({ $0.isDirectory(n) }) == true { model.enter(n) }
+                // Double-clicking empty space goes back out, mirroring the way
+                // double-clicking a folder goes in.
+                if let n = hit(p) {
+                    if model.tree?.withStore({ $0.isDirectory(n) }) == true { model.enter(n) }
+                } else {
+                    model.goUp()
+                }
             }
             .onTapGesture(count: 1) { p in model.select(hit(p)) }
             .contextMenu { menu(for: hovered ?? model.selection) }
@@ -177,9 +183,11 @@ struct TreemapView: View {
     }
 
     @ViewBuilder private func menu(for node: Int32?) -> some View {
+        Button(loc[.enclosingFolder]) { model.goUp() }
+            .disabled(model.currentDirectory == 0)
+        Divider()
         if let n = node, let meta = currentLayout?.info[n] {
             Text(meta.name)
-            Divider()
             if meta.isDirectory { Button(loc[.openHere]) { model.enter(n) } }
             Button(loc[.revealInFinder]) { model.reveal(n) }
             Button(loc[.copyPath]) { model.copyPath(n) }

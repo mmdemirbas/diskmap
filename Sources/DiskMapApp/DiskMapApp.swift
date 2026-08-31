@@ -38,6 +38,13 @@ struct DiskMapApp: App {
             CommandMenu(loc[.scanMenu]) {
                 Button(loc[.rescan]) { model.scan() }
                     .keyboardShortcut("r", modifiers: .command)
+                Divider()
+                Button(loc[.goBack]) { model.goBack() }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!model.canGoBack)
+                Button(loc[.goForward]) { model.goForward() }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!model.canGoForward)
                 Button(loc[.enclosingFolder]) { model.goUp() }
                     .keyboardShortcut(.upArrow, modifiers: .command)
                     .disabled(model.currentDirectory == 0)
