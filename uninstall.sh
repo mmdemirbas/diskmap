@@ -197,9 +197,21 @@ elif [ "$HAS_CERT" -eq 1 ]; then
     ok "kept \"$CERT\" (--keep-cert)"
 fi
 
-# Stop Launch Services offering an app that is gone.
+# Unregister just this one bundle, by path.
+#
+# Never use `lsregister -kill` here. -kill wipes the ENTIRE LaunchServices
+# database across all domains, while -domain limits only what gets rebuilt
+# afterwards. `-kill -r -domain local -domain user` therefore destroys the
+# system domain and never restores it, which unregisters every macOS
+# ExtensionKit extension: System Settings loses every pane except the General
+# one embedded in the app itself. Recovering needs
+# `lsregister -f -R /System/Library/ExtensionKit/Extensions/`.
 LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-[ -x "$LSREG" ] && "$LSREG" -kill -r -domain local -domain user >/dev/null 2>&1 || true
+for gone in ${TARGETS+"${TARGETS[@]}"}; do
+    case "$gone" in
+        */DiskMap.app) [ -x "$LSREG" ] && "$LSREG" -u "$gone" >/dev/null 2>&1 || true ;;
+    esac
+done
 
 if [ "$FAILED" -eq 0 ]; then
     printf "\n%s==> Uninstalled%s\n" "$BOLD$GREEN" "$OFF"
