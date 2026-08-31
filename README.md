@@ -42,23 +42,45 @@ because they are firmlinks onto the Data volume; those paths are excluded.
 ./install.sh
 ```
 
-That is the whole thing. It checks the toolchain, creates a code-signing
-certificate if you do not have one, builds, installs to `/Applications`, then
-opens the Privacy pane and a Finder window so you can drag the app in to grant
-Full Disk Access.
+That is the whole thing, and it does not prompt for a password. It checks the
+toolchain, creates a code-signing certificate if you do not have one, builds,
+installs to `/Applications`, then opens the Privacy pane and a Finder window so
+you can drag the app in to grant Full Disk Access. It ends with an explicit
+`Installed` or `Failed` block, naming the identity it actually signed with.
 
-`./install.sh --dev` builds and runs from `./build` without installing.
-`make` targets exist for the same steps: `make install`, `make dev`, `make test`.
+```
+./install.sh --dev       run from ./build without installing
+./install.sh --no-open   skip opening the Settings and Finder windows
+```
 
-Two things the installer handles that are easy to get wrong on your own:
+`make install`, `make dev` and `make test` wrap the same steps.
+
+Two things the installer handles that are easy to get wrong by hand:
 
 - **The certificate.** Full Disk Access is granted to a *signed identity*. An
-  ad-hoc signature changes on every build, so macOS would treat each rebuild as
-  a different app and drop the grant. The installer creates a stable local
-  certificate once, and asks for your login password while doing it.
+  ad-hoc signature changes on every build, so macOS treats each rebuild as a
+  different app and drops the grant. The installer creates a stable local
+  certificate once, valid for ten years.
 - **Full Disk Access itself.** Without it, parts of the disk stay invisible and
   the totals come up short. The status bar says so explicitly, with a button
   that opens the right settings pane, rather than quietly under-reporting.
+
+To remove the certificate later:
+
+```sh
+security delete-identity -c "DiskMap Local Signing" -t
+```
+
+### Two macOS details worth knowing
+
+`security import` cannot read a PKCS#12 written with current OpenSSL defaults,
+and fails outright on an empty password: the certificate has to be exported with
+`-certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1` and a real password.
+
+`security find-identity -v` lists only *trusted* identities, so a self-signed
+certificate never appears there even though `codesign` signs with it happily.
+Detection has to use the listing without `-v`. Because of that, no trust
+settings need changing, which is why the install needs no password.
 
 ## Appearance and language
 
