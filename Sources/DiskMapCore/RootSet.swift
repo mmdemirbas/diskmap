@@ -37,8 +37,43 @@ public struct NormalizedRoots: Sendable {
 /// Keeping both would count its bytes twice, and a disk analyser that reports a
 /// number larger than the disk is worse than useless.
 public enum RootSet {
+    public static let startupDataVolume = "/System/Volumes/Data"
+
+    /// macOS splits the startup disk into a read-only System volume mounted at
+    /// "/" and a writable Data volume at /System/Volumes/Data. Firmlinks make
+    /// the Data volume *appear* beneath "/" as /Users, /Applications, /private
+    /// and so on, and those paths have to be skipped when walking "/" or every
+    /// user file is counted twice.
+    ///
+    /// The consequence is that walking "/" on its own measures only the System
+    /// volume — around 11 GB — and every byte the user cares about is missing.
+    /// "Scan the startup disk" therefore has to mean both volumes. They are
+    /// separate devices, so nothing is double counted.
+    public static func expandStartupVolume(_ paths: [String]) -> [String] {
+        var out: [String] = []
+        for path in paths {
+            out.append(path)
+            guard path == "/", !out.contains(startupDataVolume) else { continue }
+            // Not a device-number comparison: APFS volumes in one container
+            // share st_dev, so "/" and the Data volume look identical to stat.
+            guard volumeMountPoint(startupDataVolume) == startupDataVolume else { continue }
+            out.append(startupDataVolume)
+        }
+        return out
+    }
+
+    /// True when these roots together cover an entire volume, which is the only
+    /// case where comparing the scan against the volume's own used figure means
+    /// anything.
+    public static func coversWholeVolume(_ roots: [String]) -> Bool {
+        if roots == [startupDataVolume] { return true }
+        if roots == ["/"] { return true }
+        if Set(roots) == ["/", startupDataVolume] { return true }
+        return false
+    }
+
     public static func normalize(_ paths: [String], followMountPoints: Bool = false) -> NormalizedRoots {
-        var accepted: [(path: String, dev: dev_t)] = []
+        var accepted: [(path: String, mount: String)] = []
         var rejected: [RejectedRoot] = []
         var seen: [String: String] = [:]   // canonical -> first path that produced it
 
@@ -63,14 +98,16 @@ public enum RootSet {
 
             // A path under an accepted root is only *really* inside it if the
             // scan would reach it. A separate volume mounted below is not,
-            // unless we are following mount points.
+            // unless we are following mount points. Compared by mount point
+            // rather than device number, which APFS shares across a container.
+            let mount = volumeMountPoint(canonical) ?? "/"
             if let parent = accepted.first(where: { isDescendant(canonical, of: $0.path)
-                                                    && (followMountPoints || $0.dev == st.st_dev) }) {
+                                                    && (followMountPoints || $0.mount == mount) }) {
                 rejected.append(RejectedRoot(path: candidate.original, reason: .containedIn(parent.path))); continue
             }
 
             seen[canonical] = canonical
-            accepted.append((canonical, st.st_dev))
+            accepted.append((canonical, mount))
         }
         return NormalizedRoots(roots: accepted.map(\.path), rejected: rejected)
     }
@@ -88,6 +125,7 @@ public enum RootSet {
 public func abbreviatedName(_ name: String) -> String {
     guard name.hasPrefix("/") else { return name }
     let parts = name.split(separator: "/")
-    guard parts.count > 1 else { return name }
+    // Short absolute paths are already readable; only long ones need trimming.
+    guard parts.count > 3 else { return name }
     return "…/" + parts.suffix(2).joined(separator: "/")
 }

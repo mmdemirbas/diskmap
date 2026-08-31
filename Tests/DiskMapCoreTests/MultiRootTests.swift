@@ -142,6 +142,29 @@ final class MultiRootScanTests: XCTestCase {
     }
 }
 
+final class FirmlinkTests: XCTestCase {
+    func testUserPathsMapOntoTheDataVolumeAndBack() throws {
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: "/usr/share/firmlinks"))
+        XCTAssertEqual(Firmlinks.onDataVolume("/Users/md/Desktop"),
+                       "/System/Volumes/Data/Users/md/Desktop")
+        XCTAssertEqual(Firmlinks.displayPath("/System/Volumes/Data/Users/md/Desktop"),
+                       "/Users/md/Desktop")
+    }
+
+    func testNonFirmlinkedPathsAreLeftAlone() {
+        XCTAssertNil(Firmlinks.onDataVolume("/System/Library/Frameworks"))
+        XCTAssertEqual(Firmlinks.displayPath("/System/Library/Frameworks"),
+                       "/System/Library/Frameworks")
+    }
+
+    /// /usr/local is firmlinked but /usr is not, so the longer prefix must win.
+    func testNestedFirmlinkWinsOverShorterPrefix() throws {
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: "/usr/share/firmlinks"))
+        XCTAssertEqual(Firmlinks.onDataVolume("/usr/local/bin"),
+                       "/System/Volumes/Data/usr/local/bin")
+    }
+}
+
 final class AbbreviationTests: XCTestCase {
     func testRootPathsAreShortenedButStillDistinguishable() {
         XCTAssertEqual(abbreviatedName("/Users/md/dev/atolye"), "…/dev/atolye")
@@ -154,5 +177,92 @@ final class AbbreviationTests: XCTestCase {
         XCTAssertEqual(abbreviatedName("Movies"), "Movies")
         XCTAssertEqual(abbreviatedName("file.txt"), "file.txt")
         XCTAssertEqual(abbreviatedName("/"), "/")
+    }
+}
+
+/// Walking "/" alone measures only the read-only System volume, because every
+/// firmlinked path is skipped to avoid double counting. The user's data lives
+/// on the Data volume, so "scan the startup disk" has to mean both.
+final class StartupVolumeTests: XCTestCase {
+    func testScanningRootAlsoCoversTheDataVolume() throws {
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: RootSet.startupDataVolume))
+        let expanded = RootSet.expandStartupVolume(["/"])
+        XCTAssertEqual(expanded, ["/", RootSet.startupDataVolume])
+    }
+
+    /// The two volumes are separate devices, so neither is "inside" the other.
+    func testBothStartupVolumesSurviveNormalisation() throws {
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: RootSet.startupDataVolume))
+        let normalized = RootSet.normalize(RootSet.expandStartupVolume(["/"]))
+        XCTAssertEqual(Set(normalized.roots), ["/", RootSet.startupDataVolume],
+                       "rejected: \(normalized.rejected.map { "\($0.path): \($0.reason)" })")
+    }
+
+    func testAPlainFolderIsNotExpanded() {
+        XCTAssertEqual(RootSet.expandStartupVolume(["/Users/md"]), ["/Users/md"])
+    }
+
+    func testWholeVolumeDetection() {
+        XCTAssertTrue(RootSet.coversWholeVolume(["/", RootSet.startupDataVolume]))
+        XCTAssertTrue(RootSet.coversWholeVolume([RootSet.startupDataVolume]))
+        XCTAssertFalse(RootSet.coversWholeVolume(["/Users/md"]))
+    }
+
+    /// The bug the user hit, at speed: a tree rooted on the Data volume must
+    /// accept and return the firmlinked paths everything else on the system
+    /// uses. A full-disk scan proves the same thing but costs 80 seconds and
+    /// several gigabytes, so it lives behind DM_SLOW_TESTS=1.
+    func testDataVolumeTreeSpeaksFirmlinkedPaths() throws {
+        let fm = FileManager.default
+        let visible = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("dmfirm-\(UUID().uuidString)")
+        try fm.createDirectory(at: visible, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: visible) }
+        try Data(count: 120_000).write(to: visible.appendingPathComponent("payload.bin"))
+
+        // Scan it by its Data-volume name, the way a whole-disk scan reaches it.
+        let onData = try XCTUnwrap(Firmlinks.onDataVolume(visible.path))
+        let result = DiskScanner().scan(ScanOptions(rootPath: onData))
+
+        let wanted = visible.appendingPathComponent("payload.bin").path
+        let node = try XCTUnwrap(result.store.find(path: wanted),
+                                 "a /Users/... path must resolve in a Data-volume tree")
+        XCTAssertEqual(result.store.path(node), wanted,
+                       "paths must come back as /Users/..., not /System/Volumes/Data/Users/...")
+        XCTAssertEqual(result.store.totalLogical[Int(node)], 120_000)
+    }
+
+    /// The real thing. Slow and memory-hungry; opt in with DM_SLOW_TESTS=1.
+    func testWholeDiskScanFindsHomeFolder() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DM_SLOW_TESTS"] == "1")
+        let result = DiskScanner().scan(ScanOptions(rootPath: "/"))
+        XCTAssertTrue(result.isMultiRoot, "roots were \(result.roots)")
+        let home = NSHomeDirectory()
+        let node = try XCTUnwrap(result.store.find(path: home),
+                                 "home folder missing from a startup-disk scan")
+        XCTAssertGreaterThan(result.store.totalPhysical[Int(node)], 0,
+                             "home folder measured as zero bytes")
+        XCTAssertEqual(result.store.path(node), home)
+    }
+}
+
+final class RootShadowingTests: XCTestCase {
+    /// "/" is a prefix of every path. When it is one of several roots it must
+    /// not shadow a more specific root, or lookups stop at an excluded stub.
+    func testLongerRootWinsOverSlashRoot() throws {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("dmshadow-\(UUID().uuidString)")
+        try fm.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: home) }
+        try Data(count: 90_000).write(to: home.appendingPathComponent("f.bin"))
+
+        let onData = try XCTUnwrap(Firmlinks.onDataVolume(home.path))
+        // "/usr" stands in for the shallow root; the deep one holds the file.
+        let result = DiskScanner().scan(ScanOptions(roots: ["/usr/share/firmlinks", onData]))
+        let store = result.store
+        let wanted = home.appendingPathComponent("f.bin").path
+        XCTAssertNotNil(store.find(path: wanted),
+                        "roots were \(result.roots)")
     }
 }

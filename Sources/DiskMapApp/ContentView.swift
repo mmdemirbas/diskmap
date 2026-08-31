@@ -141,7 +141,7 @@ struct ContentView: View {
     /// The synthetic root of a multi-folder scan has no path to show.
     private func crumbLabel(_ crumb: (id: Int32, name: String)) -> String {
         guard crumb.name.isEmpty else { return crumb.name }
-        return model.isMultiRoot ? loc.locationCount(model.tree?.roots.count ?? 0) : "/"
+        return model.rootLabel
     }
 
     private var settingsMenu: some View {

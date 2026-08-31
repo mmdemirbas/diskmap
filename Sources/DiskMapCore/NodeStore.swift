@@ -108,11 +108,12 @@ public final class NodeStore {
         // In a multi-root tree the first component is already absolute.
         if let head = parts.first, head.hasPrefix("/") {
             let rest = parts.dropFirst()
-            if rest.isEmpty { return head }
-            return (head == "/" ? "" : head) + "/" + rest.joined(separator: "/")
+            let joined = rest.isEmpty ? head : (head == "/" ? "" : head) + "/" + rest.joined(separator: "/")
+            return Firmlinks.displayPath(joined)
         }
         let base = roots.first ?? "/"
-        return (base == "/" ? "" : base) + "/" + parts.joined(separator: "/")
+        let joined = (base == "/" ? "" : base) + "/" + parts.joined(separator: "/")
+        return Firmlinks.displayPath(joined)
     }
 
     public func url(_ id: Int32) -> URL { URL(fileURLWithPath: path(id)) }
@@ -127,6 +128,9 @@ public final class NodeStore {
     /// hundreds of megabytes at 12M nodes.
     public func find(path: String) -> Int32? {
         if let hit = locate(path) { return hit }
+        // `/Users/md` and `/System/Volumes/Data/Users/md` are the same folder;
+        // callers and FSEvents use the first form, the tree stores the second.
+        if let onData = Firmlinks.onDataVolume(path), let hit = locate(onData) { return hit }
         // The tree is rooted at resolved paths, but callers pass whatever they
         // happen to hold. Returning nil for "/var/..." when the tree stores
         // "/private/var/..." is a silent wrong answer, so resolve and retry.
@@ -141,8 +145,12 @@ public final class NodeStore {
         // Roots are the children of the synthetic node, grafted in order.
         let base = firstChild[0]
         guard base >= 0 else { return nil }
-        for (i, root) in roots.enumerated() where isAtOrUnder(path, root) {
-            return descend(from: base + Int32(i), rootPath: root, to: path)
+        // Longest root first: "/" is a prefix of every path, so it would
+        // otherwise shadow a more specific root like /System/Volumes/Data and
+        // the lookup would stop at an excluded firmlink stub.
+        let ordered = roots.enumerated().sorted { $0.element.count > $1.element.count }
+        for (index, root) in ordered where isAtOrUnder(path, root) {
+            if let hit = descend(from: base + Int32(index), rootPath: root, to: path) { return hit }
         }
         return nil
     }

@@ -40,7 +40,10 @@ enum OffscreenRenderer {
         if !startOnly { model.scanSynchronously() }
 
         if parts.count >= 5, !parts[4].isEmpty, let tree = model.tree {
-            let target = parts[0] + "/" + parts[4]
+            // Accept either a path relative to the first root or an absolute one.
+            let target = parts[4].hasPrefix("/")
+                ? parts[4]
+                : (parts[0] == "/" ? "" : parts[0]) + "/" + parts[4]
             if let node = tree.withStore({ $0.find(path: target) }) {
                 model.enter(node)
             }

@@ -57,7 +57,16 @@ public final class LiveTree: @unchecked Sendable {
     /// True when `path` is one of the roots or sits beneath one. Compares
     /// against "root/" so `/Users/md/dev` does not swallow `/Users/md/development`.
     private func isInsideRoot(_ path: String) -> Bool {
-        roots.contains { path == $0 || path.hasPrefix($0 == "/" ? "/" : $0 + "/") }
+        candidatePaths(path).contains { candidate in
+            roots.contains { candidate == $0 || candidate.hasPrefix($0 == "/" ? "/" : $0 + "/") }
+        }
+    }
+
+    /// FSEvents reports `/Users/md/...`; a Data-volume tree stores
+    /// `/System/Volumes/Data/Users/md/...`. Both forms have to be considered.
+    private func candidatePaths(_ path: String) -> [String] {
+        guard let onData = Firmlinks.onDataVolume(path) else { return [path] }
+        return [path, onData]
     }
 
     private func enqueue(_ paths: [String]) {

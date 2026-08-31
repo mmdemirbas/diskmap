@@ -139,6 +139,14 @@ final class AppModel: ObservableObject {
 
     var isMultiRoot: Bool { (tree?.roots.count ?? 0) > 1 }
 
+    /// The startup disk arrives as two volumes. Showing "2 locations" for what
+    /// the user asked to scan as one disk would be needless jargon.
+    var rootLabel: String {
+        guard let roots = tree?.roots, !roots.isEmpty else { return "/" }
+        if RootSet.coversWholeVolume(roots) { return volume?.name ?? "/" }
+        return L10n.shared.locationCount(roots.count)
+    }
+
     // MARK: - Scan targets
 
     func addTargets(_ urls: [URL]) {
@@ -242,11 +250,13 @@ final class AppModel: ObservableObject {
                 hardlinkDuplicateLogical: live.stats.hardlinkDuplicateLogical,
                 unreadableDirectories: live.stats.unreadableDirectories,
                 snapshotCount: Snapshots.list(volume: "/").count,
-                scanRootIsWholeVolume: live.roots.count == 1
-                    && (live.rootPath == "/" || live.rootPath == "/System/Volumes/Data"))
+                scanRootIsWholeVolume: RootSet.coversWholeVolume(live.roots))
         }
         rejectedRoots = live.rejectedRoots
-        rootsSpanVolumes = Set(live.roots.compactMap(volumeMountPoint)).count > 1
+        // The startup disk is two volumes but one physical disk, so the
+        // "more than one disk" note would be noise there.
+        rootsSpanVolumes = !RootSet.coversWholeVolume(live.roots)
+            && Set(live.roots.compactMap(volumeMountPoint)).count > 1
         live.onChange = { [weak self] in
             Task { @MainActor in self?.treeChanged() }
         }
@@ -254,6 +264,14 @@ final class AppModel: ObservableObject {
         liveActive = live.liveUpdatesActive
         hasFullDiskAccess = FileActions.hasFullDiskAccess()
         currentDirectory = 0
+        // A startup-disk scan has two roots and effectively everything lives on
+        // the Data volume. Opening on the synthetic parent shows one enormous
+        // rectangle and nothing useful, so start where the bytes are. The
+        // breadcrumb still goes up to the system volume.
+        if RootSet.coversWholeVolume(live.roots), live.roots.count > 1,
+           let dataNode = live.withStore({ $0.find(path: RootSet.startupDataVolume) }) {
+            currentDirectory = dataNode
+        }
         selection = nil
         selectedInfo = nil
         phase = .ready

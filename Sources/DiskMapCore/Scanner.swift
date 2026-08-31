@@ -173,7 +173,8 @@ public final class DiskScanner {
         // ("/private/var/..."), so a tree rooted anywhere else silently matches
         // nothing. Normalising also drops duplicates and any folder already
         // inside another, which would otherwise be counted twice.
-        let normalized = RootSet.normalize(rawOptions.roots,
+        let requested = RootSet.expandStartupVolume(rawOptions.roots)
+        let normalized = RootSet.normalize(requested,
                                            followMountPoints: rawOptions.followMountPoints)
         guard !normalized.roots.isEmpty else {
             return ScanResult(store: NodeStore(), stats: ScanStats(), roots: [],
@@ -256,6 +257,11 @@ public final class DiskScanner {
         var rootStat = stat()
         guard lstat(root, &rootStat) == 0 else { return (store, stats) }
         let rootDev = rootStat.st_dev
+        // st_dev cannot separate APFS volumes inside one container, so mount
+        // points are matched by path instead. The root itself is normally a
+        // mount point and must not be skipped.
+        var crossings = options.followMountPoints ? [] : MountTable.mountPoints()
+        crossings.remove(root)
 
         // statfs knows how many inodes are in use. For a whole-volume scan that
         // is the node count, so the arrays can be sized once instead of growing
@@ -402,6 +408,13 @@ public final class DiskScanner {
                         if exclusions.contains(childPath) {
                             lock.lock()
                             store.flags[Int(base) + i] |= NodeFlags.excluded.rawValue
+                            lock.unlock()
+                            continue
+                        }
+                        if crossings.contains(childPath) {
+                            lock.lock()
+                            store.flags[Int(base) + i] |= NodeFlags.mountPoint.rawValue
+                            stats.skippedMountPoints += 1
                             lock.unlock()
                             continue
                         }
