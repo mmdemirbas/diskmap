@@ -65,11 +65,33 @@ Two things the installer handles that are easy to get wrong by hand:
   the totals come up short. The status bar says so explicitly, with a button
   that opens the right settings pane, rather than quietly under-reporting.
 
-To remove the certificate later:
+## Uninstall
 
 ```sh
-security delete-identity -c "DiskMap Local Signing" -t
+./uninstall.sh
 ```
+
+It prints exactly what it found, waits for confirmation, then removes the app,
+its preferences, the keychain certificate and the Full Disk Access grant. Run it
+from anywhere in the repo; it is safe to run twice.
+
+```
+./uninstall.sh --dry-run     show the plan and change nothing
+./uninstall.sh --yes         skip the confirmation
+./uninstall.sh --keep-cert   leave the certificate, e.g. before reinstalling
+./uninstall.sh --build       also delete this repo's build artifacts
+```
+
+By default it leaves the repo's `.build` and `build` directories alone: those
+belong to the checkout, not to the machine, and `make clean` covers them.
+
+Two things it does that deleting the `.app` by hand does not:
+
+- **Resets the TCC grant** (`tccutil reset SystemPolicyAllFiles`). Otherwise a
+  dead entry stays in System Settings, pointing at an app that no longer exists.
+- **Drops the preferences domain as well as the plist.** `cfprefsd` caches
+  preferences in memory and writes the file back after you delete it, so
+  removing the plist alone does not stick.
 
 ### Two macOS details worth knowing
 
