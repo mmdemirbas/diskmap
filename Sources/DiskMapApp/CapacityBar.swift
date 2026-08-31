@@ -121,10 +121,14 @@ struct ReconciliationSheet: View {
             if let r = reconciliation {
                 Text(loc[.scanVsFilesystem]).font(.headline).padding(.bottom, 8)
                 VStack(alignment: .leading, spacing: 7) {
-                    row(loc[.volumeReportsUsed], shortBytes(r.volumeUsed))
-                    row(loc[.scanAttributed], shortBytes(r.scannedPhysical))
-                    row(loc[.unaccounted], shortBytes(r.unaccounted),
-                        percentString(r.unaccountedFraction))
+                    if r.comparesToVolume {
+                        row(loc[.volumeReportsUsed], shortBytes(r.volumeUsed))
+                        row(loc[.scanAttributed], shortBytes(r.scannedPhysical))
+                        row(loc[.unaccounted], shortBytes(r.unaccounted),
+                            percentString(r.unaccountedFraction))
+                    } else {
+                        row(loc[.scanAttributed], shortBytes(r.scannedPhysical))
+                    }
                 }
                 .padding(.bottom, 10)
                 ForEach(Array(localizedExplanations(r).enumerated()), id: \.offset) { _, e in
@@ -158,6 +162,7 @@ struct ReconciliationSheet: View {
     /// The core builds these in English; translate at the presentation layer so
     /// the model stays free of UI language.
     private func localizedExplanations(_ r: Reconciliation) -> [String] {
+        guard r.comparesToVolume else { return [loc[.foldersOnlyNote]] }
         guard loc.active == .tr else { return r.explanations }
         var out: [String] = []
         if r.snapshotCount > 0 {
@@ -168,9 +173,6 @@ struct ReconciliationSheet: View {
         }
         if r.unaccounted > 0 {
             out.append("APFS klonları blokları paylaşır; klonlanmış baytlar disk tarafından bir kez sayılır ama birden çok adla görünebilir.")
-        }
-        if !r.scanRootIsWholeVolume {
-            out.append("Tarama diskin tamamını değil, bir alt klasörü kapsadı.")
         }
         return out
     }

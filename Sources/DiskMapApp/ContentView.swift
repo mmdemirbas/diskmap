@@ -76,6 +76,11 @@ struct ContentView: View {
             Divider()
             statusBar
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            model.addTargets(urls)
+            model.scan()
+            return true
+        }
     }
 
     private var sidePanel: some View {
@@ -100,7 +105,7 @@ struct ContentView: View {
                             Image(systemName: "chevron.right").font(.system(size: 8))
                                 .foregroundStyle(.tertiary)
                         }
-                        Button(crumb.name.isEmpty ? "/" : crumb.name) { model.enter(crumb.id) }
+                        Button(crumbLabel(crumb)) { model.enter(crumb.id) }
                             .buttonStyle(.plain)
                             .font(.system(size: 12,
                                           weight: idx == model.breadcrumb.count - 1 ? .semibold : .regular))
@@ -133,6 +138,12 @@ struct ContentView: View {
         .padding(.horizontal, 12).padding(.vertical, 7)
     }
 
+    /// The synthetic root of a multi-folder scan has no path to show.
+    private func crumbLabel(_ crumb: (id: Int32, name: String)) -> String {
+        guard crumb.name.isEmpty else { return crumb.name }
+        return model.isMultiRoot ? loc.locationCount(model.tree?.roots.count ?? 0) : "/"
+    }
+
     private var settingsMenu: some View {
         Menu {
             Picker(loc[.appearance], selection: $model.appearance) {
@@ -155,6 +166,10 @@ struct ContentView: View {
             if let s = model.stats {
                 Text(loc.itemCount(s.files + s.directories))
                 Text(loc.scannedIn(s.elapsed))
+                if model.rootsSpanVolumes {
+                    Label(loc[.multipleVolumesNote], systemImage: "externaldrive")
+                        .foregroundStyle(.secondary)
+                }
                 if s.unreadableDirectories > 0 {
                     Button { FileActions.openFullDiskAccessSettings() } label: {
                         Label(loc.unreadableWarning(s.unreadableDirectories), systemImage: "lock.fill")
@@ -182,51 +197,6 @@ struct ContentView: View {
         }
         .font(.system(size: 11)).foregroundStyle(.secondary)
         .padding(.horizontal, 12).padding(.vertical, 5)
-    }
-}
-
-struct StartView: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject private var loc = L10n.shared
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            Image(systemName: "internaldrive").font(.system(size: 44)).foregroundStyle(.tertiary)
-            Text(loc[.chooseTarget]).font(.title3.weight(.medium))
-
-            Picker(loc[.volume], selection: $model.selectedVolumePath) {
-                ForEach(model.volumes, id: \.path) { v in
-                    Text("\(v.name) — \(shortBytes(v.used))").tag(v.path)
-                }
-            }
-            .frame(width: 340)
-            .onChange(of: model.selectedVolumePath) { _, _ in model.refreshVolume() }
-
-            HStack(spacing: 10) {
-                Button(loc[.scanVolume]) { model.scan() }
-                    .keyboardShortcut(.defaultAction).controlSize(.large)
-                Button(loc[.scanHome]) {
-                    model.selectedVolumePath = NSHomeDirectory()
-                    model.refreshVolume()
-                    model.scan()
-                }
-                .controlSize(.large)
-            }
-
-            if !model.hasFullDiskAccess {
-                VStack(spacing: 6) {
-                    Label(loc[.fdaWarning], systemImage: "lock.fill")
-                        .font(.callout).foregroundStyle(Palette.warning(scheme))
-                    Button(loc[.openPrivacy]) { FileActions.openFullDiskAccessSettings() }
-                        .controlSize(.small)
-                }
-                .padding(.top, 6)
-            }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

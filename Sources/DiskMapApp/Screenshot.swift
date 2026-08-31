@@ -5,7 +5,11 @@ import SwiftUI
 /// Renders the real UI to a PNG without a window server or Screen Recording
 /// permission, so the interface can be checked in CI or over SSH.
 ///
-///   DISKMAP_RENDER="<path>|<w>|<h>|<out.png>[|<subdir>[|light|dark[|en|tr]]]"
+///   DISKMAP_RENDER="<paths>|<w>|<h>|<out.png>[|<subdir>[|light|dark[|en|tr]]]"
+///
+/// `paths` may be several folders separated by commas, which renders a
+/// multi-folder scan. Prefix it with `start:` to render the start screen with
+/// those folders queued instead of scanning them.
 @MainActor
 enum OffscreenRenderer {
     static func runIfRequested() -> Bool {
@@ -19,18 +23,25 @@ enum OffscreenRenderer {
 
         let model = AppModel()
         model.renderMode = true
-        model.selectedVolumePath = parts[0]
-        model.refreshVolume()
-        model.scanSynchronously()
-
         if parts.count >= 6, let mode = Appearance(rawValue: parts[5]) { model.appearance = mode }
         if parts.count >= 7, let lang = L10n.Language(rawValue: parts[6]) {
             L10n.shared.preference = lang
         }
 
+        let startOnly = parts[0].hasPrefix("start:")
+        let targetSpec = startOnly ? String(parts[0].dropFirst("start:".count)) : parts[0]
+        let paths = targetSpec.split(separator: ",").map(String.init)
+
+        if paths.count > 1 || startOnly {
+            model.addTargets(paths.map { URL(fileURLWithPath: $0) })
+        }
+        if let first = paths.first { model.selectedVolumePath = first }
+        model.refreshVolume()
+        if !startOnly { model.scanSynchronously() }
+
         if parts.count >= 5, !parts[4].isEmpty, let tree = model.tree {
             let target = parts[0] + "/" + parts[4]
-            if let node = tree.withStore({ $0.find(path: target, rootPath: tree.rootPath) }) {
+            if let node = tree.withStore({ $0.find(path: target) }) {
                 model.enter(node)
             }
         }

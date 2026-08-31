@@ -1,4 +1,12 @@
-.PHONY: install uninstall dev build test bench clean
+.PHONY: help install uninstall dev build test bench clean
+.DEFAULT_GOAL := help
+
+help:               ## Show this list
+	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
+		| awk -F':.*?## ' '{printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  Detailed help: ./install.sh --help, ./uninstall.sh --help"
+
 
 install:            ## Build, sign, install to /Applications, set up access
 	@./install.sh

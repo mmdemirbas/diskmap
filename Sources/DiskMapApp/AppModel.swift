@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import DiskMapCore
 import SwiftUI
@@ -85,6 +86,10 @@ final class AppModel: ObservableObject {
     @Published var phase: Phase = .idle
     @Published var volumes: [VolumeInfo] = []
     @Published var selectedVolumePath: String = "/System/Volumes/Data"
+    /// Folders chosen explicitly. Empty means "measure the selected volume".
+    @Published var scanTargets: [String] = []
+    @Published var rejectedRoots: [RejectedRoot] = []
+    @Published var rootsSpanVolumes = false
     @Published var volume: VolumeInfo?
     @Published var reconciliation: Reconciliation?
     @Published var stats: ScanStats?
@@ -126,7 +131,47 @@ final class AppModel: ObservableObject {
         refreshVolume()
     }
 
-    func refreshVolume() { volume = VolumeInfo.forPath(selectedVolumePath) }
+    /// The capacity bar describes the volume the scan actually lives on, which
+    /// for a folder scan is the volume containing it, not the one last picked.
+    func refreshVolume() {
+        volume = VolumeInfo.forPath(tree?.roots.first ?? scanTargets.first ?? selectedVolumePath)
+    }
+
+    var isMultiRoot: Bool { (tree?.roots.count ?? 0) > 1 }
+
+    // MARK: - Scan targets
+
+    func addTargets(_ urls: [URL]) {
+        let candidates = scanTargets + urls.map(\.path)
+        let normalized = RootSet.normalize(candidates)
+        scanTargets = normalized.roots
+        rejectedRoots = normalized.rejected
+        refreshVolume()
+    }
+
+    func removeTarget(_ path: String) {
+        scanTargets.removeAll { $0 == path }
+        rejectedRoots = []
+        refreshVolume()
+    }
+
+    func clearTargets() {
+        scanTargets = []
+        rejectedRoots = []
+        refreshVolume()
+    }
+
+    /// Opens the standard folder chooser. Multiple selection is allowed because
+    /// measuring several folders as one total is the point.
+    func chooseFolders() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = L10n.shared[.chooseFolders]
+        panel.message = L10n.shared[.choosePanelMessage]
+        if panel.runModal() == .OK { addTargets(panel.urls) }
+    }
 
     var isScanning: Bool { if case .scanning = phase { return true }; return false }
 
@@ -134,7 +179,8 @@ final class AppModel: ObservableObject {
 
     func scan() {
         cancelScan()
-        let path = selectedVolumePath
+        let targets = scanTargets.isEmpty ? [selectedVolumePath] : scanTargets
+        let path = targets[0]
         tree?.stopWatching()
         tree = nil
         liveActive = false
@@ -144,7 +190,7 @@ final class AppModel: ObservableObject {
         let scanner = DiskScanner()
         activeScanner = scanner
         scanTask = Task.detached(priority: .userInitiated) { [weak self] in
-            var options = ScanOptions(rootPath: path)
+            var options = ScanOptions(roots: targets)
             options.threadCount = min(12, ProcessInfo.processInfo.activeProcessorCount)
             let result = scanner.scan(options) { p in
                 let snap = ScanProgressSnapshot(nodes: p.nodes, directories: p.directories,
@@ -183,8 +229,11 @@ final class AppModel: ObservableObject {
                 hardlinkDuplicateLogical: live.stats.hardlinkDuplicateLogical,
                 unreadableDirectories: live.stats.unreadableDirectories,
                 snapshotCount: Snapshots.list(volume: "/").count,
-                scanRootIsWholeVolume: live.rootPath == "/" || live.rootPath == "/System/Volumes/Data")
+                scanRootIsWholeVolume: live.roots.count == 1
+                    && (live.rootPath == "/" || live.rootPath == "/System/Volumes/Data"))
         }
+        rejectedRoots = live.rejectedRoots
+        rootsSpanVolumes = Set(live.roots.compactMap(volumeMountPoint)).count > 1
         live.onChange = { [weak self] in
             Task { @MainActor in self?.treeChanged() }
         }
@@ -231,15 +280,16 @@ final class AppModel: ObservableObject {
         return tree.withStore { store -> ItemInfo? in
             guard node >= 0, node < Int32(store.count),
                   !store.flagSet(node).contains(.removed) else { return nil }
-            let name = store.name(node)
+            let rawName = store.name(node)
+            let name = abbreviatedName(rawName)
             let isDir = store.isDirectory(node)
-            let path = store.path(node, rootPath: tree.rootPath)
+            let path = store.path(node)
             return ItemInfo(
                 node: node, name: name, path: path,
                 physical: store.totalPhysical[Int(node)],
                 logical: store.totalLogical[Int(node)],
                 isDirectory: isDir,
-                category: Categorizer.of(name: name, isDirectory: isDir, path: path),
+                category: Categorizer.of(name: rawName, isDirectory: isDir, path: path),
                 flags: store.flagSet(node),
                 modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(node)])),
                 fractionOfVolume: volume.used > 0
@@ -267,7 +317,7 @@ final class AppModel: ObservableObject {
                 let nm = store.name(c)
                 if !filter.isEmpty && !nm.lowercased().contains(filter) { continue }
                 let isDir = store.isDirectory(c)
-                out.append(Row(id: c, name: nm,
+                out.append(Row(id: c, name: abbreviatedName(nm),
                                physical: store.totalPhysical[Int(c)],
                                logical: store.totalLogical[Int(c)],
                                isDirectory: isDir,
@@ -281,7 +331,8 @@ final class AppModel: ObservableObject {
             var chain: [(Int32, String)] = []
             var cur = dir
             while cur > 0 { chain.append((cur, store.name(cur))); cur = store.parent[Int(cur)] }
-            chain.append((0, store.name(0)))
+            // The synthetic root of a multi-folder scan has no path of its own.
+            chain.append((0, store.isMultiRoot ? "" : store.name(0)))
             return (dir, out, chain.reversed())
         }
         if dir != currentDirectory { currentDirectory = dir }
@@ -313,7 +364,7 @@ final class AppModel: ObservableObject {
             for c in laid where c.node >= 0 {
                 let n = store.name(c.node)
                 map[c.node] = CellInfo(
-                    name: n,
+                    name: abbreviatedName(n),
                     category: Categorizer.of(name: n, isDirectory: c.isDirectory),
                     bytes: physical ? store.totalPhysical[Int(c.node)] : store.totalLogical[Int(c.node)],
                     isDirectory: c.isDirectory,
@@ -351,7 +402,7 @@ final class AppModel: ObservableObject {
 
     /// Blocking scan used by the offscreen renderer.
     func scanSynchronously() {
-        var options = ScanOptions(rootPath: selectedVolumePath)
+        var options = ScanOptions(roots: scanTargets.isEmpty ? [selectedVolumePath] : scanTargets)
         options.threadCount = min(12, ProcessInfo.processInfo.activeProcessorCount)
         adopt(LiveTree(result: DiskScanner().scan(options)))
     }
@@ -360,13 +411,13 @@ final class AppModel: ObservableObject {
 
     func reveal(_ node: Int32) {
         guard let tree else { return }
-        let path = tree.withStore { $0.path(node, rootPath: tree.rootPath) }
+        let path = tree.withStore { $0.path(node) }
         FileActions.revealInFinder([URL(fileURLWithPath: path)])
     }
 
     func copyPath(_ node: Int32) {
         guard let tree else { return }
-        FileActions.copyToPasteboard(tree.withStore { $0.path(node, rootPath: tree.rootPath) })
+        FileActions.copyToPasteboard(tree.withStore { $0.path(node) })
         toast = L10n.shared[.pathCopied]
     }
 
@@ -398,7 +449,7 @@ final class AppModel: ObservableObject {
     private func performTrash(_ node: Int32) {
         guard let tree else { return }
         let (path, bytes) = tree.withStore {
-            ($0.path(node, rootPath: tree.rootPath), $0.totalPhysical[Int(node)])
+            ($0.path(node), $0.totalPhysical[Int(node)])
         }
         do {
             let (trashed, failures) = try FileActions.moveToTrash(

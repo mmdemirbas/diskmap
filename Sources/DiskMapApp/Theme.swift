@@ -96,6 +96,17 @@ func shortBytes(_ v: Int64) -> String {
 }
 
 @MainActor
+func localizedReason(_ reason: RootRejection) -> String {
+    guard L10n.shared.active == .tr else { return reason.explanation }
+    switch reason {
+    case .missing: return "yok"
+    case .notADirectory: return "klasör değil"
+    case .duplicate(let other): return "\(other) ile aynı klasör"
+    case .containedIn(let parent): return "zaten \(parent) içinde"
+    }
+}
+
+@MainActor
 func percentString(_ fraction: Double) -> String {
     guard fraction.isFinite, fraction > 0 else { return "0%" }
     if fraction < 0.001 { return "<0,1%".replacingOccurrences(of: ",", with: L10n.shared.active == .tr ? "," : ".") }

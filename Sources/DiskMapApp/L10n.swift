@@ -89,6 +89,17 @@ final class L10n: ObservableObject {
             ? "\(fmt(count)) sabit bağlantı zaten sayılmış dosyaları gösteriyor: \(size) yalnızca bir kez var."
             : "\(fmt(count)) hard links point at files already counted: \(size) that exists only once."
     }
+    func locationCount(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) konum" : (n == 1 ? "1 location" : "\(fmt(n)) locations")
+    }
+    func scanLocations(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) konumu tara" : (n == 1 ? "Scan 1 Location" : "Scan \(fmt(n)) Locations")
+    }
+    func rejectedNote(_ path: String, _ reason: String) -> String {
+        let name = (path as NSString).lastPathComponent
+        return active == .tr ? "\(name) atlandı: \(reason)" : "Skipped \(name): \(reason)"
+    }
+
     func moreItems(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) küçük öğe daha" : "\(fmt(n)) smaller items"
     }
@@ -113,6 +124,8 @@ final class L10n: ObservableObject {
         case apparentMismatch, openHere, revealInFinder, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
+        case foldersOnlyNote, chooseFolders, choosePanelMessage, dropFolders, orWord, scanWholeDisk
+        case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
         case folderLabel, videoLabel, imageLabel, audioLabel, archiveLabel, documentLabel
         case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, cacheLabel, otherLabel
     }
@@ -189,6 +202,20 @@ final class L10n: ObservableObject {
         .appearanceSystem: ("System", "Sistem"),
         .appearanceLight: ("Light", "Açık"),
         .appearanceDark: ("Dark", "Koyu"),
+        .foldersOnlyNote: ("The scan covered the folders you chose, so its total is not compared with the volume.",
+                           "Tarama seçtiğiniz klasörleri kapsadı, bu yüzden toplamı diskle karşılaştırılmıyor."),
+        .chooseFolders: ("Choose Folders…", "Klasör seç…"),
+        .choosePanelMessage: ("Pick one or more folders to measure together",
+                              "Birlikte ölçülecek bir ya da daha çok klasör seçin"),
+        .dropFolders: ("Drop folders here", "Klasörleri buraya bırakın"),
+        .orWord: ("or", "ya da"),
+        .scanWholeDisk: ("Scan Whole Disk", "Tüm diski tara"),
+        .clearTargets: ("Clear", "Temizle"),
+        .addMore: ("Add More…", "Başka ekle…"),
+        .skippedTargets: ("Skipped", "Atlananlar"),
+        .multipleVolumesNote: ("These folders sit on more than one disk, so the bar above describes only the first.",
+                               "Bu klasörler birden çok diskte, bu yüzden yukarıdaki çubuk yalnızca ilkini anlatıyor."),
+        .targetsHeader: ("Measuring together", "Birlikte ölçülüyor"),
         .folderLabel: ("Folder", "Klasör"),
         .videoLabel: ("Video", "Video"),
         .imageLabel: ("Image", "Görsel"),

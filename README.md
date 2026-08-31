@@ -53,7 +53,13 @@ you can drag the app in to grant Full Disk Access. It ends with an explicit
 ./install.sh --no-open   skip opening the Settings and Finder windows
 ```
 
-`make install`, `make dev` and `make test` wrap the same steps.
+`make install`, `make dev` and `make test` wrap the same steps; `make help`
+lists them. Every script takes `--help` and documents what it touches:
+
+```sh
+./install.sh --help          ./uninstall.sh --help
+Scripts/build-app.sh --help  Scripts/make-signing-cert.sh --help
+```
 
 Two things the installer handles that are easy to get wrong by hand:
 
@@ -104,6 +110,11 @@ certificate never appears there even though `codesign` signs with it happily.
 Detection has to use the listing without `-v`. Because of that, no trust
 settings need changing, which is why the install needs no password.
 
+A third: the pre-Ventura Privacy pane URL
+(`x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`)
+opens **no window at all** on macOS 13 and later, while `open` still reports
+success. The current identifier is `com.apple.settings.PrivacySecurity.extension`.
+
 ## Appearance and language
 
 Light and dark are both first-class; the treemap uses a separate palette for
@@ -111,6 +122,30 @@ each rather than the same colours at a different opacity. English and Turkish
 ship in the app, switchable from the toolbar or the menu bar without a restart,
 and independently of the system language. Numbers follow the language you pick,
 so sizes read `1.5 GB` in English and `1,5 GB` in Turkish.
+
+## Choosing what to measure
+
+A whole volume, one folder, or **several folders measured as one total** —
+useful when the thing you care about is spread across `~/Downloads`,
+`~/Movies` and an external drive.
+
+- **Drag folders onto the window.** On the start screen they queue up; on a
+  result they start a new scan.
+- **Choose Folders…** opens the standard picker with multiple selection on.
+- Duplicates, symlinks pointing at a folder already chosen, and any folder
+  **already inside another chosen folder** are dropped, with the reason shown.
+  Keeping a folder and its parent would count the child's bytes twice, and a
+  disk analyser reporting more than the disk holds is worse than useless.
+- A folder on another volume mounted *below* a chosen folder is not treated as
+  nested, because the scan does not cross mount points and so never reaches it.
+- Hard links are counted once even when the two names live under different
+  chosen folders.
+
+When several folders are measured together the breadcrumb root reads
+"3 locations", and each folder appears as a top-level block in the treemap.
+The scan total is not compared against the volume's used space in that case:
+subtracting a few folders from a whole disk yields a precise, meaningless
+number.
 
 ## Using it
 
@@ -161,10 +196,10 @@ machine, not to hardware generally.
 ## Development
 
 ```sh
-swift test                                   # 18 tests, including FSEvents end-to-end
+swift test                                   # 32 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
-.build/release/dmbench scan <path>           # throughput and reconciliation
+.build/release/dmbench scan <path> [path...] # throughput and reconciliation
 ```
 
 `dmbench validate` exists because `getattrlistbulk` returns a packed buffer whose

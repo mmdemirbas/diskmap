@@ -25,6 +25,13 @@ public struct NodeFlags: OptionSet, Sendable {
 /// node must exist before it can be queued for traversal. Bottom-up aggregation
 /// is therefore a single reverse pass, no sorting and no recursion.
 public final class NodeStore {
+    /// Absolute paths of the scan roots.
+    ///
+    /// One entry: node 0 *is* that folder. Several: node 0 is synthetic and its
+    /// children are the roots, whose names are their own absolute paths.
+    public internal(set) var roots: [String] = []
+    public var isMultiRoot: Bool { roots.count > 1 }
+
     public internal(set) var nameBytes: [UInt8] = []
     public internal(set) var nameOffset: [UInt32] = []
     public internal(set) var nameLen: [UInt16] = []
@@ -89,21 +96,26 @@ public final class NodeStore {
     }
 
     /// Rebuilds an absolute path by walking to the root. Cheap: depth is ~10-20.
-    public func path(_ id: Int32, rootPath: String) -> String {
+    public func path(_ id: Int32) -> String {
         var parts: [String] = []
         var cur = id
         while cur > 0 {
             parts.append(name(cur))
             cur = parent[Int(cur)]
         }
-        if parts.isEmpty { return rootPath }
-        let base = rootPath == "/" ? "" : rootPath
-        return base + "/" + parts.reversed().joined(separator: "/")
+        guard !parts.isEmpty else { return roots.count == 1 ? roots[0] : "" }
+        parts.reverse()
+        // In a multi-root tree the first component is already absolute.
+        if let head = parts.first, head.hasPrefix("/") {
+            let rest = parts.dropFirst()
+            if rest.isEmpty { return head }
+            return (head == "/" ? "" : head) + "/" + rest.joined(separator: "/")
+        }
+        let base = roots.first ?? "/"
+        return (base == "/" ? "" : base) + "/" + parts.joined(separator: "/")
     }
 
-    public func url(_ id: Int32, rootPath: String) -> URL {
-        URL(fileURLWithPath: path(id, rootPath: rootPath))
-    }
+    public func url(_ id: Int32) -> URL { URL(fileURLWithPath: path(id)) }
 
     public func childNamed(_ parentID: Int32, _ target: String) -> Int32? {
         for c in children(parentID) where name(c) == target { return c }
@@ -113,10 +125,37 @@ public final class NodeStore {
     /// Resolves an absolute path to a node by walking down from the root.
     /// Depth is small, so this stays cheap without a path index costing
     /// hundreds of megabytes at 12M nodes.
-    public func find(path: String, rootPath: String) -> Int32? {
-        guard path == rootPath || path.hasPrefix(rootPath == "/" ? "/" : rootPath + "/") else { return nil }
-        let rest = String(path.dropFirst(rootPath == "/" ? 1 : rootPath.count + 1))
-        var cur: Int32 = 0
+    public func find(path: String) -> Int32? {
+        if let hit = locate(path) { return hit }
+        // The tree is rooted at resolved paths, but callers pass whatever they
+        // happen to hold. Returning nil for "/var/..." when the tree stores
+        // "/private/var/..." is a silent wrong answer, so resolve and retry.
+        if let canonical = canonicalPath(path), canonical != path { return locate(canonical) }
+        return nil
+    }
+
+    private func locate(_ path: String) -> Int32? {
+        if roots.count <= 1 {
+            return descend(from: 0, rootPath: roots.first ?? "/", to: path)
+        }
+        // Roots are the children of the synthetic node, grafted in order.
+        let base = firstChild[0]
+        guard base >= 0 else { return nil }
+        for (i, root) in roots.enumerated() where isAtOrUnder(path, root) {
+            return descend(from: base + Int32(i), rootPath: root, to: path)
+        }
+        return nil
+    }
+
+    private func isAtOrUnder(_ path: String, _ root: String) -> Bool {
+        path == root || path.hasPrefix(root == "/" ? "/" : root + "/")
+    }
+
+    private func descend(from node: Int32, rootPath: String, to path: String) -> Int32? {
+        guard isAtOrUnder(path, rootPath) else { return nil }
+        let dropCount = rootPath == "/" ? 1 : rootPath.count + 1
+        let rest = path.count >= dropCount ? String(path.dropFirst(dropCount)) : ""
+        var cur = node
         for part in rest.split(separator: "/") where !part.isEmpty {
             guard let next = childNamed(cur, String(part)) else { return nil }
             cur = next

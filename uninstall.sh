@@ -1,14 +1,62 @@
 #!/bin/bash
-# Removes everything install.sh put on this machine.
-#
-#   ./uninstall.sh              show the plan, ask, then remove
-#   ./uninstall.sh --dry-run    show the plan and change nothing
-#   ./uninstall.sh --yes        skip the confirmation
-#   ./uninstall.sh --keep-cert  leave the signing certificate in place
-#   ./uninstall.sh --build      also delete the build artifacts in this repo
+# Removes everything install.sh put on this machine. See ./uninstall.sh --help.
 set -uo pipefail
 cd "$(dirname "$0")"
 REPO="$(pwd)"
+
+usage() {
+cat <<'EOF'
+Disk Map uninstaller
+
+USAGE
+    ./uninstall.sh [options]
+
+WHAT IT REMOVES
+    /Applications/DiskMap.app            the app (also ~/Applications)
+    ~/Library/Preferences/...plist       saved appearance, language, window size
+    ~/Library/Saved Application State/   window restoration data
+    ~/Library/Caches, HTTPStorages       if the app ever created them
+    login keychain certificate           "DiskMap Local Signing"
+    Full Disk Access grant               via tccutil
+
+    It prints the list with sizes and waits for confirmation before touching
+    anything. Running it twice is harmless: the second run reports that the
+    machine is already clean.
+
+WHAT IT LEAVES ALONE
+    This repository's ./build and ./.build directories. Those belong to the
+    checkout rather than to the machine, and `make clean` already covers them.
+    Pass --build to include them.
+
+OPTIONS
+    -n, --dry-run   Print the plan and change nothing.
+    -y, --yes       Do not ask for confirmation. Required when not running in
+                    a terminal.
+    --keep-cert     Leave the signing certificate in place. Use this when you
+                    intend to reinstall: keeping the same identity means the
+                    Full Disk Access grant survives.
+    --build         Also delete this repo's ./build and ./.build.
+    -h, --help      Show this message.
+
+TWO THINGS A MANUAL DELETE MISSES
+    Dragging the app to the Trash leaves a dead entry in System Settings >
+    Privacy & Security > Full Disk Access, pointing at an app that no longer
+    exists. This resets it with tccutil.
+
+    Deleting the preferences file alone does not stick: cfprefsd holds
+    preferences in memory and writes the file back afterwards. This drops the
+    defaults domain as well.
+
+EXAMPLES
+    ./uninstall.sh --dry-run          see exactly what would go
+    ./uninstall.sh                    remove it, with a confirmation prompt
+    ./uninstall.sh --yes --build      remove everything, including build output
+    ./uninstall.sh --keep-cert        remove the app but keep the identity
+
+SEE ALSO
+    ./install.sh --help
+EOF
+}
 
 BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; OFF=$'\033[0m'
 step() { printf "\n%s==> %s%s\n" "$BOLD" "$1" "$OFF"; }
@@ -26,9 +74,8 @@ for arg in "$@"; do
         --yes|-y)     ASSUME_YES=1 ;;
         --keep-cert)  KEEP_CERT=1 ;;
         --build)      WIPE_BUILD=1 ;;
-        *) bad "Unknown option: $arg"
-           echo "Usage: ./uninstall.sh [--dry-run] [--yes] [--keep-cert] [--build]"
-           exit 1 ;;
+        -h|--help)    usage; exit 0 ;;
+        *) printf "Unknown option: %s\n\n" "$arg" >&2; usage >&2; exit 1 ;;
     esac
 done
 

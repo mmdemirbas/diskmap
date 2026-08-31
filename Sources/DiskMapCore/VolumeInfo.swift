@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// The four numbers macOS reports for a volume, and why they disagree.
@@ -106,7 +107,13 @@ public struct Reconciliation: Sendable {
         self.scanRootIsWholeVolume = scanRootIsWholeVolume
     }
 
+    /// Only a scan of the whole volume can be compared with the volume's own
+    /// figure. Subtracting a folder's bytes from the disk total produces a
+    /// large, precise, meaningless number.
+    public var comparesToVolume: Bool { scanRootIsWholeVolume }
+
     /// Positive: bytes on the volume the scan did not attribute to any file.
+    /// Only meaningful when `comparesToVolume` is true.
     public var unaccounted: Int64 { volumeUsed - scannedPhysical }
     public var unaccountedFraction: Double {
         volumeUsed > 0 ? Double(unaccounted) / Double(volumeUsed) : 0
@@ -114,6 +121,9 @@ public struct Reconciliation: Sendable {
 
     public var explanations: [String] {
         var out: [String] = []
+        guard comparesToVolume else {
+            return ["The scan covered the folders you chose, so its total is not compared with the volume."]
+        }
         if snapshotCount > 0 {
             out.append("\(snapshotCount) APFS local snapshot\(snapshotCount == 1 ? "" : "s") hold blocks from deleted files.")
         }
@@ -123,10 +133,16 @@ public struct Reconciliation: Sendable {
         if unaccounted > 0 {
             out.append("APFS clones share blocks between files; cloned bytes are counted once by the volume but can appear under several names.")
         }
-        if !scanRootIsWholeVolume {
-            out.append("The scan covered a subtree, not the whole volume.")
-        }
         return out
+    }
+}
+
+/// Mount point of the filesystem holding `path`, e.g. "/" or "/Volumes/Backup".
+public func volumeMountPoint(_ path: String) -> String? {
+    var fs = statfs()
+    guard statfs(path, &fs) == 0 else { return nil }
+    return withUnsafeBytes(of: fs.f_mntonname) { raw in
+        raw.baseAddress.map { String(cString: $0.assumingMemoryBound(to: CChar.self)) }
     }
 }
 

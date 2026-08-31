@@ -63,9 +63,22 @@ public enum FileActions {
     }
 
     /// Full Disk Access cannot be granted programmatically; this opens the pane.
-    public static func openFullDiskAccessSettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
-        NSWorkspace.shared.open(url)
+    ///
+    /// macOS 13 renamed the pane. The pre-Ventura identifier opens no window at
+    /// all on current systems, and `open` still reports success, so the failure
+    /// is silent unless you go looking for the window.
+    @discardableResult
+    public static func openFullDiskAccessSettings() -> Bool {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+        ]
+        for candidate in candidates {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) { return true }
+        }
+        // Better to land in Settings somewhere than nowhere.
+        let app = URL(fileURLWithPath: "/System/Applications/System Settings.app")
+        return NSWorkspace.shared.open(app)
     }
 
     /// True when we can read a path that is unreadable without Full Disk Access.

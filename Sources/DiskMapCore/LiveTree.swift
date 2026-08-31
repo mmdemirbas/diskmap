@@ -8,7 +8,10 @@ import Foundation
 /// subtrees of directories that did not change, so the cost is proportional to
 /// the entries in the affected directory rather than to the tree below it.
 public final class LiveTree: @unchecked Sendable {
-    public let rootPath: String
+    /// Every folder being watched. One entry is the ordinary case; several
+    /// means the tree has a synthetic node 0 with the roots beneath it.
+    public let roots: [String]
+    public var rootPath: String { roots.first ?? "" }
     public private(set) var stats: ScanStats
     private var store: NodeStore
     private let lock = NSRecursiveLock()
@@ -22,10 +25,13 @@ public final class LiveTree: @unchecked Sendable {
     public private(set) var liveUpdatesActive = false
     public private(set) var lastChangeAt: Date?
 
+    public private(set) var rejectedRoots: [RejectedRoot]
+
     public init(result: ScanResult) {
         self.store = result.store
         self.stats = result.stats
-        self.rootPath = result.rootPath
+        self.roots = result.roots
+        self.rejectedRoots = result.rejectedRoots
     }
 
     /// All reads of the tree go through here; live updates mutate under the same lock.
@@ -35,8 +41,8 @@ public final class LiveTree: @unchecked Sendable {
     }
 
     public func startWatching() {
-        guard watcher == nil else { return }
-        let w = FileSystemWatcher(paths: [rootPath]) { [weak self] paths in
+        guard watcher == nil, !roots.isEmpty else { return }
+        let w = FileSystemWatcher(paths: roots) { [weak self] paths in
             self?.enqueue(paths)
         }
         w.start()
@@ -48,10 +54,10 @@ public final class LiveTree: @unchecked Sendable {
         watcher?.stop(); watcher = nil; liveUpdatesActive = false
     }
 
-    /// True when `path` is the root or sits beneath it. Compares against
-    /// "root/" so that `/Users/md/dev` does not swallow `/Users/md/development`.
+    /// True when `path` is one of the roots or sits beneath one. Compares
+    /// against "root/" so `/Users/md/dev` does not swallow `/Users/md/development`.
     private func isInsideRoot(_ path: String) -> Bool {
-        path == rootPath || path.hasPrefix(rootPath == "/" ? "/" : rootPath + "/")
+        roots.contains { path == $0 || path.hasPrefix($0 == "/" ? "/" : $0 + "/") }
     }
 
     private func enqueue(_ paths: [String]) {
@@ -121,9 +127,9 @@ public final class LiveTree: @unchecked Sendable {
 
         // Phase A: locate the node and note the names it already holds.
         lock.lock()
-        guard let node = store.find(path: path, rootPath: rootPath)
-                ?? store.find(path: rawPath, rootPath: rootPath),
-              store.isDirectory(node) else { lock.unlock(); return false }
+        guard let node = store.find(path: path), store.isDirectory(node) else {
+            lock.unlock(); return false
+        }
         var knownNames = Set<String>()
         for c in store.children(node) where !store.flagSet(c).contains(.removed) {
             knownNames.insert(store.name(c))

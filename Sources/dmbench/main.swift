@@ -63,17 +63,21 @@ func cmdValidate(_ path: String) {
     print(mismatches == 0 ? "  OK" : "  FAIL")
 }
 
-func cmdScan(_ path: String) {
-    var opts = ScanOptions(rootPath: path)
+func cmdScan(_ paths: [String]) {
+    let path = paths[0]
+    var opts = ScanOptions(roots: paths)
     opts.threadCount = ProcessInfo.processInfo.environment["DM_THREADS"].flatMap(Int.init)
         ?? min(12, ProcessInfo.processInfo.activeProcessorCount)
-    print("scanning \(path) with \(opts.threadCount) threads ...")
+    print("scanning \(paths.joined(separator: ", ")) with \(opts.threadCount) threads ...")
 
     let r = DiskScanner().scan(opts) { p in
         FileHandle.standardError.write("\r  \(p.nodes) nodes, \(p.directories) dirs, \(formatBytes(p.bytes))    ".data(using: .utf8)!)
     }
     FileHandle.standardError.write("\r\u{1B}[K".data(using: .utf8)!)
 
+    for rejected in r.rejectedRoots {
+        print("  skipped \(rejected.path): \(rejected.reason.explanation)")
+    }
     let s = r.stats
     print("""
     elapsed            \(String(format: "%.2f s", s.elapsed))
@@ -98,13 +102,15 @@ func cmdScan(_ path: String) {
                                  unreadableDirectories: s.unreadableDirectories,
                                  snapshotCount: Snapshots.list(volume: "/").count,
                                  scanRootIsWholeVolume: path == "/" || path == "/System/Volumes/Data")
-        print("""
-
-        reconciliation
-          volume reports used   \(fmt(rec.volumeUsed))
-          scan attributed       \(fmt(rec.scannedPhysical))
-          unaccounted           \(fmt(rec.unaccounted))  (\(String(format: "%.1f%%", rec.unaccountedFraction * 100)))
-        """)
+        print("")
+        print("reconciliation")
+        if rec.comparesToVolume {
+            print("  volume reports used   \(fmt(rec.volumeUsed))")
+            print("  scan attributed       \(fmt(rec.scannedPhysical))")
+            print("  unaccounted           \(fmt(rec.unaccounted))  (\(String(format: "%.1f%%", rec.unaccountedFraction * 100)))")
+        } else {
+            print("  scan attributed       \(fmt(rec.scannedPhysical))")
+        }
         rec.explanations.forEach { print("  - \($0)") }
     }
 
@@ -115,13 +121,13 @@ func cmdScan(_ path: String) {
     print("\nlargest directories")
     var shown = 0
     for i in idx where st.isDirectory(i) && shown < 12 {
-        print("  \(fmt(st.totalPhysical[Int(i)]).padding(toLength: 11, withPad: " ", startingAt: 0))  \(st.path(i, rootPath: path))")
+        print("  \(fmt(st.totalPhysical[Int(i)]).padding(toLength: 11, withPad: " ", startingAt: 0))  \(st.path(i))")
         shown += 1
     }
     print("\nlargest files")
     shown = 0
     for i in idx where !st.isDirectory(i) && shown < 12 {
-        print("  \(fmt(st.totalPhysical[Int(i)]).padding(toLength: 11, withPad: " ", startingAt: 0))  \(st.path(i, rootPath: path))")
+        print("  \(fmt(st.totalPhysical[Int(i)]).padding(toLength: 11, withPad: " ", startingAt: 0))  \(st.path(i))")
         shown += 1
     }
 }
@@ -130,6 +136,6 @@ let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
 case "validate": cmdValidate(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
-case "scan": cmdScan(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
-default: print("usage: dmbench [volume | validate <path> | scan <path>]")
+case "scan": cmdScan(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
+default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]]")
 }

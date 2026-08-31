@@ -9,6 +9,37 @@
 # Runs without prompting. Nothing leaves this machine. To remove it later:
 #   security delete-identity -c "DiskMap Local Signing" -t
 set -euo pipefail
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+cat <<'EOF'
+Create a self-signed code-signing certificate for local builds.
+
+USAGE
+    Scripts/make-signing-cert.sh [certificate-name]
+
+    Default name: "DiskMap Local Signing". Valid for ten years. Runs without
+    prompting: no trust settings are changed, because codesign accepts an
+    untrusted self-signed identity and the resulting signature verifies.
+
+WHY
+    Full Disk Access is granted to a signed identity, so a signature that
+    changes on every build means re-granting access on every build.
+
+REMOVING IT
+    security delete-identity -c "DiskMap Local Signing" -t
+
+TWO MACOS QUIRKS THIS WORKS AROUND
+    security import cannot read a PKCS#12 written with current OpenSSL
+    defaults, and fails outright on an empty password. The export therefore
+    uses PBE-SHA1-3DES with a real transport password.
+
+    security find-identity -v lists only trusted identities, so a self-signed
+    certificate never appears there even though it signs correctly. Detection
+    uses the listing without -v.
+EOF
+exit 0
+fi
+
 NAME="${1:-DiskMap Local Signing}"
 KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
 

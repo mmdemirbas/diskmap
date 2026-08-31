@@ -90,8 +90,7 @@ final class LiveTreeTests: XCTestCase {
         live.refresh(directory: root.path)
 
         let deepStillThere = live.withStore { store -> Bool in
-            store.find(path: root.appendingPathComponent("keep/deep/big.bin").path,
-                       rootPath: root.path) != nil
+            store.find(path: root.appendingPathComponent("keep/deep/big.bin").path) != nil
         }
         XCTAssertTrue(deepStillThere, "untouched subtree must survive a parent relist")
         XCTAssertEqual(live.withStore { $0.totalLogical[0] }, 601_000)
@@ -112,8 +111,7 @@ final class LiveTreeTests: XCTestCase {
         let root = try makeTree()
         defer { try? FileManager.default.removeItem(at: root) }
         let live = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: root.path)))
-        let node = live.withStore { $0.find(path: root.appendingPathComponent("top.bin").path,
-                                            rootPath: root.path) }
+        let node = live.withStore { $0.find(path: root.appendingPathComponent("top.bin").path) }
         live.markRemoved(node!)
         XCTAssertEqual(live.withStore { $0.totalLogical[0] }, 500_000)
     }

@@ -8,6 +8,34 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+cat <<'EOF'
+Assemble build/DiskMap.app from the SwiftPM build.
+
+USAGE
+    Scripts/build-app.sh [signing-identity]
+
+    With no argument it uses "DiskMap Local Signing" when that certificate is
+    in your keychain, and falls back to ad-hoc signing when it is not. An
+    identity that is not in the keychain is refused rather than handed to
+    codesign, which would otherwise fail after the build had already succeeded.
+
+WHY THE IDENTITY MATTERS
+    Full Disk Access is granted to a signed identity. Ad-hoc signatures change
+    on every build, so the grant goes stale each time you rebuild. Run
+    Scripts/make-signing-cert.sh once to avoid that.
+
+EXAMPLES
+    Scripts/build-app.sh
+    Scripts/build-app.sh "DiskMap Local Signing"
+    Scripts/build-app.sh "Developer ID Application: Your Name (TEAMID)"
+
+SEE ALSO
+    ./install.sh --help
+EOF
+exit 0
+fi
+
 # Prefer the stable local certificate if it exists, so Full Disk Access
 # survives rebuilds without the caller having to name it.
 #

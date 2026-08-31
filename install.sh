@@ -1,12 +1,64 @@
 #!/bin/bash
-# One command to get Disk Map running.
-#
-#   ./install.sh             build, sign, install to /Applications, set up access
-#   ./install.sh --dev       build and run from ./build, do not install
-#   ./install.sh --no-open   skip opening the Settings and Finder windows
+# One command to get Disk Map running. See ./install.sh --help.
 set -uo pipefail
 
 cd "$(dirname "$0")"
+
+usage() {
+cat <<'EOF'
+Disk Map installer
+
+USAGE
+    ./install.sh [options]
+
+WHAT IT DOES
+    1  Checks that Swift and Xcode are present.
+    2  Creates a local code-signing certificate, if you do not already have one.
+       Full Disk Access is granted to a signed *identity*. An ad-hoc signature
+       changes on every build, so macOS would treat each rebuild as a different
+       app and silently drop the grant. The certificate is self-signed, valid
+       for ten years, and created without prompting for a password.
+    3  Builds and signs build/DiskMap.app.
+    4  Copies it to /Applications, or ~/Applications if that is not writable.
+    5  Opens Privacy & Security and a Finder window, so Full Disk Access can be
+       granted by dragging the app into the list.
+
+    The run ends with an explicit "Installed" or "Failed" block naming the
+    identity it actually signed with. It is safe to run repeatedly.
+
+OPTIONS
+    --dev        Build and run from ./build. Does not install, does not touch
+                 /Applications, does not open any windows.
+    --no-open    Install, but do not open the Settings and Finder windows.
+                 Useful when running from a script.
+    -h, --help   Show this message.
+
+WHAT IT PUTS ON THIS MACHINE
+    /Applications/DiskMap.app            the app itself
+    login keychain                       certificate "DiskMap Local Signing"
+    ~/Library/Preferences/com.mmdemirbas.diskmap.plist
+                                         written by the app on first run
+    Full Disk Access grant               only if you complete step 5
+
+    ./uninstall.sh removes all of it. ./uninstall.sh --dry-run lists it first.
+
+WHY FULL DISK ACCESS
+    Disk Map cannot measure what it cannot read. Without the grant, whole
+    folders stay invisible and the totals come up short. A scan of the boot
+    volume without it misses roughly 200 directories. The app says so in its
+    status bar rather than quietly under-reporting.
+
+EXAMPLES
+    ./install.sh                 first-time setup
+    ./install.sh --dev           try a local change without installing
+    ./install.sh --no-open       reinstall without windows popping up
+
+SEE ALSO
+    ./uninstall.sh --help        removing everything
+    Scripts/build-app.sh --help  building the bundle on its own
+    make help                    all make targets
+EOF
+}
 
 BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; OFF=$'\033[0m'
 step() { printf "\n%s==> %s%s\n" "$BOLD" "$1" "$OFF"; }
@@ -26,7 +78,8 @@ for arg in "$@"; do
     case "$arg" in
         --dev) DEV_MODE=1 ;;
         --no-open) OPEN_WINDOWS=0 ;;
-        *) fail "Unknown option: $arg" "Usage: ./install.sh [--dev] [--no-open]" ;;
+        -h|--help) usage; exit 0 ;;
+        *) printf "Unknown option: %s\n\n" "$arg" >&2; usage >&2; exit 1 ;;
     esac
 done
 
