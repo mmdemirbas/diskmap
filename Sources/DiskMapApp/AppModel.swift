@@ -189,24 +189,37 @@ final class AppModel: ObservableObject {
 
         let scanner = DiskScanner()
         activeScanner = scanner
-        scanTask = Task.detached(priority: .userInitiated) { [weak self] in
+
+        // Both callbacks are built here, on the main actor, so the detached
+        // task captures two immutable closures rather than a mutable `self`.
+        let report: @Sendable (ScanProgressSnapshot) -> Void = { [weak self] snapshot in
+            Task { @MainActor in
+                guard let self, self.isScanning else { return }
+                self.phase = .scanning(snapshot)
+            }
+        }
+        let finish: @Sendable (ScanResult) -> Void = { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.activeScanner = nil
+                // A cancelled scan holds a partial tree; presenting it as
+                // complete would misstate what is on disk.
+                if result.stats.cancelled {
+                    self.phase = .idle
+                } else {
+                    self.adopt(LiveTree(result: result))
+                }
+            }
+        }
+
+        scanTask = Task.detached(priority: .userInitiated) {
             var options = ScanOptions(roots: targets)
             options.threadCount = min(12, ProcessInfo.processInfo.activeProcessorCount)
             let result = scanner.scan(options) { p in
-                let snap = ScanProgressSnapshot(nodes: p.nodes, directories: p.directories,
-                                                bytes: p.bytes, path: p.currentPath, fraction: p.fraction)
-                Task { @MainActor [weak self] in
-                    guard let self, self.isScanning else { return }
-                    self.phase = .scanning(snap)
-                }
+                report(ScanProgressSnapshot(nodes: p.nodes, directories: p.directories,
+                                            bytes: p.bytes, path: p.currentPath, fraction: p.fraction))
             }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.activeScanner = nil
-                // A cancelled scan holds a partial tree; showing it as complete
-                // would be a lie about what is on disk.
-                if result.stats.cancelled { self.phase = .idle } else { self.adopt(LiveTree(result: result)) }
-            }
+            finish(result)
         }
     }
 
