@@ -147,7 +147,7 @@ final class L10n: ObservableObject {
         case apparentMismatch, openHere, revealInFinder, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
-        case showDiagnostics
+        case showDiagnostics, itemGone
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
         case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
         case duplicatesNote, duplicatesEmpty, reclaimable, sectionFolders, sectionFiles
@@ -206,6 +206,7 @@ final class L10n: ObservableObject {
         .cancel: ("Cancel", "Vazgeç"),
         .cancelScan: ("Stop scanning", "Taramayı durdur"),
         .showDiagnostics: ("Show diagnostics log", "Tanılama kaydını göster"),
+        .itemGone: ("That item is no longer there", "Bu öğe artık yok"),
         .scanning: ("Scanning", "Taranıyor"),
         .size: ("Size", "Boyut"),
         .share: ("Share", "Pay"),

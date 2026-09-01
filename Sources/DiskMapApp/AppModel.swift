@@ -960,8 +960,20 @@ final class AppModel: ObservableObject {
 
     private func performTrash(_ node: Int32) {
         guard let tree else { return }
-        let (path, bytes) = tree.withStore {
-            ($0.path(node), $0.totalPhysical[Int(node)])
+        // The confirmation sheet can sit open while the disk moves on. A node
+        // marked removed means the thing that was there is gone, and its path
+        // may now belong to something else entirely — trashing it would take
+        // the wrong file.
+        let target = tree.withStore { store -> (String, Int64)? in
+            guard node > 0, node < Int32(store.count),
+                  !store.flagSet(node).contains(.removed) else { return nil }
+            return (store.path(node), store.totalPhysical[Int(node)])
+        }
+        guard let (path, bytes) = target else {
+            Telemetry.problem("trash", "target no longer exists")
+            toast = L10n.shared[.itemGone]
+            rebuild()
+            return
         }
         do {
             let (trashed, failures) = try FileActions.moveToTrash(
