@@ -214,3 +214,127 @@ final class TrashPlanTests: XCTestCase {
         XCTAssertNil(sync.provider(for: real("elsewhere/note.txt")))
     }
 }
+
+/// The review is what the user is shown before anything moves. It has to carry
+/// the whole decision, not just the half that gets deleted.
+extension TrashPlanTests {
+    private func review(_ selected: [Int32], groups: [[Int32]] = [],
+                        sync: SyncRoots = SyncRoots(roots: [])) -> [ReviewGroup] {
+        TrashPlanner.review(store: store, selected: Set(selected),
+                            groups: groups, syncRoots: sync)
+    }
+
+    /// Picking one copy has to show the others, or the choice is being made
+    /// blind: "delete this one" means nothing without "and keep that one".
+    func testSelectingOneCopyShowsTheWholeGroup() throws {
+        try write("a/clip.mov", 40_000)
+        try write("b/clip.mov", 40_000)
+        try write("c/clip.mov", 40_000)
+        scan()
+        let copies = [try node("a/clip.mov"), try node("b/clip.mov"), try node("c/clip.mov")]
+        let groups = review([copies[0]], groups: [copies])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertTrue(groups[0].isCopyGroup)
+        XCTAssertEqual(Set(groups[0].members.map(\.node)), Set(copies))
+    }
+
+    func testAnItemThatIsNotACopyStandsAlone() throws {
+        try write("downloads/installer.dmg", 40_000)
+        scan()
+        let groups = review([try node("downloads/installer.dmg")])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertFalse(groups[0].isCopyGroup)
+        XCTAssertEqual(groups[0].members.count, 1)
+    }
+
+    func testTheBiggestDecisionComesFirst() throws {
+        try write("small/a.bin", 10_000)
+        try write("big/b.bin", 400_000)
+        scan()
+        let groups = review([try node("small/a.bin"), try node("big/b.bin")])
+        XCTAssertEqual(groups.map(\.name), ["b.bin", "a.bin"])
+    }
+
+    func testAMemberInsideASyncRootIsMarkedInTheReview() throws {
+        try write("Library/CloudStorage/GoogleDrive-someone@example.com/x/clip.mov", 40_000)
+        try write("local/clip.mov", 40_000)
+        scan()
+        let copies = [
+            try node("Library/CloudStorage/GoogleDrive-someone@example.com/x/clip.mov"),
+            try node("local/clip.mov"),
+        ]
+        let groups = review([copies[0]], groups: [copies],
+                            sync: SyncRoots.detected(home: root.path))
+        let providers = groups[0].members.compactMap(\.syncProvider)
+        XCTAssertEqual(providers, ["Google Drive"])
+    }
+
+    /// A group nobody selected anything from is not a decision being made.
+    func testUntouchedGroupsAreNotShown() throws {
+        try write("a/clip.mov", 40_000)
+        try write("b/clip.mov", 40_000)
+        try write("elsewhere/other.bin", 40_000)
+        scan()
+        let copies = [try node("a/clip.mov"), try node("b/clip.mov")]
+        let groups = review([try node("elsewhere/other.bin")], groups: [copies])
+        XCTAssertEqual(groups.map(\.name), ["other.bin"])
+    }
+
+    func testAGroupIsIdentifiedByItsMembersNotByOneOfThem() {
+        XCTAssertEqual(TrashPlanner.key([1, 2, 3]), TrashPlanner.key([3, 2, 1]))
+        XCTAssertNotEqual(TrashPlanner.key([1, 2, 3]), TrashPlanner.key([1, 2, 4]))
+    }
+}
+
+/// Paths the user has put on the never-touch list.
+extension TrashPlanTests {
+    func testAnExcludedPathIsDroppedFromThePlanNotRefused() throws {
+        try write("keep-out/big.bin", 40_000)
+        try write("ordinary/big.bin", 40_000)
+        scan()
+        let result = TrashPlanner.plan(
+            store: store,
+            selected: [try node("keep-out/big.bin"), try node("ordinary/big.bin")],
+            excluded: [real("keep-out")])
+        let plan = try success(result)
+        XCTAssertEqual(plan.items.map(\.name), ["big.bin"])
+        XCTAssertEqual(plan.items[0].path, real("ordinary/big.bin"))
+        XCTAssertEqual(plan.excluded, 1)
+    }
+
+    /// Excluding a folder covers what is inside it, but not a sibling whose
+    /// name merely starts the same way.
+    func testExclusionCoversContentsAndNotSimilarSiblings() throws {
+        try write("drive/inner/big.bin", 40_000)
+        try write("drivers/big.bin", 40_000)
+        scan()
+        let plan = try success(TrashPlanner.plan(
+            store: store,
+            selected: [try node("drive/inner/big.bin"), try node("drivers/big.bin")],
+            excluded: [real("drive")]))
+        XCTAssertEqual(plan.items.map(\.path), [real("drivers/big.bin")])
+    }
+
+    /// An excluded copy still counts as a survivor: it is not being removed, so
+    /// the group is not being emptied.
+    func testAnExcludedCopyStillCountsAsSurviving() throws {
+        try write("archive/clip.mov", 40_000)
+        try write("working/clip.mov", 40_000)
+        scan()
+        let copies = [try node("archive/clip.mov"), try node("working/clip.mov")]
+        let plan = try success(TrashPlanner.plan(
+            store: store, selected: Set(copies), groups: [copies],
+            excluded: [real("archive")]))
+        XCTAssertEqual(plan.items.map(\.path), [real("working/clip.mov")])
+        XCTAssertEqual(plan.excluded, 1)
+    }
+
+    func testAnExcludedItemIsNotEvenShownAsADecision() throws {
+        try write("keep-out/big.bin", 40_000)
+        scan()
+        let groups = TrashPlanner.review(store: store,
+                                         selected: [try node("keep-out/big.bin")],
+                                         excluded: [real("keep-out")])
+        XCTAssertTrue(groups.isEmpty)
+    }
+}

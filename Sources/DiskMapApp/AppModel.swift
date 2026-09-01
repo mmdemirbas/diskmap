@@ -264,7 +264,12 @@ final class AppModel: ObservableObject {
     /// Explicitly ticked for a bulk action. Kept apart from `selection`, which
     /// is only what the eye is on — a highlight must never become a delete.
     @Published var checked: Set<Int32> = []
-    @Published var pendingBulkTrash: TrashPlan?
+    /// The decisions on screen while the confirmation is open. Nil when it is
+    /// closed; the sheet is driven by this rather than by a frozen plan, so
+    /// what is about to happen can be changed while looking at it.
+    @Published var reviewing: [ReviewGroup]?
+    @Published private(set) var reviewPlan: TrashPlan?
+    @Published private(set) var reviewRefusal: TrashRefusal?
     @Published var suggestions: [CleanupSuggestion] = []
     @Published var suggestionsLoading = false
     @Published var showCleanup = false
@@ -272,6 +277,50 @@ final class AppModel: ObservableObject {
     /// a constant so a fixture can exercise the screen without a gigabyte of
     /// files, and so it can become a preference later.
     var cleanupThresholds = Cleanup.Thresholds()
+    /// Folders the app must never propose removing. Kept across launches,
+    /// because "stop suggesting my Drive" is not a thing anyone wants to say
+    /// twice. Deliberately not applied to the scan: excluding a folder from
+    /// measurement would quietly make every total on screen wrong.
+    @Published var excludedPaths: [String] = AppModel.loadExclusions() {
+        didSet {
+            UserDefaults.standard.set(excludedPaths, forKey: AppModel.exclusionsKey)
+            if reviewing != nil { refreshReviewPlan() }
+        }
+    }
+    @Published var showExclusions = false
+    static let exclusionsKey = "excludedPaths"
+    static func loadExclusions() -> [String] {
+        UserDefaults.standard.stringArray(forKey: exclusionsKey) ?? []
+    }
+
+    func exclude(_ path: String) {
+        guard !excludedPaths.contains(path) else { return }
+        excludedPaths.append(path)
+        excludedPaths.sort()
+        // Anything already ticked under it stops being a target.
+        if let tree {
+            let inside = tree.withStore { store in
+                checked.filter { TrashPlanner.isInside(store.path($0), path) }
+            }
+            checked.subtract(inside)
+        }
+        Telemetry.record("exclusion.add", ["total": .int(Int64(excludedPaths.count))])
+        if reviewing != nil { rebuildReview() }
+    }
+
+    func unexclude(_ path: String) {
+        excludedPaths.removeAll { $0 == path }
+    }
+
+    func chooseExclusion() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = L10n.shared[.neverSuggest]
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { exclude(url.path) }
+    }
     /// Both settable so the offscreen renderer can point them at a fixture: a
     /// comparison screen that cannot be rendered is a screen nobody has checked.
     var snapshots = SnapshotStore()
@@ -285,6 +334,9 @@ final class AppModel: ObservableObject {
     /// Every set of things the app called copies of each other, so the planner
     /// can refuse to empty one.
     private var matchGroups: [[Int32]] = []
+    /// The groups the open review is judged against — the panel's matches, or
+    /// the ones a suggestion came from.
+    private var reviewGroups: [[Int32]] = []
     /// Not a constant so the offscreen renderer can point it at a fixture; a
     /// warning nobody can render is a warning nobody has checked.
     var syncRoots = SyncRoots.detected()
@@ -865,8 +917,9 @@ final class AppModel: ObservableObject {
         folderMatches = computed.folders
         matchGroups = computed.folders.map { $0.copies.map(\.id) }
             + computed.duplicates.map { $0.copies.map(\.id) }
-        // A tick refers to a node in the report that produced it.
-        checked = []
+        // A tick refers to a node in the report that produced it — unless a
+        // review is open, in which case it refers to a decision being made.
+        if reviewing == nil { checked = [] }
         summarizing = false
     }
 
@@ -918,6 +971,17 @@ final class AppModel: ObservableObject {
     func toggleChecked(_ node: Int32) {
         if checked.contains(node) { checked.remove(node) }
         else if !wouldBeTheLastCopy(node) { checked.insert(node) }
+        if reviewing != nil { refreshReviewPlan() }
+    }
+
+    /// Keeps exactly this copy and removes the others in its group. One click
+    /// for the decision the screen is actually asking about.
+    func keepOnly(_ node: Int32, in group: ReviewGroup) {
+        for member in group.members {
+            if member.node == node { checked.remove(member.node) }
+            else { checked.insert(member.node) }
+        }
+        if reviewing != nil { refreshReviewPlan() }
     }
 
     /// True when ticking this would leave a group with nothing in it. The
@@ -1027,10 +1091,12 @@ final class AppModel: ObservableObject {
         let cache = signatureCache
         let revision = tree.changeCount
         let thresholds = cleanupThresholds
+        let excluded = excludedPaths
         Task { [weak self] in
             let found = await Task.detached(priority: .userInitiated) {
                 Self.computeSuggestions(tree: tree, root: root, cache: cache,
-                                        revision: revision, thresholds: thresholds)
+                                        revision: revision, thresholds: thresholds,
+                                        excluding: excluded)
             }.value
             guard let self else { return }
             self.suggestions = found
@@ -1040,7 +1106,8 @@ final class AppModel: ObservableObject {
 
     nonisolated static func computeSuggestions(tree: LiveTree, root: Int32,
                                                cache: SignatureCache, revision: Int,
-                                               thresholds: Cleanup.Thresholds) -> [CleanupSuggestion] {
+                                               thresholds: Cleanup.Thresholds,
+                                               excluding: [String] = []) -> [CleanupSuggestion] {
         tree.withStore { store in
             let folders = FolderMatches.find(store: store, root: root,
                                              precomputed: cache.signatures(for: store,
@@ -1049,7 +1116,7 @@ final class AppModel: ObservableObject {
             return Cleanup.suggest(store: store, root: root,
                                    folderCopies: folders.map(\.nodes),
                                    fileCopies: files.map(\.nodes),
-                                   thresholds: thresholds)
+                                   thresholds: thresholds, excluding: excluding)
         }
     }
 
@@ -1062,7 +1129,9 @@ final class AppModel: ObservableObject {
         Telemetry.record("cleanup.review", ["kind": .text(suggestion.kind.rawValue),
                                             "items": .int(Int64(suggestion.itemCount)),
                                             "bytes": .int(suggestion.bytes)])
-        requestBulkTrash()
+        // A copy suggestion is judged against the groups it came from, so the
+        // review can show which copy it proposes keeping.
+        requestBulkTrash(groups: suggestion.groups)
     }
 
     func showTrashInFinder() {
@@ -1071,32 +1140,58 @@ final class AppModel: ObservableObject {
 
     // MARK: - Bulk trash
 
-    func requestBulkTrash() {
-        guard let tree else { return }
-        let result = tree.withStore {
-            TrashPlanner.plan(store: $0, selected: checked, groups: matchGroups, syncRoots: syncRoots)
+    func requestBulkTrash(groups: [[Int32]]? = nil) {
+        guard let tree, !checked.isEmpty else {
+            toast = L10n.shared[.nothingToRemove]
+            return
         }
-        switch result {
-        case .success(let plan):
-            guard !plan.isEmpty else { toast = L10n.shared[.nothingToRemove]; return }
-            pendingBulkTrash = plan
-        case .failure(let refusal):
-            Telemetry.problem("bulk.refused", String(describing: refusal))
-            toast = localizedRefusal(refusal)
+        reviewGroups = groups ?? matchGroups
+        rebuildReview()
+        if reviewing?.isEmpty == true {
+            cancelBulkTrash()
+            toast = L10n.shared[.allExcluded]
         }
     }
 
-    func cancelBulkTrash() { pendingBulkTrash = nil }
+    private func rebuildReview() {
+        guard let tree else { return }
+        reviewing = tree.withStore {
+            TrashPlanner.review(store: $0, selected: checked, groups: reviewGroups,
+                                syncRoots: syncRoots, excluded: excludedPaths)
+        }
+        refreshReviewPlan()
+    }
+
+    /// Recomputed on every tick, so the total at the bottom is always the total
+    /// of what is ticked right now.
+    func refreshReviewPlan() {
+        guard let tree else { return }
+        switch tree.withStore({
+            TrashPlanner.plan(store: $0, selected: checked, groups: reviewGroups,
+                              syncRoots: syncRoots, excluded: excludedPaths)
+        }) {
+        case .success(let plan): reviewPlan = plan; reviewRefusal = nil
+        case .failure(let refusal): reviewPlan = nil; reviewRefusal = refusal
+        }
+    }
+
+    func cancelBulkTrash() {
+        reviewing = nil
+        reviewPlan = nil
+        reviewRefusal = nil
+    }
+
+    var reviewRefusalText: String? { reviewRefusal.map(localizedRefusal) }
 
     /// Re-plans from the tree as it is now and acts only if that matches what
     /// was on screen. Between showing the list and pressing the button the disk
     /// can move, and a stale plan is a plan to delete the wrong thing.
     func confirmBulkTrash() {
-        guard let tree, let approved = pendingBulkTrash else { return }
-        pendingBulkTrash = nil
+        guard let tree, let approved = reviewPlan else { return }
 
         let fresh = tree.withStore {
-            TrashPlanner.plan(store: $0, selected: checked, groups: matchGroups, syncRoots: syncRoots)
+            TrashPlanner.plan(store: $0, selected: checked, groups: reviewGroups,
+                              syncRoots: syncRoots, excluded: excludedPaths)
         }
         guard case .success(let plan) = fresh else {
             if case .failure(let refusal) = fresh { toast = localizedRefusal(refusal) }
@@ -1105,9 +1200,14 @@ final class AppModel: ObservableObject {
         guard Set(plan.items.map(\.node)) == Set(approved.items.map(\.node)) else {
             Telemetry.problem("bulk.stale", "the tree changed between preview and confirmation")
             toast = L10n.shared[.selectionChanged]
-            pendingBulkTrash = plan
+            reviewing = tree.withStore {
+                TrashPlanner.review(store: $0, selected: checked, groups: reviewGroups,
+                                    syncRoots: syncRoots, excluded: excludedPaths)
+            }
+            reviewPlan = plan
             return
         }
+        cancelBulkTrash()
         performTrash(plan.items.map { (URL(fileURLWithPath: $0.path), $0.node, $0.bytes) },
                      label: L10n.shared.freedBytes(shortBytes(plan.bytes)))
     }

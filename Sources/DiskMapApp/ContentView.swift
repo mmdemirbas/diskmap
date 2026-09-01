@@ -1,10 +1,30 @@
 import DiskMapCore
 import SwiftUI
 
-/// `TrashPlan` is a value, not an identity; the sheet needs one.
-struct IdentifiedPlan: Identifiable {
-    let id = UUID()
-    let plan: TrashPlan
+/// The app's sheets in one place. Chained inline they grew past what the
+/// type-checker will attempt in one expression.
+private struct Sheets: ViewModifier {
+    @ObservedObject var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: Binding(get: { model.showChanges },
+                                        set: { model.showChanges = $0 })) {
+                ChangesView(model: model)
+            }
+            .sheet(isPresented: Binding(get: { model.showCleanup },
+                                        set: { model.showCleanup = $0 })) {
+                CleanupView(model: model)
+            }
+            .sheet(isPresented: Binding(get: { model.showExclusions },
+                                        set: { model.showExclusions = $0 })) {
+                ExclusionsView(model: model)
+            }
+            .sheet(isPresented: Binding(get: { model.reviewing != nil },
+                                        set: { if !$0 { model.cancelBulkTrash() } })) {
+                TrashConfirmView(model: model, groups: model.reviewing ?? [])
+            }
+    }
 }
 
 struct ContentView: View {
@@ -31,18 +51,7 @@ struct ContentView: View {
         // without it the panels stay light while dark-mode text turns white.
         .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(model.appearance.colorScheme)
-        .sheet(item: Binding(get: { model.pendingBulkTrash.map { IdentifiedPlan(plan: $0) } },
-                             set: { if $0 == nil { model.cancelBulkTrash() } })) { wrapper in
-            TrashConfirmView(model: model, plan: wrapper.plan)
-        }
-        .sheet(isPresented: Binding(get: { model.showChanges },
-                                    set: { model.showChanges = $0 })) {
-            ChangesView(model: model)
-        }
-        .sheet(isPresented: Binding(get: { model.showCleanup },
-                                    set: { model.showCleanup = $0 })) {
-            CleanupView(model: model)
-        }
+        .modifier(Sheets(model: model))
         .sheet(isPresented: $showReconciliation) {
             if let v = model.volume {
                 ReconciliationSheet(volume: v, reconciliation: model.reconciliation, stats: model.stats)

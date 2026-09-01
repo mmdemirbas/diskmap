@@ -317,11 +317,24 @@ that a build regenerates are offered.
 separate from the highlight, so looking at something can never become deleting
 it. The action bar appears only once something is ticked.
 
-**Nothing is deleted without the full list.** The confirmation shows every path
-that will move, with its size, never just a count — a count is something you
-agree to, a list is something you check. It re-plans from the tree at the moment
-you press the button and refuses to act if anything moved in between, and one
-undo puts the whole batch back.
+**Nothing is deleted without seeing what stays.** The confirmation shows copies
+as whole groups — every copy, kept and removed alike, on one card, each row
+labelled *Stays* or *Trash* with its full path and size. "Delete this one" is
+not a judgement anybody can make without seeing which one survives.
+
+**It is editable, not take-it-or-leave-it.** Click any row to flip it, or press
+*Keep this one* to keep that copy and remove the others in a single click. The
+total at the bottom is the total of what is ticked right now, and the last
+remaining copy cannot be ticked at all. It re-plans from the tree when you press
+the button and refuses to act if anything moved in between, and one undo puts
+the whole batch back.
+
+**Never touch these** is a list that persists across launches. A folder on it is
+never proposed and can never be ticked — one right-click in the review adds it.
+It is deliberately *not* applied to the scan: excluding a folder from
+measurement would quietly make every total on screen wrong, and a disk tool that
+lies about its numbers to be convenient is worse than one that suggests
+something you did not want.
 
 The rules that protect your data live in `TrashPlanner`, in the core, where
 tests prove them rather than in a view where they would be conventions:

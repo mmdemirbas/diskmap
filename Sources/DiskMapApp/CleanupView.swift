@@ -165,6 +165,8 @@ struct CleanupView: View {
             Label(loc[.suggestionsNeverDelete], systemImage: "checkmark.shield")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Spacer()
+            Button(loc[.exclusions]) { model.showExclusions = true }
+                .buttonStyle(.borderless).controlSize(.small)
             Button(loc[.close]) { model.showCleanup = false }
                 .keyboardShortcut(.cancelAction)
         }

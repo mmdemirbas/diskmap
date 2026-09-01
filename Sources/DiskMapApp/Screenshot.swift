@@ -83,7 +83,10 @@ enum OffscreenRenderer {
         if let history = env["DISKMAP_HISTORY_DIR"] {
             model.snapshots = SnapshotStore(directory: URL(fileURLWithPath: history))
         }
-        if env["DISKMAP_SHEET"] == "changes", let tree = model.tree {
+        if env["DISKMAP_SHEET"] == "exclusions" {
+            model.excludedPaths = (env["DISKMAP_EXCLUDED"] ?? "").split(separator: ":").map(String.init)
+            view = AnyView(ExclusionsView(model: model).environment(\.colorScheme, scheme))
+        } else if env["DISKMAP_SHEET"] == "changes", let tree = model.tree {
             model.currentDigest = tree.withStore { DiskDigest.of(store: $0, stats: tree.stats) }
             model.openChanges()
             view = AnyView(ChangesView(model: model).environment(\.colorScheme, scheme))
@@ -98,8 +101,8 @@ enum OffscreenRenderer {
         } else if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
             model.checkExtras(match.copies)
             model.requestBulkTrash()
-            if let plan = model.pendingBulkTrash {
-                view = AnyView(TrashConfirmView(model: model, plan: plan)
+            if let groups = model.reviewing {
+                view = AnyView(TrashConfirmView(model: model, groups: groups)
                     .environment(\.colorScheme, scheme))
             } else {
                 view = AnyView(Text(model.toast ?? "no plan").padding()

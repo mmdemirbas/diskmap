@@ -51,6 +51,7 @@ struct DiskMapApp: App {
                     .keyboardShortcut("k", modifiers: [.command, .shift])
                 Button(loc[.whatChanged]) { model.openChanges() }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button(loc[.exclusions]) { model.showExclusions = true }
                 Divider()
                 Button(loc[.rescan]) { model.scan() }
                     .keyboardShortcut("r", modifiers: .command)

@@ -29,6 +29,9 @@ public struct CleanupSuggestion: Sendable, Identifiable {
     /// should offer.
     public var nodes: [Int32]
     public var itemCount: Int
+    /// For copy suggestions, the full groups the proposal came from — so the
+    /// review can show which copy is being kept rather than only what goes.
+    public var groups: [[Int32]] = []
     /// Left out of the proposal because the list would be too long to read.
     /// A confirmation nobody can check is not a confirmation.
     public var omitted: Int = 0
@@ -82,6 +85,7 @@ public enum Cleanup {
                                folderCopies: [[Int32]] = [],
                                fileCopies: [[Int32]] = [],
                                thresholds: Thresholds = Thresholds(),
+                               excluding: [String] = [],
                                now: Date = Date()) -> [CleanupSuggestion] {
         let span = Telemetry.begin("cleanup.suggest")
         var out: [CleanupSuggestion] = []
@@ -95,6 +99,21 @@ public enum Cleanup {
 
         let scanned = walk(store: store, root: root, thresholds: thresholds, now: now)
         out.append(contentsOf: scanned)
+
+        // A path the user put on the never-touch list is not a suggestion.
+        if !excluding.isEmpty {
+            out = out.compactMap { suggestion in
+                var kept = suggestion
+                kept.nodes = suggestion.nodes.filter { node in
+                    !excluding.contains { TrashPlanner.isInside(store.path(node), $0) }
+                }
+                guard kept.nodes.count != suggestion.nodes.count else { return suggestion }
+                guard !kept.nodes.isEmpty || suggestion.nodes.isEmpty else { return nil }
+                kept.itemCount = kept.nodes.count
+                kept.bytes = kept.nodes.reduce(0) { $0 + store.totalPhysical[Int($1)] }
+                return kept.bytes >= thresholds.suggestion || kept.nodes.isEmpty ? kept : nil
+            }
+        }
 
         out.sort {
             $0.safety == $1.safety ? $0.bytes > $1.bytes : $0.safety < $1.safety
@@ -121,8 +140,12 @@ public enum Cleanup {
             }
         }
         guard bytes >= thresholds.suggestion, !nodes.isEmpty else { return [] }
-        return [capped(kind: kind, safety: .aCopyRemains, nodes: nodes,
-                       store: store, limit: thresholds.maxItems)]
+        var suggestion = capped(kind: kind, safety: .aCopyRemains, nodes: nodes,
+                                store: store, limit: thresholds.maxItems)
+        // Only the groups the proposal actually reaches after the cap.
+        let proposed = Set(suggestion.nodes)
+        suggestion.groups = groups.filter { $0.contains(where: proposed.contains) }
+        return [suggestion]
     }
 
     /// Largest first, then cut. What is left out is reported rather than

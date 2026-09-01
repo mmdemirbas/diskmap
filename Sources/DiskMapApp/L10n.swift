@@ -125,6 +125,14 @@ final class L10n: ObservableObject {
     func selectedForRemoval(_ n: Int, _ size: String) -> String {
         active == .tr ? "\(fmt(n)) öğe işaretli · \(size)" : "\(fmt(n)) ticked · \(size)"
     }
+    func keepingOf(_ staying: Int, _ total: Int) -> String {
+        active == .tr ? "\(total) kopyadan \(staying) tanesi kalıyor"
+                      : "keeping \(staying) of \(total)"
+    }
+    func moveCountToTrash(_ n: Int, _ size: String) -> String {
+        active == .tr ? "\(fmt(n)) öğeyi Çöp Kutusu'na taşı · \(size)"
+                      : "Move \(count(n, "item", "items")) to the Trash · \(size)"
+    }
     func confirmBulkTitle(_ n: Int, _ size: String) -> String {
         active == .tr
             ? "\(fmt(n)) öğe Çöp Kutusu'na taşınsın mı? (\(size))"
@@ -224,6 +232,9 @@ final class L10n: ObservableObject {
         case nothingToRemove, selectionChanged, cannotRemoveScanRoot, cannotRemoveOutside
         case selectExtras, clearSelection, moveSelectedToTrash, keepsOneCopy
         case syncWarningTitle, alsoDeletedFromService, reviewBeforeTrashing, trashIsRecoverable
+        case reviewWhatGoes, tickToChange, willStay, willBeTrashed, keepThisOne
+        case sameContentsDifferentNames, neverSuggest, allExcluded, exclusions
+        case exclusionsExplained, addExclusion, removeExclusion, noExclusions
         case freeUpSpace, lookingForSpace, nothingObviousToFree, reviewItems, showInFinder
         case suggestionsNeverDelete, close
         case safetyComesBack, safetyCopyRemains, safetyYourCall
@@ -307,6 +318,22 @@ final class L10n: ObservableObject {
         .alsoDeletedFromService: ("Deleting here removes them from the service and from your other devices too. Put Back restores only the local copy.",
                                   "Buradan silmek onları servisten ve diğer cihazlarınızdan da kaldırır. Geri Koy yalnızca yerel kopyayı geri getirir."),
         .reviewBeforeTrashing: ("Everything that will be moved:", "Taşınacak her şey:"),
+        .reviewWhatGoes: ("What goes, and what stays", "Ne gidiyor, ne kalıyor"),
+        .tickToChange: ("Click any row to change it", "Değiştirmek için satıra tıklayın"),
+        .willStay: ("Stays", "Kalıyor"),
+        .willBeTrashed: ("Trash", "Çöpe"),
+        .keepThisOne: ("Keep this one", "Bunu tut"),
+        .sameContentsDifferentNames: ("Same contents, different names",
+                                      "Aynı içerik, farklı adlar"),
+        .neverSuggest: ("Never suggest", "Asla önerme"),
+        .allExcluded: ("Everything picked is on the never-touch list",
+                       "Seçilen her şey dokunulmayacaklar listesinde"),
+        .exclusions: ("Never touch these", "Bunlara asla dokunma"),
+        .exclusionsExplained: ("Folders here are never proposed for deletion and can never be ticked. They are still measured, so the totals stay honest.",
+                               "Buradaki klasörler asla silinmek üzere önerilmez ve işaretlenemez. Yine de ölçülürler, böylece toplamlar doğru kalır."),
+        .addExclusion: ("Add folder…", "Klasör ekle…"),
+        .removeExclusion: ("Remove", "Kaldır"),
+        .noExclusions: ("Nothing is excluded yet", "Henüz hiçbir şey hariç tutulmadı"),
         .trashIsRecoverable: ("Goes to the Trash, and ⌘Z puts it all back",
                               "Çöp Kutusu'na gider, ⌘Z hepsini geri alır"),
         .freeUpSpace: ("Free up space", "Yer aç"),
