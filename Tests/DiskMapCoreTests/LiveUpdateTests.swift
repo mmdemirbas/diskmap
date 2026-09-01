@@ -288,4 +288,49 @@ extension LiveUpdateTests {
         XCTAssertTrue(tree.refresh(directory: root.path))
         XCTAssertEqual(tree.withStore { $0.totalLogical[0] }, 1_000)
     }
+
+    /// A folder that costs a lot to relist is held off in proportion to what it
+    /// cost, so one enormous churning directory cannot monopolise the update
+    /// loop. The hold-off is a delay, never a refusal: the directory stays
+    /// queued and is relisted as soon as its own wait is up.
+    func testAnExpensiveFolderIsHeldOffInProportionToItsCost() throws {
+        let tree = self.tree()
+        let now = DispatchTime.now()
+
+        // Nothing known about it yet: go ahead.
+        XCTAssertNil(tree.holdOff("/somewhere", now: now))
+
+        // A tenth of a second to relist buys a second of quiet.
+        tree.noteRelist("/somewhere", cost: 0.1, at: now)
+        let wait = try XCTUnwrap(tree.holdOff("/somewhere", now: now))
+        XCTAssertEqual(wait, 1.0, accuracy: 0.05)
+
+        // And the wait runs down rather than restarting.
+        let later = DispatchTime(uptimeNanoseconds: now.uptimeNanoseconds + 600_000_000)
+        XCTAssertEqual(try XCTUnwrap(tree.holdOff("/somewhere", now: later)), 0.4, accuracy: 0.05)
+        let after = DispatchTime(uptimeNanoseconds: now.uptimeNanoseconds + 1_100_000_000)
+        XCTAssertNil(tree.holdOff("/somewhere", now: after))
+    }
+
+    /// However expensive a folder is, the tree never goes more than the ceiling
+    /// out of date on it.
+    func testTheHoldOffIsCapped() throws {
+        let tree = self.tree()
+        let now = DispatchTime.now()
+        tree.noteRelist("/enormous", cost: 60, at: now)
+        XCTAssertEqual(try XCTUnwrap(tree.holdOff("/enormous", now: now)), 30, accuracy: 0.05)
+    }
+
+    /// The table cannot grow without bound on a machine that touches tens of
+    /// thousands of directories.
+    func testTheHoldOffTableStaysBounded() throws {
+        let tree = self.tree()
+        for i in 0..<5000 {
+            tree.noteRelist("/d\(i)", cost: 0.001,
+                            at: DispatchTime(uptimeNanoseconds: UInt64(i + 1) * 1_000_000))
+        }
+        XCTAssertLessThanOrEqual(tree.lastRelistCount, 4096)
+        // What survived is the recently seen end, not an arbitrary slice.
+        XCTAssertNotNil(tree.holdOff("/d4999", now: DispatchTime(uptimeNanoseconds: 5_000_000_000)))
+    }
 }

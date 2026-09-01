@@ -37,6 +37,42 @@ public final class LiveTree: @unchecked Sendable {
     private var entriesSinceFlush = 0
     private var scannedSinceFlush = 0
 
+    /// What each directory last cost to relist, and when it was last done.
+    ///
+    /// One folder can dominate everything else put together. Measured on a
+    /// working machine, a browser cache holding 78,995 entries produced 1,567
+    /// events in two minutes, and every relist of it walks all 78,995 and
+    /// appends that many rows — essentially the whole of the store's growth and
+    /// most of the CPU, from one directory nobody has ever looked at in this
+    /// app. Each directory is therefore held off in proportion to what it cost
+    /// last time, so an expensive one settles into its own duty cycle while a
+    /// small one beside it stays immediate.
+    ///
+    /// Only ever touched from `applyQueue`, which is serial.
+    private var lastRelist: [String: (at: DispatchTime, cost: Double)] = [:]
+    var lastRelistCount: Int { lastRelist.count }
+    private static let holdOffFactor = 10.0
+    /// However expensive a folder is, it is never more than this out of date.
+    private static let holdOffCeiling = 30.0
+
+    /// Seconds still to wait before this directory is worth relisting again,
+    /// or nil if it may be done now.
+    func holdOff(_ dir: String, now: DispatchTime) -> Double? {
+        guard let last = lastRelist[dir] else { return nil }
+        let wait = min(last.cost * Self.holdOffFactor, Self.holdOffCeiling)
+        let since = Double(now.uptimeNanoseconds - last.at.uptimeNanoseconds) / 1e9
+        return since < wait ? wait - since : nil
+    }
+
+    func noteRelist(_ dir: String, cost: Double, at: DispatchTime) {
+        lastRelist[dir] = (at, cost)
+        guard lastRelist.count > 4096 else { return }
+        // Bounded: drop the quarter that has gone longest without an event.
+        let ages = lastRelist.values.map(\.at.uptimeNanoseconds).sorted()
+        let cutoff = ages[ages.count / 4]
+        lastRelist = lastRelist.filter { $0.value.at.uptimeNanoseconds > cutoff }
+    }
+
     /// Quiet: answer quickly. Busy: keep the duty cycle near a fifth.
     /// Unwatched: correctness still matters, promptness does not.
     public var flushDelay: Double {
@@ -171,7 +207,16 @@ public final class LiveTree: @unchecked Sendable {
         let began = DispatchTime.now()
         var changed = false
         var moved = 0
-        for d in roots where relist(directory: d) { changed = true; moved += 1 }
+        var deferred: [(String, Double)] = []
+        for d in roots {
+            let now = DispatchTime.now()
+            if let wait = holdOff(d, now: now) { deferred.append((d, wait)); continue }
+            let did = relist(directory: d)
+            let after = DispatchTime.now()
+            noteRelist(d, cost: Double(after.uptimeNanoseconds - now.uptimeNanoseconds) / 1e9,
+                       at: after)
+            if did { changed = true; moved += 1 }
+        }
 
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds
                              - began.uptimeNanoseconds) / 1e9
@@ -187,7 +232,23 @@ public final class LiveTree: @unchecked Sendable {
         span.end(["events": .int(Int64(dirs.count)), "relisted": .int(Int64(roots.count)),
                   "changed": .int(Int64(moved)), "resized": .int(Int64(resized)),
                   "entries": .int(Int64(entries)), "scanned": .int(Int64(scanned)),
-                  "nodes": .int(Int64(nodes))], minMilliseconds: 20)
+                  "nodes": .int(Int64(nodes)), "held": .int(Int64(deferred.count))],
+                 minMilliseconds: 20)
+
+        // A directory that was held off is still owed a relist. Come back when
+        // the earliest hold-off expires rather than spinning on the debounce,
+        // so a folder waiting half a minute does not keep the process awake.
+        if !deferred.isEmpty {
+            let wakeIn = max(0.25, deferred.map(\.1).min() ?? 0.25)
+            lock.lock()
+            for (d, _) in deferred { pending.insert(d) }
+            let schedule = !flushScheduled
+            if schedule { flushScheduled = true }
+            lock.unlock()
+            if schedule {
+                applyQueue.asyncAfter(deadline: .now() + wakeIn) { [weak self] in self?.flush() }
+            }
+        }
 
         if changed {
             lock.lock()

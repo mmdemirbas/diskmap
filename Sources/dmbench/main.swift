@@ -444,6 +444,57 @@ func cmdRelistCost(_ entries: Int, _ runs: Int) {
 }
 
 
+
+/// Which directories the filesystem is actually changing, and how big they are.
+///
+/// A live update costs what the churning directories cost, and a directory with
+/// a hundred thousand entries costs a hundred thousand times what an empty one
+/// does. Watches without maintaining a tree, so the measurement does not pay
+/// the cost it is measuring.
+func cmdChurn(_ path: String, _ seconds: Int) {
+    print("scanning \(path) for entry counts ...")
+    let store = DiskScanner().scan(ScanOptions(rootPath: path)).store
+
+    let tally = Tally()
+    let watcher = FileSystemWatcher(paths: [path]) { paths in
+        for p in paths {
+            var isDir: ObjCBool = false
+            let dir = FileManager.default.fileExists(atPath: p, isDirectory: &isDir) && isDir.boolValue
+                ? p : (p as NSString).deletingLastPathComponent
+            tally.bump(dir)
+        }
+    }
+    print("  watching for \(seconds)s\n")
+    watcher.start()
+    let deadline = Date().addingTimeInterval(TimeInterval(seconds))
+    while Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+    watcher.stop()
+
+    let counts = tally.snapshot()
+    let total = counts.values.reduce(0, +)
+    print("  \(total) events across \(counts.count) directories\n")
+    print("  events   entries  directory")
+    var chargedEntries = 0
+    for (dir, n) in counts.sorted(by: { $0.value > $1.value }) {
+        let entries = store.find(path: dir).map { store.children($0).count } ?? -1
+        if entries > 0 { chargedEntries += n * entries }
+        guard n > 2 else { continue }
+        let shown = dir.hasPrefix(path) ? "~" + dir.dropFirst(path.count) : dir
+        print(String(format: "  %6d  %8@  %@", n,
+                     (entries < 0 ? "?" : entries.formatted()) as NSString,
+                     String(shown.prefix(88)) as NSString))
+    }
+    print("\n  rows a relist would append if every event were applied "
+          + "separately: \(chargedEntries.formatted())")
+}
+
+final class Tally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+    func bump(_ key: String) { lock.lock(); counts[key, default: 0] += 1; lock.unlock() }
+    func snapshot() -> [String: Int] { lock.lock(); defer { lock.unlock() }; return counts }
+}
+
 final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var n = 0
@@ -500,6 +551,8 @@ case "snapshot": cmdSnapshot(args.count > 2 ? args[2] : FileManager.default.home
 case "changes": cmdChanges(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                            args.count > 3 ? args[3] : nil)
 case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
+case "churn": cmdChurn(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                       args.count > 3 ? (Int(args[3]) ?? 120) : 120)
 case "live": cmdLive(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                      args.count > 3 ? (Int(args[3]) ?? 120) : 120)
 case "relistcost": cmdRelistCost(args.count > 2 ? (Int(args[2]) ?? 8) : 8,
@@ -511,5 +564,5 @@ case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.ho
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
                + " | dupes <path> | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
-               + " | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
+               + " | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
 }
