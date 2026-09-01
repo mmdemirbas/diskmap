@@ -44,7 +44,9 @@ struct Legend: View {
             .frame(height: Self.height)
         }
         .frame(height: Self.height)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        // Flat, not a translucent system colour: a dynamic NSColor blended at
+        // partial opacity resolves to something else entirely here.
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func swatch(_ color: Color, _ label: String) -> some View {
