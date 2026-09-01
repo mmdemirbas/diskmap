@@ -138,4 +138,95 @@ extension LiveUpdateTests {
         tree.markRemoved(node)
         XCTAssertEqual(tree.changeCount, start + 3, "a trashed item is a change")
     }
+
+
+    // MARK: - What a live update costs
+
+    /// The scanner sizes its arrays from the volume's used-inode count, which
+    /// `statfs` reports for the whole volume whatever path it is given. A live
+    /// update scans every directory that has just appeared — thousands an hour,
+    /// nearly all of them empty — and each one was reserving room for the entire
+    /// disk. Handing the scanner a figure must not change a single byte of what
+    /// it finds; it only changes what it allocates to find it.
+    func testACallerSuppliedCapacityFindsExactlyTheSameTree() throws {
+        try write("a/b/one.bin", 4_000)
+        try write("a/b/two.bin", 6_000)
+        try write("a/c/three.bin", 9_000)
+        try write("loose.bin", 1_000)
+
+        let full = DiskScanner().scan(ScanOptions(rootPath: root.path))
+        var hinted = ScanOptions(rootPath: root.path)
+        hinted.expectedNodes = 8
+        hinted.threadCount = 2
+        let small = DiskScanner().scan(hinted)
+
+        XCTAssertEqual(small.store.count, full.store.count)
+        XCTAssertEqual(small.store.totalLogical[0], full.store.totalLogical[0])
+        XCTAssertEqual(small.stats.files, full.stats.files)
+        XCTAssertEqual(small.stats.directories, full.stats.directories)
+        XCTAssertEqual(FolderMatches.signatures(small.store)[0],
+                       FolderMatches.signatures(full.store)[0])
+    }
+
+    /// The figure is a starting size, not a limit. A folder that appears with
+    /// far more in it than the hint allowed for must still be measured whole,
+    /// or the total on screen quietly understates the disk.
+    func testTheCapacityHintIsAStartingSizeNotACap() throws {
+        for i in 0..<400 { try write("big/f\(i).bin", 100) }
+        var options = ScanOptions(rootPath: root.appendingPathComponent("big").path)
+        options.expectedNodes = 8
+        let result = DiskScanner().scan(options)
+        XCTAssertEqual(result.stats.files, 400)
+        XCTAssertEqual(result.store.totalLogical[0], 40_000)
+    }
+
+    /// A relist scans folders that have just appeared with a small hint. The
+    /// bytes it reports have to match a plain scan of the same tree, otherwise
+    /// the optimisation buys speed by lying.
+    func testAFolderAppearingAfterTheScanIsMeasuredCorrectly() throws {
+        try write("keep.bin", 1_000)
+        let tree = self.tree()
+        let before = tree.withStore { $0.totalLogical[0] }
+
+        for i in 0..<50 { try write("fresh/deep/f\(i).bin", 500) }
+        XCTAssertTrue(tree.refresh(directory: root.path))
+
+        let plain = DiskScanner().scan(ScanOptions(rootPath: root.path))
+        XCTAssertEqual(tree.withStore { $0.totalLogical[0] }, plain.store.totalLogical[0])
+        XCTAssertGreaterThan(tree.withStore { $0.totalLogical[0] }, before)
+    }
+
+    /// A fixed debounce means a machine doing steady work keeps the tree busy
+    /// permanently: the flush costs what it costs, and the next one is queued a
+    /// third of a second later regardless. The wait now follows the cost, so a
+    /// quiet disk stays responsive and a busy one settles into a duty cycle.
+    func testTheDebounceFollowsWhatTheLastFlushCost() throws {
+        let tree = self.tree()
+        XCTAssertEqual(tree.flushDelay, 0.35, accuracy: 0.001)
+
+        tree.lastFlushSeconds = 0.5
+        XCTAssertEqual(tree.flushDelay, 2.5, accuracy: 0.001)
+
+        // However expensive things get, an update still lands eventually.
+        tree.lastFlushSeconds = 60
+        XCTAssertEqual(tree.flushDelay, 8, accuracy: 0.001)
+    }
+
+    /// Suspension slows updates for a window nobody can see; it never stops
+    /// them, because a tree that stopped following the disk is the one thing
+    /// this app must not show when the window comes back.
+    func testSuspendingSlowsUpdatesRatherThanStoppingThem() throws {
+        let tree = self.tree()
+        tree.setSuspended(true)
+        XCTAssertTrue(tree.suspended)
+        XCTAssertEqual(tree.flushDelay, 30, accuracy: 0.001)
+
+        try write("added.bin", 2_000)
+        XCTAssertTrue(tree.refresh(directory: root.path))
+        XCTAssertEqual(tree.withStore { $0.totalLogical[0] }, 2_000)
+
+        tree.setSuspended(false)
+        XCTAssertFalse(tree.suspended)
+        XCTAssertEqual(tree.flushDelay, 0.35, accuracy: 0.001)
+    }
 }

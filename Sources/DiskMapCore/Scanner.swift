@@ -9,6 +9,19 @@ public struct ScanOptions: Sendable {
     public var threadCount: Int = min(12, ProcessInfo.processInfo.activeProcessorCount)
     public var extraExclusions: Set<String> = []
 
+    /// How many nodes to size the arrays for, when the caller knows better
+    /// than the volume does.
+    ///
+    /// Left nil, the scanner asks `statfs` how many inodes the volume is using.
+    /// That is the right guess for "measure this whole disk" and a ruinous one
+    /// for "measure this folder that just appeared", because `statfs` answers
+    /// for the volume whatever path it is handed. A live update scans thousands
+    /// of new directories an hour and nearly all of them hold a handful of
+    /// entries — each was reserving room for twelve million nodes, some six
+    /// hundred megabytes of arrays plus a hundred-megabyte intern table, mapped
+    /// and thrown away several times a second.
+    public var expectedNodes: Int?
+
     public init(rootPath: String) { self.roots = [rootPath] }
     public init(roots: [String]) { self.roots = roots }
 
@@ -191,8 +204,14 @@ public final class DiskScanner {
         // One allocation up front for the whole tree, sized from the volumes'
         // own used-inode counts. Growing 11M nodes geometrically instead would
         // copy hundreds of megabytes and leave as much again in slack.
-        let estimate = normalized.roots.reduce(0) { $0 + usedInodeCount($1) }
-        let capacity = estimate > 0 ? min(Int(Double(estimate) * 1.05) + 1024, 80_000_000) : 1 << 20
+        // A caller-supplied figure says how much to allocate; it says nothing
+        // about the volume, so it does not become a progress denominator. The
+        // estimate stays nil there rather than becoming a made-up fraction.
+        let estimate = rawOptions.expectedNodes == nil
+            ? normalized.roots.reduce(0) { $0 + usedInodeCount($1) }
+            : 0
+        let capacity = rawOptions.expectedNodes
+            ?? (estimate > 0 ? min(Int(Double(estimate) * 1.05) + 1024, 80_000_000) : 1 << 20)
         store.reserve(capacity)
         store.beginInterning(expectedNodes: capacity)
 
@@ -262,7 +281,11 @@ public final class DiskScanner {
             "unreadable": .int(Int64(stats.unreadableDirectories)),
             "cancelled": .flag(stats.cancelled),
             "footprint": .int(Telemetry.footprintBytes()),
-        ])
+            // A live update scans thousands of newly appeared directories an
+            // hour, nearly all of them empty. One record each buries the log in
+            // noise and costs a write per filesystem event; the flush record
+            // carries the count instead, and only a slow one is worth a line.
+        ], minMilliseconds: rawOptions.expectedNodes == nil ? 0 : 250)
         if stats.unreadableDirectories > 0 {
             // Almost always missing Full Disk Access, which makes every total
             // on screen an understatement. Worth a record of its own.

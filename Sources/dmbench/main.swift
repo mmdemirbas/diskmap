@@ -377,6 +377,72 @@ func cmdChanges(_ path: String, _ historyDir: String?) {
     }
 }
 
+
+final class Peak: @unchecked Sendable {
+    private let baseline: Int64
+    private var running = false
+    private(set) var highWater: Int64 = 0
+    init(baseline: Int64) { self.baseline = baseline }
+    func start() {
+        running = true
+        Thread.detachNewThread { [self] in
+            while running {
+                highWater = max(highWater, Telemetry.footprintBytes() - baseline)
+                usleep(300)
+            }
+        }
+    }
+    func stop() { running = false; usleep(2000) }
+}
+
+/// What one live update costs.
+///
+/// A relist scans every directory that has just appeared. The overwhelming
+/// majority of those hold nothing yet, so the whole cost is setup: sizing the
+/// arrays and starting the threads. `statfs` reports the volume's inode count
+/// for any path on it, so sizing from that reserved room for the entire disk to
+/// measure an empty folder — which is what this command exists to keep honest.
+func cmdRelistCost(_ entries: Int, _ runs: Int) {
+    let fm = FileManager.default
+    let base = fm.currentDirectoryPath + "/tmp/relistcost"
+    try? fm.removeItem(atPath: base)
+    try? fm.createDirectory(atPath: base, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(atPath: base) }
+    for i in 0..<entries {
+        fm.createFile(atPath: base + "/f\(i)", contents: Data(count: 64))
+    }
+
+    var fs = statfs()
+    _ = statfs(base, &fs)
+    let inodes = max(0, Int(fs.f_files) - Int(fs.f_ffree))
+    print("directory with \(entries) entries, volume using \(inodes.formatted()) inodes")
+
+    func measure(_ label: String, _ make: () -> ScanOptions) {
+        _ = DiskScanner().scan(make())
+        let before = Telemetry.footprintBytes()
+        // The allocation is transient: it is mapped and thrown away inside one
+        // scan, so a reading taken afterwards shows nothing. Sampling from
+        // another thread is the only way to see what the process actually held.
+        let peak = Peak(baseline: before)
+        peak.start()
+        let t0 = DispatchTime.now()
+        var nodes = 0
+        for _ in 0..<runs { nodes = DiskScanner().scan(make()).store.count }
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        peak.stop()
+        print(String(format: "  %-24@  %8.3f ms   %d nodes   peak footprint +%@",
+                     label as NSString, ms / Double(runs), nodes,
+                     fmt(peak.highWater) as NSString))
+    }
+    measure("sized from the volume") { ScanOptions(rootPath: base) }
+    measure("sized by the caller") {
+        var o = ScanOptions(rootPath: base)
+        o.expectedNodes = 4096
+        o.threadCount = 2
+        return o
+    }
+}
+
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
@@ -388,6 +454,8 @@ case "snapshot": cmdSnapshot(args.count > 2 ? args[2] : FileManager.default.home
 case "changes": cmdChanges(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                            args.count > 3 ? args[3] : nil)
 case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
+case "relistcost": cmdRelistCost(args.count > 2 ? (Int(args[2]) ?? 8) : 8,
+                                 args.count > 3 ? (Int(args[3]) ?? 40) : 40)
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
 case "verify": cmdVerify(Array(args.dropFirst(2)))
 case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
@@ -395,5 +463,5 @@ case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.ho
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
                + " | dupes <path> | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
-               + " | metrics [n]]")
+               + " | relistcost [entries] [runs] | metrics [n]]")
 }

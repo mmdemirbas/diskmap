@@ -379,6 +379,55 @@ final class AppModel: ObservableObject {
             selectedVolumePath = volumes.first?.path ?? "/"
         }
         refreshVolume()
+        observeVisibility()
+    }
+
+    // MARK: - Doing nothing while nobody is looking
+
+    /// Assumed true until told otherwise: an offscreen render has no window at
+    /// all, and starting out "invisible" would defer work that has no later
+    /// moment to happen in.
+    private var windowIsVisible = true
+    private var rebuildWhenVisible = false
+    private var lastVolumeRefresh = Date.distantPast
+    private var visibilityObserver: NSObjectProtocol?
+
+    /// Occlusion, not activation. A window can be entirely covered by another
+    /// app while this one is still frontmost by some measures, and it can be
+    /// perfectly readable beside the editor the user is actually typing in.
+    /// What decides whether laying out a treemap is worth doing is whether any
+    /// pixel of it is on screen, which is the one thing occlusion state means.
+    private func observeVisibility() {
+        visibilityObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeOcclusionStateNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.visibilityChanged() }
+        }
+    }
+
+    private func visibilityChanged() {
+        let visible = NSApp.occlusionState.contains(.visible)
+        guard visible != windowIsVisible else { return }
+        windowIsVisible = visible
+        // The tree keeps following the filesystem either way; only the rate
+        // changes. Coming back to a stale window is the failure this app is
+        // meant not to have.
+        tree?.setSuspended(!visible)
+        guard visible, rebuildWhenVisible else { return }
+        rebuildWhenVisible = false
+        refreshVolume()
+        rebuild()
+    }
+
+    /// Free space moves in gigabytes over minutes, not between two filesystem
+    /// events a few milliseconds apart, and asking for it means asking the
+    /// volume about purgeable space. Every few seconds is as often as anyone
+    /// can read it.
+    private func refreshVolumeIfStale(after seconds: TimeInterval = 5) {
+        guard Date().timeIntervalSince(lastVolumeRefresh) >= seconds else { return }
+        lastVolumeRefresh = Date()
+        refreshVolume()
     }
 
     /// The capacity bar describes the volume the scan actually lives on, which
@@ -540,7 +589,11 @@ final class AppModel: ObservableObject {
     }
 
     private func treeChanged() {
-        refreshVolume()
+        // Rebuilding rows and re-laying out a treemap nobody can see is pure
+        // battery. The work is not skipped, it is deferred to the moment the
+        // window is on screen again.
+        guard windowIsVisible else { rebuildWhenVisible = true; return }
+        refreshVolumeIfStale()
         rebuild()
     }
 

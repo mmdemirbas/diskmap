@@ -20,6 +20,30 @@ public final class LiveTree: @unchecked Sendable {
     private var flushScheduled = false
     private let applyQueue = DispatchQueue(label: "diskmap.live", qos: .utility)
 
+    /// How long the last flush took, and whether anyone is watching.
+    ///
+    /// A fixed third-of-a-second debounce means a machine doing steady work —
+    /// a build, a sync, an install — keeps the tree busy about three quarters
+    /// of the time, indefinitely. Waiting in proportion to what the last flush
+    /// actually cost turns that into a duty cycle: a quiet disk still updates
+    /// in a third of a second, a busy one backs off on its own, and no constant
+    /// has to guess how fast this particular machine writes.
+    var lastFlushSeconds: Double = 0
+    private(set) var suspended = false
+    /// Counters folded into the next flush record. One line per relist is a
+    /// disk write per filesystem event, which is a cost the instrumentation
+    /// adds to the thing it is measuring.
+    private var resizedSinceFlush = 0
+    private var entriesSinceFlush = 0
+    private var scannedSinceFlush = 0
+
+    /// Quiet: answer quickly. Busy: keep the duty cycle near a fifth.
+    /// Unwatched: correctness still matters, promptness does not.
+    var flushDelay: Double {
+        if suspended { return 30 }
+        return min(max(0.35, lastFlushSeconds * 5), 8)
+    }
+
     /// Called on the main queue after the tree changed.
     public var onChange: (@Sendable () -> Void)?
     private var watching = false
@@ -102,10 +126,28 @@ public final class LiveTree: @unchecked Sendable {
         for dir in dirs { pending.insert(dir) }
         let shouldFlush = !flushScheduled
         if shouldFlush { flushScheduled = true }
+        let delay = flushDelay
         lock.unlock()
 
         guard shouldFlush else { return }
-        applyQueue.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.flush() }
+        applyQueue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.flush() }
+    }
+
+    /// Live updates never stop — the tree has to be right the moment the window
+    /// comes back, and a window that lies is the thing this app exists not to
+    /// be. What changes is the rate. Nobody needs a third-of-a-second response
+    /// from a window they are not looking at, and over a working day that
+    /// difference is most of what the app costs the battery.
+    public func setSuspended(_ value: Bool) {
+        lock.lock()
+        let resuming = suspended && !value
+        suspended = value
+        // Coming back to the front, apply whatever accumulated straight away
+        // rather than leaving the user looking at a stale tree for 30 seconds.
+        let wake = resuming && !pending.isEmpty && !flushScheduled
+        if wake { flushScheduled = true }
+        lock.unlock()
+        if wake { applyQueue.async { [weak self] in self?.flush() } }
     }
 
     private func flush() {
@@ -126,11 +168,26 @@ public final class LiveTree: @unchecked Sendable {
         // No lock across the loop: relist takes it only for the two short
         // phases that touch the store.
         let span = Telemetry.begin("live.flush")
+        let began = DispatchTime.now()
         var changed = false
         var moved = 0
         for d in roots where relist(directory: d) { changed = true; moved += 1 }
+
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds
+                             - began.uptimeNanoseconds) / 1e9
+        lock.lock()
+        // The next debounce is set from this, so it is measured whether or not
+        // the record clears the reporting threshold.
+        lastFlushSeconds = elapsed
+        let resized = resizedSinceFlush, entries = entriesSinceFlush
+        let scanned = scannedSinceFlush, nodes = store.count
+        resizedSinceFlush = 0; entriesSinceFlush = 0; scannedSinceFlush = 0
+        lock.unlock()
+
         span.end(["events": .int(Int64(dirs.count)), "relisted": .int(Int64(roots.count)),
-                  "changed": .int(Int64(moved))], minMilliseconds: 20)
+                  "changed": .int(Int64(moved)), "resized": .int(Int64(resized)),
+                  "entries": .int(Int64(entries)), "scanned": .int(Int64(scanned)),
+                  "nodes": .int(Int64(nodes))], minMilliseconds: 20)
 
         if changed {
             lock.lock()
@@ -191,7 +248,18 @@ public final class LiveTree: @unchecked Sendable {
         var freshSubtrees: [String: NodeStore] = [:]
         for e in entries where e.flags.contains(.directory)
             && !e.flags.contains(.symlink) && !knownNames.contains(e.name) {
-            freshSubtrees[e.name] = DiskScanner().scan(ScanOptions(rootPath: path + "/" + e.name)).store
+            var options = ScanOptions(rootPath: path + "/" + e.name)
+            // A directory that has just appeared is nearly always empty or
+            // close to it — a build creating an output folder, a package
+            // manager laying down a tree one level at a time. Sizing for the
+            // volume here is what made a live update cost hundreds of megabytes
+            // of mapping per event; the arrays grow by themselves in the rare
+            // case that something large arrives at once.
+            options.expectedNodes = 4096
+            // And it needs no thread pool. Twelve threads to read one empty
+            // directory is most of the cost of reading it.
+            options.threadCount = 2
+            freshSubtrees[e.name] = DiskScanner().scan(options).store
         }
 
         // Phase C: commit. Re-read the node, since the tree may have moved on.
@@ -227,8 +295,8 @@ public final class LiveTree: @unchecked Sendable {
                 store.flags[Int(c)] = e.flags.rawValue
             }
             guard delta != 0 || deltaPhysical != 0 else { return false }
-            Telemetry.record("live.resize", ["entries": .int(Int64(entries.count)),
-                                             "physical": .int(deltaPhysical)])
+            resizedSinceFlush += 1
+            entriesSinceFlush += entries.count
             changes += 1
             store.totalLogical[Int(node)] += delta
             store.totalPhysical[Int(node)] += deltaPhysical
@@ -276,12 +344,8 @@ public final class LiveTree: @unchecked Sendable {
         store.totalPhysical[Int(node)] = newPhysical
         store.propagate(from: node, logical: newLogical - oldLogical, physical: newPhysical - oldPhysical)
         changes += 1
-        Telemetry.record("live.relist", [
-            "entries": .int(Int64(entries.count)),
-            "reused": .int(Int64(reused.count)),
-            "scanned": .int(Int64(freshSubtrees.count)),
-            "nodes": .int(Int64(store.count)),
-        ])
+        entriesSinceFlush += entries.count
+        scannedSinceFlush += freshSubtrees.count
         return true
     }
 
