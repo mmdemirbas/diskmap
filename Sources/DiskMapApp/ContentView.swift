@@ -41,12 +41,14 @@ struct ContentView: View {
             }
             switch model.phase {
             case .idle:            StartView(model: model)
-            case .scanning(let p): ScanningView(progress: p) { model.cancelScan(); model.phase = .idle }
+            case .scanning(let p): ScanningView(progress: p) { model.stopScanning() }
             case .failed(let msg): failure(msg)
             case .ready:           results
             }
         }
-        .frame(minWidth: 980, minHeight: 640)
+        // The toolbar carries the breadcrumb plus five controls; below this the
+        // breadcrumb is squeezed to nothing before anything else gives way.
+        .frame(minWidth: 1080, minHeight: 640)
         // Explicit, rather than inheriting whatever the window happens to be:
         // without it the panels stay light while dark-mode text turns white.
         .background(Color(nsColor: .windowBackgroundColor))
@@ -54,7 +56,8 @@ struct ContentView: View {
         .modifier(Sheets(model: model))
         .sheet(isPresented: $showReconciliation) {
             if let v = model.volume {
-                ReconciliationSheet(volume: v, reconciliation: model.reconciliation, stats: model.stats)
+                ReconciliationSheet(volume: v, reconciliation: model.reconciliation,
+                                    stats: model.stats, renderMode: model.renderMode)
                     .background(Color(nsColor: .windowBackgroundColor))
                     .preferredColorScheme(model.appearance.colorScheme)
             }
@@ -151,7 +154,7 @@ struct ContentView: View {
                     .help(loc[.enclosingFolder])
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
+            viewportScroller(renderMode: model.renderMode, axis: .horizontal) {
                 HStack(spacing: 3) {
                     ForEach(Array(model.breadcrumb.enumerated()), id: \.offset) { idx, crumb in
                         if idx > 0 {
@@ -192,6 +195,12 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented).frame(width: 112).labelsHidden()
 
+            Picker("", selection: $model.colourMode) {
+                ForEach(ColourMode.allCases) { c in Text(loc[c.shortKey]).tag(c) }
+            }
+            .pickerStyle(.segmented).frame(width: 104).labelsHidden()
+            .help(loc[.colourBy])
+
             Picker("", selection: $model.usePhysicalSize) {
                 Text(loc[.onDisk]).tag(true)
                 Text(loc[.apparent]).tag(false)
@@ -200,8 +209,12 @@ struct ContentView: View {
             .onChange(of: model.usePhysicalSize) { _, _ in model.rebuild() }
             .help(loc[.sizeMetricHelp])
 
-            Button { model.scan() } label: { Image(systemName: "arrow.clockwise") }
-                .help(loc[.rescan])
+            HStack(spacing: 2) {
+                Button { model.newScan() } label: { Image(systemName: "plus.magnifyingglass") }
+                    .help(loc[.newScanHelp])
+                Button { model.scan() } label: { Image(systemName: "arrow.clockwise") }
+                    .help(loc[.rescan])
+            }
 
             settingsMenu
         }
@@ -216,10 +229,6 @@ struct ContentView: View {
 
     private var settingsMenu: some View {
         Menu {
-            Picker(loc[.colourBy], selection: $model.colourMode) {
-                ForEach(ColourMode.allCases) { c in Text(loc[c.key]).tag(c) }
-            }
-            Divider()
             Picker(loc[.appearance], selection: $model.appearance) {
                 ForEach(Appearance.allCases) { a in Text(loc[a.key]).tag(a) }
             }

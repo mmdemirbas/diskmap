@@ -245,6 +245,10 @@ final class L10n: ObservableObject {
         case suggestFoldersWhy, suggestFilesWhy, suggestBuildWhy, suggestCachesWhy
         case suggestInstallersWhy, suggestStaleWhy, suggestTrashWhy
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
+        case colourTypeShort, colourAgeShort, newScanHelp
+        case theDiskSays, finderSays, theGapIsPurgeable, sameDiskTwoAnswers
+        case measuredByScan, notAttributed, whatTheScanReached, theNumbers
+        case inUseNotPurgeable, finderCountsAsFree
         case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
         case duplicatesNote, duplicatesEmpty, reclaimable, sectionFolders, sectionFiles
         case matchExact, verify, verifyAgain, verifyIdentical, verifyStopped
@@ -413,6 +417,21 @@ final class L10n: ObservableObject {
         .colourBy: ("Colour by", "Renklendirme"),
         .colourByType: ("By type", "Türe göre"),
         .colourByAge: ("By age", "Yaşa göre"),
+        .colourTypeShort: ("Type", "Tür"),
+        .colourAgeShort: ("Age", "Yaş"),
+        .newScanHelp: ("Measure something else", "Başka bir şey ölç"),
+        .theDiskSays: ("The disk", "Disk"),
+        .finderSays: ("Finder shows", "Finder gösterir"),
+        .sameDiskTwoAnswers: ("The same disk, two answers for how much is free",
+                              "Aynı disk, boş alan için iki farklı cevap"),
+        .theGapIsPurgeable: ("Finder adds purgeable space to the free side. Those bytes are still occupied: macOS only reclaims them when the disk fills up, so a copy can fail on a disk Finder calls empty.",
+                             "Finder, temizlenebilir alanı boş tarafa ekler. O baytlar hâlâ dolu: macOS onları ancak disk dolduğunda geri alır, bu yüzden Finder'ın boş dediği bir diskte kopyalama başarısız olabilir."),
+        .whatTheScanReached: ("What the scan could account for", "Taramanın hesabını verebildiği"),
+        .measuredByScan: ("Measured, file by file", "Dosya dosya ölçüldü"),
+        .notAttributed: ("In use, not attributed to any file", "Kullanımda, hiçbir dosyaya bağlanamadı"),
+        .theNumbers: ("The numbers", "Sayılar"),
+        .inUseNotPurgeable: ("In use, cannot be reclaimed", "Kullanımda, geri alınamaz"),
+        .finderCountsAsFree: ("Counted as free by Finder", "Finder boş sayıyor"),
         .panelContents: ("Contents", "İçerik"),
         .panelLargest: ("Largest", "En büyük"),
         .panelTypes: ("Types", "Türler"),

@@ -83,7 +83,13 @@ enum OffscreenRenderer {
         if let history = env["DISKMAP_HISTORY_DIR"] {
             model.snapshots = SnapshotStore(directory: URL(fileURLWithPath: history))
         }
-        if env["DISKMAP_SHEET"] == "exclusions" {
+        if env["DISKMAP_SHEET"] == "reconciliation", let v = model.volume {
+            // The one screen whose whole job is to be understood at a glance,
+            // and the one that cannot be seen through the window it sits over.
+            view = AnyView(ReconciliationSheet(volume: v, reconciliation: model.reconciliation,
+                                               stats: model.stats, renderMode: true)
+                .environment(\.colorScheme, scheme))
+        } else if env["DISKMAP_SHEET"] == "exclusions" {
             model.excludedPaths = (env["DISKMAP_EXCLUDED"] ?? "").split(separator: ":").map(String.init)
             view = AnyView(ExclusionsView(model: model).environment(\.colorScheme, scheme))
         } else if env["DISKMAP_SHEET"] == "changes", let tree = model.tree {

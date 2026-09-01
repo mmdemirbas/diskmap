@@ -96,10 +96,8 @@ struct StartView: View {
 
     /// Offscreen rendering has no viewport, so a ScrollView shows nothing.
     @ViewBuilder private func targetScroller<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        if model.renderMode {
-            VStack(spacing: 0) { content(); Spacer(minLength: 0) }
-        } else {
-            ScrollView { VStack(spacing: 0, content: content) }
+        viewportScroller(renderMode: model.renderMode) {
+            VStack(spacing: 0, content: content)
         }
     }
 
