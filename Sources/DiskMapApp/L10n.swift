@@ -90,6 +90,11 @@ final class L10n: ObservableObject {
             ? "\(fmt(total)) öğeden \(fmt(restored)) tanesi geri alındı"
             : "Restored \(fmt(restored)) of \(fmt(total))"
     }
+    func largestOfTotal(_ shown: Int, _ total: Int, _ rest: String) -> String {
+        active == .tr
+            ? "\(fmt(total)) taneden en büyük \(fmt(shown)) tanesi · \(rest) daha var"
+            : "the largest \(fmt(shown)) of \(fmt(total)) · \(rest) more not shown"
+    }
     func couldFreeAbout(_ size: String) -> String {
         active == .tr ? "Yaklaşık \(size) boşaltılabilir" : "About \(size) could be freed"
     }

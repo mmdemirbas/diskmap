@@ -127,6 +127,13 @@ struct CleanupView: View {
                 Text(loc[suggestion.kind.explanationKey])
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if suggestion.omitted > 0 {
+                    // Never let the screen imply it covered everything.
+                    Text(loc.largestOfTotal(suggestion.itemCount,
+                                            suggestion.itemCount + suggestion.omitted,
+                                            shortBytes(suggestion.omittedBytes)))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {

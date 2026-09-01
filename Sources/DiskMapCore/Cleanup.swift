@@ -23,11 +23,16 @@ public struct CleanupSuggestion: Sendable, Identifiable {
     public var safety: Safety
     /// What acting on it would free.
     public var bytes: Int64
-    /// What to propose ticking. Empty means the suggestion is information
-    /// only — the Trash is the case, since the app cannot trash what is
-    /// already there and emptying it is not something it should offer.
+    /// What to propose ticking, largest first and capped. Empty means the
+    /// suggestion is information only — the Trash is the case, since the app
+    /// cannot trash what is already there and emptying it is not something it
+    /// should offer.
     public var nodes: [Int32]
     public var itemCount: Int
+    /// Left out of the proposal because the list would be too long to read.
+    /// A confirmation nobody can check is not a confirmation.
+    public var omitted: Int = 0
+    public var omittedBytes: Int64 = 0
 }
 
 /// Turns a scanned tree into a short list of "here is where the easy space is".
@@ -45,7 +50,19 @@ public enum Cleanup {
     static let rebuildableDirectories: Set<String> = [
         "DerivedData", "node_modules", "__pycache__", ".pytest_cache",
         ".mypy_cache", ".ruff_cache", ".next", ".turbo", ".parcel-cache",
-        ".gradle", ".cargo-target",
+    ]
+
+    /// Directories that only qualify because of what sits above them.
+    ///
+    /// `~/.gradle` is 23 GB on this machine and looks like an obvious win, but
+    /// it also holds `gradle.properties` — proxy credentials, certificate
+    /// paths, local settings a user typed once and will not have written down
+    /// anywhere else. Only the parts underneath it that a build regenerates are
+    /// ever proposed. The same shape of mistake is waiting in `.m2`, `.npm` and
+    /// every other dotfile home, which is why the rule is a pair and not a name.
+    static let rebuildableWhenNestedIn: [(child: String, parent: String)] = [
+        ("caches", ".gradle"), ("wrapper", ".gradle"), ("daemon", ".gradle"),
+        ("repository", ".m2"), ("_cacache", ".npm"),
     ]
 
     static let installerExtensions: Set<String> = ["dmg", "pkg", "iso"]
@@ -55,6 +72,9 @@ public enum Cleanup {
         public var installer: Int64 = 100_000_000
         public var staleFile: Int64 = 500_000_000
         public var staleAge: TimeInterval = 2 * 365 * 24 * 3600
+        /// Twenty thousand node_modules folders is a real answer and an
+        /// unreviewable one. The biggest carry almost all the bytes.
+        public var maxItems = 250
         public init() {}
     }
 
@@ -101,8 +121,25 @@ public enum Cleanup {
             }
         }
         guard bytes >= thresholds.suggestion, !nodes.isEmpty else { return [] }
-        return [CleanupSuggestion(kind: kind, safety: .aCopyRemains, bytes: bytes,
-                                  nodes: nodes, itemCount: nodes.count)]
+        return [capped(kind: kind, safety: .aCopyRemains, nodes: nodes,
+                       store: store, limit: thresholds.maxItems)]
+    }
+
+    /// Largest first, then cut. What is left out is reported rather than
+    /// dropped quietly, so the screen never implies it covered everything.
+    private static func capped(kind: CleanupSuggestion.Kind,
+                               safety: CleanupSuggestion.Safety,
+                               nodes: [Int32], store: NodeStore,
+                               limit: Int) -> CleanupSuggestion {
+        let sorted = nodes.sorted { store.totalPhysical[Int($0)] > store.totalPhysical[Int($1)] }
+        let proposed = Array(sorted.prefix(limit))
+        let rest = sorted.dropFirst(proposed.count)
+        return CleanupSuggestion(
+            kind: kind, safety: safety,
+            bytes: proposed.reduce(0) { $0 + store.totalPhysical[Int($1)] },
+            nodes: proposed, itemCount: proposed.count,
+            omitted: rest.count,
+            omittedBytes: rest.reduce(0) { $0 + store.totalPhysical[Int($1)] })
     }
 
     private static func walk(store: NodeStore, root: Int32,
@@ -128,7 +165,10 @@ public enum Cleanup {
                     // Matched folders are not descended into: everything below
                     // one goes with it, and proposing the children as well
                     // would count the same bytes twice.
-                    if rebuildableDirectories.contains(name) {
+                    if rebuildableDirectories.contains(name)
+                        || rebuildableWhenNestedIn.contains(where: {
+                            $0.child == name && $0.parent == store.name(node)
+                        }) {
                         if bytes > 0 { rebuildable.append(child); rebuildableBytes += bytes }
                         continue
                     }
@@ -167,8 +207,8 @@ public enum Cleanup {
         func add(_ kind: CleanupSuggestion.Kind, _ safety: CleanupSuggestion.Safety,
                  _ nodes: [Int32], _ bytes: Int64) {
             guard bytes >= thresholds.suggestion, !nodes.isEmpty else { return }
-            out.append(CleanupSuggestion(kind: kind, safety: safety, bytes: bytes,
-                                         nodes: nodes, itemCount: nodes.count))
+            out.append(capped(kind: kind, safety: safety, nodes: nodes,
+                              store: store, limit: thresholds.maxItems))
         }
         add(.buildOutput, .comesBack, rebuildable, rebuildableBytes)
         add(.appCaches, .comesBack, caches, cacheBytes)

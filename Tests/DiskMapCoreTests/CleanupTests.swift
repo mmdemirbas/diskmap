@@ -56,6 +56,28 @@ final class CleanupTests: XCTestCase {
 
     /// A folder called `build` is an ordinary word and may be someone's work.
     /// Only names that essentially never hold typed-in content are proposed.
+    /// ~/.gradle is 23 GB on a developer machine and looks like an obvious
+    /// win. It also holds gradle.properties — proxy credentials and local
+    /// settings typed once and written down nowhere else. Only the parts a
+    /// build regenerates may be proposed.
+    func testADotfileHomeIsNeverProposedWholeOnlyItsCaches() throws {
+        try write(".gradle/gradle.properties", 200)
+        try write(".gradle/caches/modules-2/big.bin", 40_000)
+        try write(".gradle/wrapper/dists/gradle.zip", 40_000)
+        let build = try XCTUnwrap(suggest().first { $0.kind == .buildOutput })
+        let proposed = Set(build.nodes)
+        XCTAssertFalse(proposed.contains(try node(".gradle")), "would take gradle.properties")
+        XCTAssertTrue(proposed.contains(try node(".gradle/caches")))
+        XCTAssertTrue(proposed.contains(try node(".gradle/wrapper")))
+    }
+
+    func testAMavenRepositoryIsProposedButNotItsSettings() throws {
+        try write(".m2/settings.xml", 200)
+        try write(".m2/repository/org/thing.jar", 40_000)
+        let build = try XCTUnwrap(suggest().first { $0.kind == .buildOutput })
+        XCTAssertEqual(build.nodes, [try node(".m2/repository")])
+    }
+
     func testAmbiguousFolderNamesAreNotProposed() throws {
         try write("project/build/artifact.bin", 40_000)
         try write("project/target/artifact.bin", 40_000)
@@ -115,6 +137,22 @@ final class CleanupTests: XCTestCase {
         let safeties = found.map(\.safety)
         XCTAssertEqual(safeties, safeties.sorted())
         XCTAssertEqual(found.first?.kind, .buildOutput)
+    }
+
+    /// A confirmation nobody can read is not a confirmation, so a very long
+    /// proposal is cut to the biggest — and says what it left out.
+    func testALongProposalIsCutToTheBiggestAndSaysSo() throws {
+        for i in 0..<12 { try write("proj\(i)/node_modules/lib.bin", 10_000 * (i + 1)) }
+        var thresholds = small
+        thresholds.maxItems = 4
+        let build = try XCTUnwrap(suggest(thresholds: thresholds).first { $0.kind == .buildOutput })
+        XCTAssertEqual(build.itemCount, 4)
+        XCTAssertEqual(build.omitted, 8)
+        XCTAssertGreaterThan(build.omittedBytes, 0)
+        // The biggest are the ones kept.
+        let sizes = build.nodes.map { store.totalPhysical[Int($0)] }
+        XCTAssertEqual(sizes, sizes.sorted(by: >))
+        XCTAssertGreaterThan(sizes.min() ?? 0, build.omittedBytes / 8)
     }
 
     func testSmallFindingsAreNotWorthSuggesting() throws {
