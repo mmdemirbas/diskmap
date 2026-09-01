@@ -443,6 +443,52 @@ func cmdRelistCost(_ entries: Int, _ runs: Int) {
     }
 }
 
+
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() { lock.lock(); n += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+}
+
+/// What the live tree costs while it is just sitting there.
+///
+/// The question a battery complaint actually asks is what share of wall clock
+/// the app spends working when nobody has touched it. Scans the tree, watches
+/// it for a while, and reports the duty cycle and how far the store drifted.
+func cmdLive(_ path: String, _ seconds: Int) {
+    print("scanning \(path) ...")
+    let result = DiskScanner().scan(ScanOptions(rootPath: path))
+    let tree = LiveTree(result: result)
+    let startNodes = result.store.count
+    print("  \(startNodes.formatted()) nodes; watching for \(seconds)s\n")
+
+    let ticks = Counter()
+    tree.onChange = { ticks.bump() }
+    tree.startWatching()
+
+    var cpuBefore = rusage()
+    getrusage(RUSAGE_SELF, &cpuBefore)
+    let t0 = Date()
+    let deadline = t0.addingTimeInterval(TimeInterval(seconds))
+    while Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+    var cpuAfter = rusage()
+    getrusage(RUSAGE_SELF, &cpuAfter)
+    tree.stopWatching()
+
+    func secs(_ t: timeval) -> Double { Double(t.tv_sec) + Double(t.tv_usec) / 1e6 }
+    let cpu = (secs(cpuAfter.ru_utime) - secs(cpuBefore.ru_utime))
+            + (secs(cpuAfter.ru_stime) - secs(cpuBefore.ru_stime))
+    let wall = Date().timeIntervalSince(t0)
+    let endNodes = tree.withStore { $0.count }
+    print(String(format: "  CPU %.1fs over %.0fs wall = %.1f%% of one core",
+                 cpu, wall, cpu / wall * 100))
+    print("  \(tree.changeCount) tree changes, \(ticks.value) UI notifications")
+    print("  store \(startNodes.formatted()) -> \(endNodes.formatted()) nodes "
+          + "(+\(fmt(Int64(endNodes - startNodes) * 39)) of rows)")
+    print(String(format: "  next debounce would be %.2fs", tree.flushDelay))
+}
+
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
@@ -454,6 +500,8 @@ case "snapshot": cmdSnapshot(args.count > 2 ? args[2] : FileManager.default.home
 case "changes": cmdChanges(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                            args.count > 3 ? args[3] : nil)
 case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
+case "live": cmdLive(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                     args.count > 3 ? (Int(args[3]) ?? 120) : 120)
 case "relistcost": cmdRelistCost(args.count > 2 ? (Int(args[2]) ?? 8) : 8,
                                  args.count > 3 ? (Int(args[3]) ?? 40) : 40)
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
@@ -463,5 +511,5 @@ case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.ho
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
                + " | dupes <path> | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
-               + " | relistcost [entries] [runs] | metrics [n]]")
+               + " | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
 }

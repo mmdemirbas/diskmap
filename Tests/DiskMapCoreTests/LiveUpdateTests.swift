@@ -229,4 +229,63 @@ extension LiveUpdateTests {
         XCTAssertFalse(tree.suspended)
         XCTAssertEqual(tree.flushDelay, 0.35, accuracy: 0.001)
     }
+
+    /// A directory that cannot be opened right now is not a directory that has
+    /// been deleted. Reading every failure as a deletion drops the folder's
+    /// bytes out of every total above it and leaves it with no known children,
+    /// so the next event on it rescans the whole subtree from scratch.
+    func testAnUnreadableFolderIsNotTreatedAsDeleted() throws {
+        try write("locked/inside.bin", 30_000)
+        try write("other.bin", 1_000)
+        let tree = self.tree()
+        let locked = root.appendingPathComponent("locked")
+        let total = tree.withStore { $0.totalLogical[0] }
+        XCTAssertEqual(total, 31_000)
+
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+        // Running as root defeats the point of the fixture; nothing to assert.
+        try XCTSkipIf(FileManager.default.isReadableFile(atPath: locked.path))
+
+        XCTAssertFalse(tree.refresh(directory: locked.path))
+        XCTAssertEqual(tree.withStore { $0.totalLogical[0] }, total)
+        let node = tree.withStore { $0.find(path: locked.path) }
+        XCTAssertNotNil(node)
+        XCTAssertFalse(tree.withStore { $0.flagSet(node!).contains(.removed) })
+        XCTAssertEqual(tree.withStore { $0.children(node!).count }, 1)
+    }
+
+    /// The other half of the same decision: a folder that really is gone must
+    /// still leave the totals, by both routes that reach it. A real deletion
+    /// event resolves to the parent, because the deleted path no longer exists
+    /// to be identified as a directory; relisting the folder itself only finds
+    /// it when the path was already canonical, since realpath fails on it.
+    func testADeletedFolderStillLeavesTheTotals() throws {
+        try write("going/inside.bin", 30_000)
+        try write("staying.bin", 1_000)
+        let tree = self.tree()
+        // In whatever form the store itself holds it: realpath fails once the
+        // folder is gone, so a caller-supplied path is used verbatim and only
+        // matches if it was already the stored form.
+        let stored = tree.withStore { ($0.roots.first ?? "") + "/going" }
+        XCTAssertEqual(tree.withStore { $0.totalLogical[0] }, 31_000)
+
+        try fm.removeItem(at: root.appendingPathComponent("going"))
+        XCTAssertTrue(tree.refresh(directory: stored))
+        XCTAssertEqual(tree.withStore { $0.totalLogical[0] }, 1_000)
+        let node = try XCTUnwrap(tree.withStore { $0.find(path: stored) })
+        XCTAssertTrue(tree.withStore { $0.flagSet(node).contains(.removed) })
+    }
+
+    /// What an actual deletion event does: FSEvents reports a path that is no
+    /// longer a directory, so it reduces to the parent and the folder goes when
+    /// the parent is relisted.
+    func testDeletingAFolderIsCaughtByRelistingItsParent() throws {
+        try write("going/inside.bin", 30_000)
+        try write("staying.bin", 1_000)
+        let tree = self.tree()
+        try fm.removeItem(at: root.appendingPathComponent("going"))
+        XCTAssertTrue(tree.refresh(directory: root.path))
+        XCTAssertEqual(tree.withStore { $0.totalLogical[0] }, 1_000)
+    }
 }

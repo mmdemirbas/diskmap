@@ -29,7 +29,7 @@ public final class LiveTree: @unchecked Sendable {
     /// in a third of a second, a busy one backs off on its own, and no constant
     /// has to guess how fast this particular machine writes.
     var lastFlushSeconds: Double = 0
-    private(set) var suspended = false
+    public private(set) var suspended = false
     /// Counters folded into the next flush record. One line per relist is a
     /// disk write per filesystem event, which is a cost the instrumentation
     /// adds to the thing it is measuring.
@@ -39,7 +39,7 @@ public final class LiveTree: @unchecked Sendable {
 
     /// Quiet: answer quickly. Busy: keep the duty cycle near a fifth.
     /// Unwatched: correctness still matters, promptness does not.
-    var flushDelay: Double {
+    public var flushDelay: Double {
         if suspended { return 30 }
         return min(max(0.35, lastFlushSeconds * 5), 8)
     }
@@ -228,7 +228,18 @@ public final class LiveTree: @unchecked Sendable {
 
         // Phase B: filesystem work, no lock held.
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        if fd < 0 { return markVanished(node) }
+        if fd < 0 {
+            // Only some of the ways this fails mean the directory is gone.
+            // Running out of descriptors, an interrupted call, or a permission
+            // that was revoked are all temporary, and treating them as a
+            // deletion does real damage twice over: the folder's bytes leave
+            // every total above it, and the next event on it finds no known
+            // children and rescans the entire subtree from scratch.
+            switch errno {
+            case ENOENT, ENOTDIR, ELOOP: return markVanished(node)
+            default: return false
+            }
+        }
         var entries: [DirEntry] = []
         _ = BulkReader().enumerate(dirFD: fd) { e in
             var fl = NodeFlags()
