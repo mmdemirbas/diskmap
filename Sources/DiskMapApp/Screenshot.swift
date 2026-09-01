@@ -80,7 +80,14 @@ enum OffscreenRenderer {
             t.suggestion = floor; t.installer = floor; t.staleFile = floor
             model.cleanupThresholds = t
         }
-        if env["DISKMAP_SHEET"] == "cleanup" {
+        if let history = env["DISKMAP_HISTORY_DIR"] {
+            model.snapshots = SnapshotStore(directory: URL(fileURLWithPath: history))
+        }
+        if env["DISKMAP_SHEET"] == "changes", let tree = model.tree {
+            model.currentDigest = tree.withStore { DiskDigest.of(store: $0, stats: tree.stats) }
+            model.openChanges()
+            view = AnyView(ChangesView(model: model).environment(\.colorScheme, scheme))
+        } else if env["DISKMAP_SHEET"] == "cleanup" {
             model.suggestions = MainActor.assumeIsolated {
                 AppModel.computeSuggestions(tree: model.tree!, root: model.currentDirectory,
                                             cache: SignatureCache(), revision: 0,

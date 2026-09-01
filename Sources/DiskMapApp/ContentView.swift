@@ -35,6 +35,10 @@ struct ContentView: View {
                              set: { if $0 == nil { model.cancelBulkTrash() } })) { wrapper in
             TrashConfirmView(model: model, plan: wrapper.plan)
         }
+        .sheet(isPresented: Binding(get: { model.showChanges },
+                                    set: { model.showChanges = $0 })) {
+            ChangesView(model: model)
+        }
         .sheet(isPresented: Binding(get: { model.showCleanup },
                                     set: { model.showCleanup = $0 })) {
             CleanupView(model: model)

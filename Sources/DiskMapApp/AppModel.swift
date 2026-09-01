@@ -272,6 +272,16 @@ final class AppModel: ObservableObject {
     /// a constant so a fixture can exercise the screen without a gigabyte of
     /// files, and so it can become a preference later.
     var cleanupThresholds = Cleanup.Thresholds()
+    /// Both settable so the offscreen renderer can point them at a fixture: a
+    /// comparison screen that cannot be rendered is a screen nobody has checked.
+    var snapshots = SnapshotStore()
+    /// What this scan looked like, kept so a comparison has a right-hand side
+    /// without re-walking the tree.
+    var currentDigest: DiskDigest?
+    @Published var showChanges = false
+    @Published var history: [SnapshotStore.Entry] = []
+    @Published var comparison: DigestDiff?
+    @Published var comparingTo: String?
     /// Every set of things the app called copies of each other, so the planner
     /// can refuse to empty one.
     private var matchGroups: [[Int32]] = []
@@ -458,6 +468,7 @@ final class AppModel: ObservableObject {
         live.onChange = { [weak self] in
             Task { @MainActor in self?.treeChanged() }
         }
+        recordDigest(of: live)
         live.startWatching()
         liveActive = live.liveUpdatesActive
         hasFullDiskAccess = FileActions.hasFullDiskAccess()
@@ -938,6 +949,70 @@ final class AppModel: ObservableObject {
                 return total + store.totalPhysical[Int(node)]
             }
         }
+    }
+
+    // MARK: - What changed since last time
+
+    /// A few megabytes per scan, so a month of them is affordable. Written off
+    /// the main thread: it walks the tree.
+    private func recordDigest(of live: LiveTree) {
+        let store = snapshots
+        Task { [weak self] in
+            let digest = await Task.detached(priority: .utility) {
+                live.withStore { DiskDigest.of(store: $0, stats: live.stats) }
+            }.value
+            self?.currentDigest = digest
+            await Task.detached(priority: .utility) {
+                do {
+                    try store.write(digest)
+                } catch {
+                    Telemetry.problem("snapshot", error.localizedDescription)
+                }
+            }.value
+            Telemetry.record("snapshot.write", ["folders": .int(Int64(digest.folders.count))])
+        }
+    }
+
+    func openChanges() {
+        showChanges = true
+        // Everything except this scan's own entry, which would compare the
+        // tree against itself.
+        let mine = currentDigest?.takenAt.timeIntervalSince1970
+        history = snapshots.list()
+            .filter { abs($0.takenAt.timeIntervalSince1970 - (mine ?? -1)) > 1 }
+            .reversed()
+        if comparison == nil, let latest = history.first { compare(with: latest) }
+    }
+
+    func compare(with entry: SnapshotStore.Entry) {
+        guard let current = currentDigest else { return }
+        do {
+            let old = try snapshots.read(entry.url)
+            let raw = DiskDigest.diff(from: old, to: current)
+            // Only the live tree can tell a deleted folder from one that merely
+            // shrank below what a digest records.
+            comparison = tree.map { live in
+                live.withStore { store in raw.resolvingVanished { store.find(path: $0) != nil } }
+            } ?? raw
+            comparingTo = entry.id
+            Telemetry.record("snapshot.compare",
+                             ["changes": .int(Int64(comparison?.changes.count ?? 0)),
+                              "delta": .int(comparison?.totalDelta ?? 0)])
+        } catch {
+            Telemetry.problem("snapshot.read", error.localizedDescription)
+            toast = L10n.shared[.snapshotUnreadable]
+        }
+    }
+
+    /// Opens the folder a change points at, which is the only useful next step
+    /// from a list of things that grew.
+    func revealChange(_ change: FolderChange) {
+        guard let node = tree?.withStore({ $0.find(path: change.path) }) else {
+            FileActions.revealInFinder([URL(fileURLWithPath: change.path)])
+            return
+        }
+        showChanges = false
+        enter(node)
     }
 
     // MARK: - Where the easy space is

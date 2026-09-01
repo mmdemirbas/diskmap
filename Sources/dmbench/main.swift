@@ -336,12 +336,57 @@ func cmdCleanup(_ path: String) {
     }
 }
 
+/// Records what a tree looks like now, so a later run has something to compare
+/// against. Writes one small file and touches nothing else.
+func cmdSnapshot(_ path: String, _ historyDir: String?) {
+    let result = DiskScanner().scan(ScanOptions(rootPath: path))
+    let store = historyDir.map { SnapshotStore(directory: URL(fileURLWithPath: $0)) }
+        ?? SnapshotStore()
+    let digest = DiskDigest.of(store: result.store, stats: result.stats)
+    do {
+        let url = try store.write(digest)
+        let size = (try? Data(contentsOf: url).count) ?? 0
+        print("wrote \(digest.folders.count) folders, \(fmt(Int64(size))) -> \(url.path)")
+        print("kept snapshots: \(store.list().count)")
+    } catch {
+        print("could not write: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+/// Compares the newest recorded snapshot against the tree as it is now.
+func cmdChanges(_ path: String, _ historyDir: String?) {
+    let store = historyDir.map { SnapshotStore(directory: URL(fileURLWithPath: $0)) }
+        ?? SnapshotStore()
+    guard let previous = store.list().last else {
+        print("no earlier snapshot; run `dmbench snapshot \(path)` first")
+        exit(1)
+    }
+    let result = DiskScanner().scan(ScanOptions(rootPath: path))
+    let now = DiskDigest.of(store: result.store, stats: result.stats)
+    guard let old = try? store.read(previous.url) else { print("unreadable snapshot"); exit(1) }
+
+    let diff = DiskDigest.diff(from: old, to: now)
+    print("changes since \(old.takenAt)")
+    print("  whole tree         \(diff.totalDelta >= 0 ? "+" : "-")\(fmt(abs(diff.totalDelta)))")
+    print("  folders moved      \(diff.changes.count)")
+    for change in diff.changes.prefix(20) {
+        let sign = change.ownDelta >= 0 ? "+" : "-"
+        print("  \("\(sign)\(fmt(abs(change.ownDelta)))".leftPadded(11))"
+              + "  \(change.kind.rawValue.rightPadded(9))  \(change.path)")
+    }
+}
+
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
 case "validate": cmdValidate(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "scan": cmdScan(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
 case "dupes": cmdDupes(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
+case "snapshot": cmdSnapshot(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                             args.count > 3 ? args[3] : nil)
+case "changes": cmdChanges(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                           args.count > 3 ? args[3] : nil)
 case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
 case "verify": cmdVerify(Array(args.dropFirst(2)))
@@ -349,5 +394,6 @@ case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.ho
                                budget: args.count > 3 ? (Int64(args[3]) ?? 0) << 30 : 12 << 30)
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
                + " | dupes <path> | verify <path> <path> | verifytop <path> [GB]"
-               + " | cleanup <path> | metrics [n]]")
+               + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
+               + " | metrics [n]]")
 }

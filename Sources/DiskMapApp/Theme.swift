@@ -155,16 +155,17 @@ func percentString(_ fraction: Double) -> String {
 /// Lists that can hold thousands of rows should still use a GeometryReader and
 /// take only the rows that fit; this is for the ones whose content is bounded.
 @ViewBuilder
-func viewportScroller<Content: View>(renderMode: Bool,
+func viewportScroller<Content: View>(renderMode: Bool, axis: Axis = .vertical,
                                      @ViewBuilder content: () -> Content) -> some View {
     if renderMode {
-        VStack(spacing: 0) {
-            content()
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .clipped()
-    } else {
+        content()
+            .frame(maxWidth: axis == .vertical ? .infinity : nil,
+                   maxHeight: axis == .vertical ? .infinity : nil,
+                   alignment: axis == .vertical ? .top : .leading)
+            .clipped()
+    } else if axis == .vertical {
         ScrollView { content() }
+    } else {
+        ScrollView(.horizontal, showsIndicators: false) { content() }
     }
 }

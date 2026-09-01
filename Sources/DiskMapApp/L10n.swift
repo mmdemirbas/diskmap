@@ -32,6 +32,21 @@ final class L10n: ObservableObject {
 
     var locale: Locale { Locale(identifier: active == .tr ? "tr_TR" : "en_US") }
 
+    /// The app has its own language switch, so a date left to the system
+    /// locale makes the screen read as half-translated. Cached per locale
+    /// because building a DateFormatter is not free.
+    private static var dateFormatters: [String: DateFormatter] = [:]
+    func dateTime(_ date: Date) -> String {
+        let key = locale.identifier
+        if let cached = Self.dateFormatters[key] { return cached.string(from: date) }
+        let f = DateFormatter()
+        f.locale = locale
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        Self.dateFormatters[key] = f
+        return f.string(from: date)
+    }
+
     subscript(_ key: K) -> String {
         let pair = L10n.table[key] ?? (key.rawValue, key.rawValue)
         return active == .tr ? pair.1 : pair.0
@@ -94,6 +109,15 @@ final class L10n: ObservableObject {
         active == .tr
             ? "\(fmt(total)) taneden en büyük \(fmt(shown)) tanesi · \(rest) daha var"
             : "the largest \(fmt(shown)) of \(fmt(total)) · \(rest) more not shown"
+    }
+    func sinceWhen(_ when: String) -> String {
+        active == .tr ? "\(when) tarihinden bu yana" : "since \(when)"
+    }
+    func grewBy(_ size: String) -> String {
+        active == .tr ? "\(size) büyüdü" : "Grew by \(size)"
+    }
+    func shrankBy(_ size: String) -> String {
+        active == .tr ? "\(size) küçüldü" : "Shrank by \(size)"
     }
     func couldFreeAbout(_ size: String) -> String {
         active == .tr ? "Yaklaşık \(size) boşaltılabilir" : "About \(size) could be freed"
@@ -203,6 +227,8 @@ final class L10n: ObservableObject {
         case freeUpSpace, lookingForSpace, nothingObviousToFree, reviewItems, showInFinder
         case suggestionsNeverDelete, close
         case safetyComesBack, safetyCopyRemains, safetyYourCall
+        case whatChanged, noEarlierScans, comeBackAfterAnotherScan, nothingMovedMuch
+        case noNetChange, deepestFolderExplains, snapshotUnreadable
         case suggestFolders, suggestFiles, suggestBuild, suggestCaches
         case suggestInstallers, suggestStale, suggestTrash
         case suggestFoldersWhy, suggestFilesWhy, suggestBuildWhy, suggestCachesWhy
@@ -292,6 +318,18 @@ final class L10n: ObservableObject {
         .suggestionsNeverDelete: ("Nothing is deleted from here — every one opens the full list first",
                                   "Buradan hiçbir şey silinmez, her biri önce tam listeyi açar"),
         .close: ("Close", "Kapat"),
+        .whatChanged: ("What changed", "Ne değişti"),
+        .noEarlierScans: ("No earlier scan to compare with yet",
+                          "Karşılaştırılacak daha önceki bir tarama yok"),
+        .comeBackAfterAnotherScan: ("Every scan is remembered. Come back after the next one.",
+                                    "Her tarama kaydediliyor. Bir sonrakinden sonra tekrar bakın."),
+        .nothingMovedMuch: ("Nothing moved by more than 50 MB",
+                            "50 MB'den fazla değişen bir şey yok"),
+        .noNetChange: ("No net change", "Net değişiklik yok"),
+        .deepestFolderExplains: ("Each change is attributed to the deepest folder that explains it",
+                                 "Her değişiklik onu açıklayan en derin klasöre yazılır"),
+        .snapshotUnreadable: ("That earlier scan could not be read",
+                              "O eski tarama okunamadı"),
         .safetyComesBack: ("comes back on its own", "kendiliğinden geri gelir"),
         .safetyCopyRemains: ("a copy stays", "bir kopya kalır"),
         .safetyYourCall: ("your call", "size kalmış"),

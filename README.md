@@ -295,6 +295,76 @@ change when the tree does.
 Run `dmbench scan <path>` for the same breakdown on any tree, or
 `dmbench dupes <path>` for the duplicate pass on its own.
 
+## Freeing space, not just seeing it
+
+Finding 600 GB of duplication and then deleting it one file at a time is not a
+disk tool, it is a report. Three things close that gap.
+
+**Free up space** (⇧⌘K) proposes where the easy space is, ordered by how safe
+each one is to accept rather than by size — what a toolchain rebuilds by itself
+first, then what leaves a copy behind, then what only you can judge. Sorting by
+size would put the most consequential decision at the top, which is the wrong
+advice for someone in a hurry.
+
+Two rules keep it honest. Folders called `build` or `target` are never proposed,
+because those are ordinary words and one may hold your work; only names that
+essentially never contain typed-in content qualify. And a dotfile home like
+`~/.gradle` is never proposed whole — it holds `gradle.properties`, which is
+proxy credentials and settings you typed once — so only the parts underneath it
+that a build regenerates are offered.
+
+**Ticking copies** in the Copies panel builds a selection that is deliberately
+separate from the highlight, so looking at something can never become deleting
+it. The action bar appears only once something is ticked.
+
+**Nothing is deleted without the full list.** The confirmation shows every path
+that will move, with its size, never just a count — a count is something you
+agree to, a list is something you check. It re-plans from the tree at the moment
+you press the button and refuses to act if anything moved in between, and one
+undo puts the whole batch back.
+
+The rules that protect your data live in `TrashPlanner`, in the core, where
+tests prove them rather than in a view where they would be conventions:
+
+- at least one member of every group the app called copies must survive —
+  counting a member as surviving only if it is neither selected nor inside a
+  selected folder, because selecting one copy and the other copy's parent takes
+  both and neither selection looks dangerous alone;
+- a scan root is never a target;
+- an item inside an already-selected folder is dropped rather than trashed twice;
+- items the tree already calls gone are dropped;
+- a path that cannot be shown to be inside the scanned tree is refused.
+
+**Deleting inside a synced folder is not a local operation.** The sync client
+removes the file from the service and from every other device, and Finder's
+*Put Back* only restores the local copy. Google Drive, OneDrive, Box, Dropbox
+and iCloud Drive are detected, and the confirmation carries a warning above the
+list naming the provider. This matters because the app ranks duplicate folders
+by size, so on a machine with a mirrored Drive the biggest match — and the most
+dangerous deletion available — is very often inside one.
+
+The Trash is reported and never proposed for deletion. Emptying it is the one
+operation that cannot be taken back, so the app shows the size and opens Finder.
+
+## What changed since last time
+
+⇧⌘D compares the disk now against an earlier scan: what grew, what shrank, what
+appeared, what is gone. It is the question a single scan cannot answer — "my
+disk lost 40 GB this week" has no answer in a picture of what is big *now*.
+
+Each change is attributed to the deepest folder that explains it. Without that,
+one download shows up in `Downloads`, in the home folder and in every folder
+between: the same fact five times, with the least useful statement of it at the
+top because it is the biggest.
+
+Every scan writes a digest — the folders above 20 MB and their sizes, a few
+megabytes gzipped — and the newest thirty are kept. That is deliberately not the
+whole tree: keeping the tree would cost about half a gigabyte per scan on a
+9.6M-node disk, which is an absurd thing for a tool about freeing space to
+write. The cost of the small form is that a folder which shrinks below the floor
+looks the same as one that was deleted, so the live tree is consulted before
+anything is called *vanished*.
+
 ## What it records about itself
 
 The app measures its own work and keeps the measurements. Two outputs from one
@@ -352,6 +422,8 @@ swift test                                   # 60 tests, including FSEvents end-
 .build/release/dmbench dupes <path>          # duplicate files and folders, and pass cost
 .build/release/dmbench verify <a> <b>        # read both and compare contents
 .build/release/dmbench verifytop <path> <GB> # verify the largest match under a budget
+.build/release/dmbench snapshot <path> [dir]  # record what the tree looks like now
+.build/release/dmbench changes <path> [dir]  # compare it against the newest record
 .build/release/dmbench metrics [n]           # what has been recorded, across runs
 ```
 
