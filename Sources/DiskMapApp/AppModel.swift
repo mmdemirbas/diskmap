@@ -56,6 +56,9 @@ enum ColourMode: String, CaseIterable, Identifiable {
     case type, age
     var id: String { rawValue }
     var key: L10n.K { self == .type ? .colourByType : .colourByAge }
+    /// Beside the other toolbar pickers there is no room for a sentence,
+    /// and the label above them already says what is being chosen.
+    var shortKey: L10n.K { self == .type ? .colourTypeShort : .colourAgeShort }
 }
 
 enum PanelMode: String, CaseIterable, Identifiable {
@@ -112,6 +115,7 @@ final class LayoutStore<L: KeyedLayout>: @unchecked Sendable {
     }
     func any() -> L? { lock.lock(); defer { lock.unlock() }; return current }
     func set(_ layout: L) { lock.lock(); current = layout; lock.unlock() }
+    func clear() { lock.lock(); current = nil; lock.unlock() }
 }
 
 struct PathRef: Identifiable { let id: Int32; let path: String }
@@ -372,6 +376,16 @@ final class AppModel: ObservableObject {
 
     private var activeScanner: DiskScanner?
     private var scanTask: Task<Void, Never>?
+    /// Which scan the app is currently listening to.
+    ///
+    /// Cancelling a scan does not stop it instantly: the token is cooperative,
+    /// so the detached task keeps going until the walk notices, then delivers a
+    /// partial result and calls back. Without a stamp to check, that callback
+    /// belonged to nobody in particular — it cleared the scanner handle of the
+    /// scan that had replaced it and pushed the UI back to the start screen
+    /// while the new scan was still running, which then finished and dropped a
+    /// result onto a screen that had moved on.
+    private(set) var scanGeneration = 0
 
     init() {
         volumes = VolumeInfo.mountedVolumes()
@@ -495,7 +509,8 @@ final class AppModel: ObservableObject {
     // MARK: - Scanning
 
     func scan() {
-        cancelScan()
+        cancelScan()                       // bumps the generation
+        let generation = scanGeneration
         let targets = scanTargets.isEmpty ? [selectedVolumePath] : scanTargets
         let path = targets[0]
         tree?.stopWatching()
@@ -510,23 +525,10 @@ final class AppModel: ObservableObject {
         // Both callbacks are built here, on the main actor, so the detached
         // task captures two immutable closures rather than a mutable `self`.
         let report: @Sendable (ScanProgressSnapshot) -> Void = { [weak self] snapshot in
-            Task { @MainActor in
-                guard let self, self.isScanning else { return }
-                self.phase = .scanning(snapshot)
-            }
+            Task { @MainActor in self?.applyProgress(snapshot, from: generation) }
         }
         let finish: @Sendable (ScanResult) -> Void = { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                self.activeScanner = nil
-                // A cancelled scan holds a partial tree; presenting it as
-                // complete would misstate what is on disk.
-                if result.stats.cancelled {
-                    self.phase = .idle
-                } else {
-                    self.adopt(LiveTree(result: result))
-                }
-            }
+            Task { @MainActor in self?.applyResult(result, from: generation) }
         }
 
         scanTask = Task.detached(priority: .userInitiated) {
@@ -540,11 +542,79 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Progress from a scan that may no longer be the one on screen.
+    func applyProgress(_ snapshot: ScanProgressSnapshot, from generation: Int) {
+        guard scanGeneration == generation, isScanning else { return }
+        phase = .scanning(snapshot)
+    }
+
+    /// The end of a scan, which may have been superseded while it wound down.
+    func applyResult(_ result: ScanResult, from generation: Int) {
+        guard scanGeneration == generation else { return }
+        activeScanner = nil
+        // A cancelled scan holds a partial tree; presenting it as complete
+        // would misstate what is on disk.
+        if result.stats.cancelled {
+            phase = .idle
+        } else {
+            adopt(LiveTree(result: result))
+        }
+    }
+
     func cancelScan() {
         activeScanner?.cancelToken.cancel()
         scanTask?.cancel()
         activeScanner = nil
         scanTask = nil
+        // Anything still in flight now speaks for a scan nobody is listening to.
+        scanGeneration &+= 1
+    }
+
+    /// Stop the running scan and go back to the chooser.
+    func stopScanning() {
+        cancelScan()
+        phase = .idle
+    }
+
+    /// Measure something else, without relaunching the app.
+    ///
+    /// Everything derived from the old tree goes with it. Node indices mean
+    /// nothing across two scans, so a selection, a tick list or a set of
+    /// findings carried over would point at whatever now happens to sit at
+    /// that index — and the tick list is the one that feeds the Trash.
+    func newScan() {
+        cancelScan()
+        tree?.stopWatching()
+        tree = nil
+        liveActive = false
+        stats = nil
+        reconciliation = nil
+        rejectedRoots = []
+        rootsSpanVolumes = false
+        rows = []
+        breadcrumb = []
+        currentDirectory = 0
+        expanded = []
+        selection = nil
+        selectedInfo = nil
+        checked = []
+        reviewing = nil
+        suggestions = []
+        summary = nil
+        largeFiles = []
+        matchGroups = []
+        reviewGroups = []
+        currentDigest = nil
+        // Trashed items are still in the Trash and still recoverable from
+        // Finder; the app just can no longer be the one to put them back,
+        // because "back" was a place in a tree that no longer exists.
+        undoStack = []
+        backStack = []
+        forwardStack = []
+        filterText = ""
+        layoutCache.clear(); sunburstCache.clear(); icicleCache.clear()
+        phase = .idle
+        refreshVolume()
     }
 
     func adopt(_ live: LiveTree) {
