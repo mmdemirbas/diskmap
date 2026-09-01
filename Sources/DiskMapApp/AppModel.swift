@@ -434,8 +434,11 @@ final class AppModel: ObservableObject {
         var seen = Set<String>()
         var out: [VolumeInfo] = []
         for path in paths {
-            guard let mount = volumeMountPoint(path), seen.insert(mount).inserted,
-                  let info = VolumeInfo.forPath(mount) else { continue }
+            guard let mount = volumeMountPoint(path) else { continue }
+            // The startup disk mounts twice and is one disk. Without folding
+            // them, ticking it produced two identical bars for "Macintosh HD".
+            let disk = RootSet.physicalDisk(mount)
+            guard seen.insert(disk).inserted, let info = VolumeInfo.forPath(disk) else { continue }
             out.append(info)
         }
         return out.isEmpty ? [volume].compactMap { $0 } : out
@@ -505,6 +508,34 @@ final class AppModel: ObservableObject {
             guard node >= 0, node < Int32(store.count) else { return 0 }
             return usePhysicalSize ? store.totalPhysical[Int(node)] : store.totalLogical[Int(node)]
         }
+    }
+
+    // MARK: - Naming a root
+
+    /// A root node's name is its absolute path, so a scan of two disks lists
+    /// "/", "/System/Volumes/Data" and "/Volumes/MD8TB" — three mount points
+    /// where the user chose two disks, one of which is silently split in half.
+    /// Roots are named the way the disk chooser names them instead, so there is
+    /// one vocabulary across the app.
+    private var rootNames: [String: String] = [:]
+
+    private func buildRootNames(_ roots: [String]) {
+        var names: [String: String] = [:]
+        for root in roots where volumeMountPoint(root) == root {
+            guard let info = VolumeInfo.forPath(root) else { continue }
+            // Both halves of the startup disk report the same volume name, and
+            // two rows called "Macintosh HD" is the confusion this replaces.
+            // The read-only half is the one that needs saying.
+            names[root] = root == "/" && roots.contains(RootSet.startupDataVolume)
+                ? L10n.shared.systemVolume(info.name)
+                : info.name
+        }
+        rootNames = names
+    }
+
+    /// The name to show for a node, which for a root is its disk.
+    func displayName(_ raw: String) -> String {
+        rootNames[raw] ?? abbreviatedName(raw)
     }
 
     /// The startup disk arrives as two volumes. Showing "2 locations" for what
@@ -679,6 +710,7 @@ final class AppModel: ObservableObject {
                 snapshotCount: Snapshots.list(volume: "/").count,
                 scanRootIsWholeVolume: RootSet.coversWholeVolume(live.roots))
         }
+        buildRootNames(live.roots)
         rejectedRoots = live.rejectedRoots
         // The startup disk is two volumes but one physical disk, so the
         // "more than one disk" note would be noise there.
@@ -792,7 +824,7 @@ final class AppModel: ObservableObject {
             guard node >= 0, node < Int32(store.count),
                   !store.flagSet(node).contains(.removed) else { return nil }
             let rawName = store.name(node)
-            let name = abbreviatedName(rawName)
+            let name = displayName(rawName)
             let isDir = store.isDirectory(node)
             let path = store.path(node)
             return ItemInfo(
@@ -827,7 +859,7 @@ final class AppModel: ObservableObject {
 
             var chain: [(Int32, String)] = []
             var cur = dir
-            while cur > 0 { chain.append((cur, store.name(cur))); cur = store.parent[Int(cur)] }
+            while cur > 0 { chain.append((cur, displayName(store.name(cur)))); cur = store.parent[Int(cur)] }
             chain.append((0, store.isMultiRoot ? "" : store.name(0)))
             return (dir, out, chain.reversed())
         }
@@ -858,7 +890,7 @@ final class AppModel: ObservableObject {
 
         let shown = kids.prefix(rowsPerLevel)
         for c in shown {
-            let name = abbreviatedName(store.name(c))
+            let name = displayName(store.name(c))
             let isDir = store.isDirectory(c)
             let childCount = store.children(c).count
             let isOpen = expanded.contains(c)
@@ -900,7 +932,8 @@ final class AppModel: ObservableObject {
     func cachedLayout(for size: CGSize) -> TreemapLayout? { layoutCache.get(layoutKey(size: size)) }
 
     nonisolated static func compute(tree: LiveTree, root: Int32, size: CGSize,
-                                    physical: Bool, filter: String, key: String) -> TreemapLayout {
+                                    physical: Bool, filter: String, key: String,
+                                    rootNames names: [String: String] = [:]) -> TreemapLayout {
         let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
         let needle = filter.lowercased()
@@ -911,7 +944,7 @@ final class AppModel: ObservableObject {
             var map: [Int32: CellInfo] = [:]
             map.reserveCapacity(laid.count)
             for c in laid where c.node >= 0 {
-                map[c.node] = cellInfo(store, c.node, physical: physical)
+                map[c.node] = cellInfo(store, c.node, physical: physical, rootNames: names)
             }
             span.end(["cells": .int(Int64(laid.count)),
                       "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
@@ -920,12 +953,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    nonisolated static func cellInfo(_ store: NodeStore, _ node: Int32, physical: Bool) -> CellInfo {
+    nonisolated static func cellInfo(_ store: NodeStore, _ node: Int32, physical: Bool,
+                                    rootNames: [String: String] = [:]) -> CellInfo {
         let name = store.name(node)
         let isDir = store.isDirectory(node)
         let age = AgeBucket.of(secondsAgo: Date().timeIntervalSince1970
                                - Double(store.mtime[Int(node)]))
-        return CellInfo(name: abbreviatedName(name),
+        return CellInfo(name: rootNames[name] ?? abbreviatedName(name),
                         category: Categorizer.of(name: name, isDirectory: isDir),
                         bytes: physical ? store.totalPhysical[Int(node)] : store.totalLogical[Int(node)],
                         isDirectory: isDir,
@@ -934,8 +968,8 @@ final class AppModel: ObservableObject {
     }
 
     nonisolated static func computeSunburst(tree: LiveTree, root: Int32, size: CGSize,
-                                            physical: Bool, filter: String,
-                                            key: String) -> SunburstLayout {
+                                            physical: Bool, filter: String, key: String,
+                                            rootNames names: [String: String] = [:]) -> SunburstLayout {
         let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
         let needle = filter.lowercased()
@@ -946,7 +980,7 @@ final class AppModel: ObservableObject {
             var map: [Int32: CellInfo] = [:]
             map.reserveCapacity(segments.count)
             for segment in segments where segment.node >= 0 {
-                map[segment.node] = cellInfo(store, segment.node, physical: physical)
+                map[segment.node] = cellInfo(store, segment.node, physical: physical, rootNames: names)
             }
             span.end(["cells": .int(Int64(segments.count)),
                       "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
@@ -956,8 +990,8 @@ final class AppModel: ObservableObject {
     }
 
     nonisolated static func computeIcicle(tree: LiveTree, root: Int32, size: CGSize,
-                                          physical: Bool, filter: String,
-                                          key: String) -> IcicleLayout {
+                                          physical: Bool, filter: String, key: String,
+                                          rootNames names: [String: String] = [:]) -> IcicleLayout {
         let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 4)
         let needle = filter.lowercased()
@@ -968,7 +1002,7 @@ final class AppModel: ObservableObject {
             var map: [Int32: CellInfo] = [:]
             map.reserveCapacity(cells.count)
             for cell in cells where cell.node >= 0 {
-                map[cell.node] = cellInfo(store, cell.node, physical: physical)
+                map[cell.node] = cellInfo(store, cell.node, physical: physical, rootNames: names)
             }
             span.end(["cells": .int(Int64(cells.count)),
                       "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
@@ -984,7 +1018,7 @@ final class AppModel: ObservableObject {
         guard let tree, size.width > 16, size.height > 16 else { return nil }
         let layout = Self.computeIcicle(tree: tree, root: currentDirectory, size: size,
                                         physical: usePhysicalSize, filter: filterText,
-                                        key: layoutKey(size: size))
+                                        key: layoutKey(size: size), rootNames: rootNames)
         icicleCache.set(layout)
         return layout
     }
@@ -996,7 +1030,7 @@ final class AppModel: ObservableObject {
         guard let tree, size.width > 16, size.height > 16 else { return nil }
         let layout = Self.computeSunburst(tree: tree, root: currentDirectory, size: size,
                                           physical: usePhysicalSize, filter: filterText,
-                                          key: layoutKey(size: size))
+                                          key: layoutKey(size: size), rootNames: rootNames)
         sunburstCache.set(layout)
         return layout
     }
@@ -1006,7 +1040,7 @@ final class AppModel: ObservableObject {
         guard let tree, size.width > 8, size.height > 8 else { return nil }
         let l = Self.compute(tree: tree, root: currentDirectory, size: size,
                              physical: usePhysicalSize, filter: filterText,
-                             key: layoutKey(size: size))
+                             key: layoutKey(size: size), rootNames: rootNames)
         layoutCache.set(l)
         return l
     }
@@ -1017,12 +1051,13 @@ final class AppModel: ObservableObject {
         let root = currentDirectory
         let physical = usePhysicalSize
         let filter = filterText
+        let names = rootNames
         switch visualization {
         case .treemap:
             if layoutCache.get(key) != nil { return }
             let layout = await Task.detached(priority: .userInitiated) {
                 Self.compute(tree: tree, root: root, size: size, physical: physical,
-                             filter: filter, key: key)
+                             filter: filter, key: key, rootNames: names)
             }.value
             guard !Task.isCancelled else { return }
             layoutCache.set(layout)
@@ -1030,7 +1065,7 @@ final class AppModel: ObservableObject {
             if sunburstCache.get(key) != nil { return }
             let layout = await Task.detached(priority: .userInitiated) {
                 Self.computeSunburst(tree: tree, root: root, size: size, physical: physical,
-                                     filter: filter, key: key)
+                                     filter: filter, key: key, rootNames: names)
             }.value
             guard !Task.isCancelled else { return }
             sunburstCache.set(layout)
@@ -1038,7 +1073,7 @@ final class AppModel: ObservableObject {
             if icicleCache.get(key) != nil { return }
             let layout = await Task.detached(priority: .userInitiated) {
                 Self.computeIcicle(tree: tree, root: root, size: size, physical: physical,
-                                   filter: filter, key: key)
+                                   filter: filter, key: key, rootNames: names)
             }.value
             guard !Task.isCancelled else { return }
             icicleCache.set(layout)

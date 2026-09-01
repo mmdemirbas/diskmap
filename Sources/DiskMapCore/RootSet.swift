@@ -62,6 +62,14 @@ public enum RootSet {
         return out
     }
 
+    /// The startup disk is two mounted volumes, a read-only System at "/" and a
+    /// writable Data volume, but it is one disk with one capacity. Anything
+    /// counting disks has to fold them together or it reports the same disk
+    /// twice, with the same size, under the same name.
+    public static func physicalDisk(_ mountPoint: String) -> String {
+        mountPoint == startupDataVolume ? "/" : mountPoint
+    }
+
     /// True when these roots together cover an entire volume, which is the only
     /// case where comparing the scan against the volume's own used figure means
     /// anything.

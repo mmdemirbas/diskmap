@@ -114,4 +114,25 @@ final class ScanTargetTests: XCTestCase {
         XCTAssertTrue(m.scanTargets.allSatisfy { diskPaths.contains($0) },
                       "a default target is showing up in the folder section")
     }
+
+    /// Ticking the startup disk adds two roots, because macOS mounts it as two
+    /// volumes. It is still one disk with one capacity, and showing it twice
+    /// under the same name with the same size reads as a bug because it is one.
+    func testTheStartupDiskCountsOnce() throws {
+        let m = AppModel()
+        m.clearTargets()
+        m.addTargets([URL(fileURLWithPath: "/")])
+        m.scanTargets = RootSet.expandStartupVolume(m.scanTargets)
+        XCTAssertEqual(m.scanTargets.count, 2, "the startup disk should expand to two roots")
+
+        let names = m.targetedVolumes.map(\.path)
+        XCTAssertEqual(names.count, Set(names).count, "the same disk is listed twice")
+        XCTAssertEqual(m.targetedVolumes.count, 1)
+    }
+
+    func testFoldingIsOnlyForTheStartupPair() throws {
+        XCTAssertEqual(RootSet.physicalDisk("/System/Volumes/Data"), "/")
+        XCTAssertEqual(RootSet.physicalDisk("/"), "/")
+        XCTAssertEqual(RootSet.physicalDisk("/Volumes/Backup"), "/Volumes/Backup")
+    }
 }

@@ -190,6 +190,12 @@ final class L10n: ObservableObject {
             ? "\(fmt(count)) sabit bağlantı zaten sayılmış dosyaları gösteriyor: \(size) yalnızca bir kez var."
             : "\(fmt(count)) hard links point at files already counted: \(size) that exists only once."
     }
+    /// The read-only half of the startup disk, which holds macOS itself and
+    /// almost nothing a person put there.
+    func systemVolume(_ name: String) -> String {
+        active == .tr ? "\(name) (Sistem)" : "\(name) (System)"
+    }
+
     func exportedTo(_ name: String, _ size: String) -> String {
         active == .tr ? "\(name) yazıldı (\(size))" : "Wrote \(name) (\(size))"
     }

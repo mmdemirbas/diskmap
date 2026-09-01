@@ -17,7 +17,7 @@ struct StartView: View {
 
             dropPanel.frame(width: 520)
 
-            if !model.rejectedRoots.isEmpty { skipped.frame(width: 520) }
+            skipped.frame(width: 520).opacity(model.rejectedRoots.isEmpty ? 0 : 1)
 
             actions
 
@@ -47,18 +47,20 @@ struct StartView: View {
             sectionHeader(loc[.foldersHeader], trailing: {
                 Button(loc[.addMore]) { model.chooseFolders() }.controlSize(.mini)
             })
-            if folderTargets.isEmpty {
-                Divider()
-                emptyFolders
-            } else {
-                targetScroller {
+            Divider()
+            // One shape, always. Ticking a disk can absorb a folder that was
+            // inside it, and that must not resize the panel under the pointer.
+            targetScroller {
+                if folderTargets.isEmpty {
+                    emptyFolders
+                } else {
                     ForEach(folderTargets, id: \.self) { path in
-                        Divider()
                         folderRow(path)
+                        Divider()
                     }
                 }
-                .frame(maxHeight: 132)
             }
+            .frame(height: 108)
         }
         .background(
             RoundedRectangle(cornerRadius: 10)
@@ -143,14 +145,19 @@ struct StartView: View {
     }
 
     private var skipped: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(model.rejectedRoots.enumerated()), id: \.offset) { _, item in
-                Label(loc.rejectedNote(item.path, localizedReason(item.reason)),
-                      systemImage: "info.circle")
-                    .font(.caption).foregroundStyle(.secondary)
+        viewportScroller(renderMode: model.renderMode) {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(model.rejectedRoots.enumerated()), id: \.offset) { _, item in
+                    Label(loc.rejectedNote(item.path, localizedReason(item.reason)),
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 34)
     }
 
     // MARK: - Actions
@@ -162,6 +169,7 @@ struct StartView: View {
         }
         .keyboardShortcut(.defaultAction).controlSize(.large)
         .disabled(!model.canScan)
+        .frame(width: 240)
     }
 
     private var accessWarning: some View {
