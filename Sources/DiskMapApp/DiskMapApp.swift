@@ -47,6 +47,9 @@ struct DiskMapApp: App {
                 }
             }
             CommandMenu(loc[.scanMenu]) {
+                Button(loc[.freeUpSpace]) { model.openCleanup() }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                Divider()
                 Button(loc[.rescan]) { model.scan() }
                     .keyboardShortcut("r", modifiers: .command)
                 Divider()

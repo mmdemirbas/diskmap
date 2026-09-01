@@ -90,6 +90,9 @@ final class L10n: ObservableObject {
             ? "\(fmt(total)) öğeden \(fmt(restored)) tanesi geri alındı"
             : "Restored \(fmt(restored)) of \(fmt(total))"
     }
+    func couldFreeAbout(_ size: String) -> String {
+        active == .tr ? "Yaklaşık \(size) boşaltılabilir" : "About \(size) could be freed"
+    }
     func selectedForRemoval(_ n: Int, _ size: String) -> String {
         active == .tr ? "\(fmt(n)) öğe işaretli · \(size)" : "\(fmt(n)) ticked · \(size)"
     }
@@ -192,6 +195,13 @@ final class L10n: ObservableObject {
         case nothingToRemove, selectionChanged, cannotRemoveScanRoot, cannotRemoveOutside
         case selectExtras, clearSelection, moveSelectedToTrash, keepsOneCopy
         case syncWarningTitle, alsoDeletedFromService, reviewBeforeTrashing, trashIsRecoverable
+        case freeUpSpace, lookingForSpace, nothingObviousToFree, reviewItems, showInFinder
+        case suggestionsNeverDelete, close
+        case safetyComesBack, safetyCopyRemains, safetyYourCall
+        case suggestFolders, suggestFiles, suggestBuild, suggestCaches
+        case suggestInstallers, suggestStale, suggestTrash
+        case suggestFoldersWhy, suggestFilesWhy, suggestBuildWhy, suggestCachesWhy
+        case suggestInstallersWhy, suggestStaleWhy, suggestTrashWhy
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
         case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
         case duplicatesNote, duplicatesEmpty, reclaimable, sectionFolders, sectionFiles
@@ -268,6 +278,39 @@ final class L10n: ObservableObject {
         .reviewBeforeTrashing: ("Everything that will be moved:", "Taşınacak her şey:"),
         .trashIsRecoverable: ("Goes to the Trash, and ⌘Z puts it all back",
                               "Çöp Kutusu'na gider, ⌘Z hepsini geri alır"),
+        .freeUpSpace: ("Free up space", "Yer aç"),
+        .lookingForSpace: ("Looking for the easy wins…", "Kolay kazançlar aranıyor…"),
+        .nothingObviousToFree: ("Nothing obvious to free up here. The Copies panel and the largest-files list are the places to look next.",
+                                "Burada kolayca boşaltılacak bir şey yok. Sırada Kopyalar paneli ve en büyük dosyalar listesi var."),
+        .reviewItems: ("Review…", "İncele…"),
+        .showInFinder: ("Show in Finder", "Finder'da göster"),
+        .suggestionsNeverDelete: ("Nothing is deleted from here — every one opens the full list first",
+                                  "Buradan hiçbir şey silinmez, her biri önce tam listeyi açar"),
+        .close: ("Close", "Kapat"),
+        .safetyComesBack: ("comes back on its own", "kendiliğinden geri gelir"),
+        .safetyCopyRemains: ("a copy stays", "bir kopya kalır"),
+        .safetyYourCall: ("your call", "size kalmış"),
+        .suggestFolders: ("Duplicate folders", "Yinelenen klasörler"),
+        .suggestFiles: ("Duplicate files", "Yinelenen dosyalar"),
+        .suggestBuild: ("Build output and package caches", "Derleme çıktısı ve paket önbellekleri"),
+        .suggestCaches: ("Application caches", "Uygulama önbellekleri"),
+        .suggestInstallers: ("Installers you already ran", "Çalıştırdığınız kurulum dosyaları"),
+        .suggestStale: ("Big files you have not touched in years", "Yıllardır dokunmadığınız büyük dosyalar"),
+        .suggestTrash: ("The Trash", "Çöp Kutusu"),
+        .suggestFoldersWhy: ("Folders holding the same thing as another folder. One copy of each is always kept.",
+                             "Başka bir klasörle aynı şeyi tutan klasörler. Her birinden bir kopya her zaman kalır."),
+        .suggestFilesWhy: ("Files with the same name and size as another. One copy of each is always kept.",
+                           "Başkasıyla aynı ad ve boyutta olan dosyalar. Her birinden bir kopya her zaman kalır."),
+        .suggestBuildWhy: ("node_modules, DerivedData and friends. The toolchain rebuilds them; deleting one costs you an install, not any work.",
+                           "node_modules, DerivedData ve benzerleri. Araçlar bunları yeniden üretir; silmek sadece bir kurulum süresine mal olur."),
+        .suggestCachesWhy: ("Files apps keep to start faster. They rebuild them; a few apps will be slow once.",
+                            "Uygulamaların hızlı açılmak için tuttuğu dosyalar. Yeniden oluştururlar; birkaç uygulama bir kez yavaş açılır."),
+        .suggestInstallersWhy: ("Disk images and packages. If the app is installed, the installer has done its job.",
+                                "Disk görüntüleri ve kurulum paketleri. Uygulama kuruluysa kurulum dosyası işini yapmış demektir."),
+        .suggestStaleWhy: ("Large files with a modification date over two years old. Nothing here says they are unwanted — only that you have not opened them.",
+                           "İki yıldan eski değiştirilme tarihine sahip büyük dosyalar. Bu, istenmedikleri anlamına gelmez; yalnızca açılmadıklarını gösterir."),
+        .suggestTrashWhy: ("Already deleted, still taking up space. Emptying it cannot be undone, so this app will not do it for you.",
+                           "Zaten silinmiş, hâlâ yer kaplıyor. Boşaltmak geri alınamaz, bu yüzden uygulama sizin yerinize yapmaz."),
         .scanning: ("Scanning", "Taranıyor"),
         .size: ("Size", "Boyut"),
         .share: ("Share", "Pay"),

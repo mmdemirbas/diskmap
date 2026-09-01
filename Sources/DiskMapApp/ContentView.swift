@@ -35,6 +35,10 @@ struct ContentView: View {
                              set: { if $0 == nil { model.cancelBulkTrash() } })) { wrapper in
             TrashConfirmView(model: model, plan: wrapper.plan)
         }
+        .sheet(isPresented: Binding(get: { model.showCleanup },
+                                    set: { model.showCleanup = $0 })) {
+            CleanupView(model: model)
+        }
         .sheet(isPresented: $showReconciliation) {
             if let v = model.volume {
                 ReconciliationSheet(volume: v, reconciliation: model.reconciliation, stats: model.stats)
@@ -162,6 +166,11 @@ struct ContentView: View {
             TextField(loc[.filter], text: $model.filterText)
                 .textFieldStyle(.roundedBorder).frame(width: 120)
                 .onChange(of: model.filterText) { _, _ in model.rebuild() }
+
+            Button { model.openCleanup() } label: {
+                Label(loc[.freeUpSpace], systemImage: "sparkles")
+            }
+            .help(loc[.freeUpSpace])
 
             Picker("", selection: $model.visualization) {
                 ForEach(Visualization.allCases) { v in

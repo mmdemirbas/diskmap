@@ -306,16 +306,48 @@ extension String {
     }
 }
 
+/// What the app would propose, printed and nothing more. Deletes nothing,
+/// selects nothing, and exists so the suggestions can be sanity-checked
+/// against a real disk before anyone is asked to act on them.
+func cmdCleanup(_ path: String) {
+    let store = DiskScanner().scan(ScanOptions(rootPath: path)).store
+    let folders = FolderMatches.find(store: store, root: 0, limit: 10_000)
+    let files = Duplicates.find(store: store, root: 0, limit: 10_000, insideMatched: folders)
+
+    let start = DispatchTime.now().uptimeNanoseconds
+    let found = Cleanup.suggest(store: store, root: 0,
+                                folderCopies: folders.map(\.nodes),
+                                fileCopies: files.map(\.nodes))
+    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+
+    let actionable = found.filter { !$0.nodes.isEmpty }
+    print("cleanup suggestions for \(path)")
+    print("  pass took          \(String(format: "%.2fs", elapsed))")
+    print("  could be freed     \(fmt(actionable.reduce(Int64(0)) { $0 + $1.bytes }))")
+    print("")
+    for suggestion in found {
+        let safety = ["comes back", "a copy stays", "your call"][suggestion.safety.rawValue]
+        print("  \(fmt(suggestion.bytes).leftPadded(10))  \(suggestion.kind.rawValue.rightPadded(18))"
+              + "\(String(suggestion.itemCount).leftPadded(6)) items  [\(safety)]")
+        // A few examples, so the proposal can be judged rather than trusted.
+        for node in suggestion.nodes.sorted(by: { store.totalPhysical[Int($0)] > store.totalPhysical[Int($1)] }).prefix(3) {
+            print("      \(fmt(store.totalPhysical[Int(node)]).leftPadded(9))  \(store.path(node))")
+        }
+    }
+}
+
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
 case "validate": cmdValidate(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "scan": cmdScan(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
 case "dupes": cmdDupes(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
+case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
 case "verify": cmdVerify(Array(args.dropFirst(2)))
 case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                                budget: args.count > 3 ? (Int64(args[3]) ?? 0) << 30 : 12 << 30)
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
-               + " | dupes <path> | verify <path> <path> | verifytop <path> [GB] | metrics [n]]")
+               + " | dupes <path> | verify <path> <path> | verifytop <path> [GB]"
+               + " | cleanup <path> | metrics [n]]")
 }

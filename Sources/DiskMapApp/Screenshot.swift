@@ -75,7 +75,20 @@ enum OffscreenRenderer {
         // assumed. Rendering it directly is the only way to see it here.
         let view: AnyView
         if let home = env["DISKMAP_SYNC_HOME"] { model.syncRoots = SyncRoots.detected(home: home) }
-        if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
+        if let floor = env["DISKMAP_CLEANUP_MIN"].flatMap(Int64.init) {
+            var t = Cleanup.Thresholds()
+            t.suggestion = floor; t.installer = floor; t.staleFile = floor
+            model.cleanupThresholds = t
+        }
+        if env["DISKMAP_SHEET"] == "cleanup" {
+            model.suggestions = MainActor.assumeIsolated {
+                AppModel.computeSuggestions(tree: model.tree!, root: model.currentDirectory,
+                                            cache: SignatureCache(), revision: 0,
+                                            thresholds: model.cleanupThresholds)
+            }
+            model.suggestionsLoading = false
+            view = AnyView(CleanupView(model: model).environment(\.colorScheme, scheme))
+        } else if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
             model.checkExtras(match.copies)
             model.requestBulkTrash()
             if let plan = model.pendingBulkTrash {

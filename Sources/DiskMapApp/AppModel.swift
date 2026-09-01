@@ -265,6 +265,13 @@ final class AppModel: ObservableObject {
     /// is only what the eye is on — a highlight must never become a delete.
     @Published var checked: Set<Int32> = []
     @Published var pendingBulkTrash: TrashPlan?
+    @Published var suggestions: [CleanupSuggestion] = []
+    @Published var suggestionsLoading = false
+    @Published var showCleanup = false
+    /// Sizes below which a suggestion is not worth making. A field rather than
+    /// a constant so a fixture can exercise the screen without a gigabyte of
+    /// files, and so it can become a preference later.
+    var cleanupThresholds = Cleanup.Thresholds()
     /// Every set of things the app called copies of each other, so the planner
     /// can refuse to empty one.
     private var matchGroups: [[Int32]] = []
@@ -931,6 +938,60 @@ final class AppModel: ObservableObject {
                 return total + store.totalPhysical[Int(node)]
             }
         }
+    }
+
+    // MARK: - Where the easy space is
+
+    /// Computed when asked for rather than kept up to date: it needs the match
+    /// passes, and nobody wants to pay for those while browsing.
+    func openCleanup() {
+        guard let tree else { return }
+        showCleanup = true
+        suggestionsLoading = true
+        let root = currentDirectory
+        let cache = signatureCache
+        let revision = tree.changeCount
+        let thresholds = cleanupThresholds
+        Task { [weak self] in
+            let found = await Task.detached(priority: .userInitiated) {
+                Self.computeSuggestions(tree: tree, root: root, cache: cache,
+                                        revision: revision, thresholds: thresholds)
+            }.value
+            guard let self else { return }
+            self.suggestions = found
+            self.suggestionsLoading = false
+        }
+    }
+
+    nonisolated static func computeSuggestions(tree: LiveTree, root: Int32,
+                                               cache: SignatureCache, revision: Int,
+                                               thresholds: Cleanup.Thresholds) -> [CleanupSuggestion] {
+        tree.withStore { store in
+            let folders = FolderMatches.find(store: store, root: root,
+                                             precomputed: cache.signatures(for: store,
+                                                                           revision: revision))
+            let files = Duplicates.find(store: store, root: root, insideMatched: folders)
+            return Cleanup.suggest(store: store, root: root,
+                                   folderCopies: folders.map(\.nodes),
+                                   fileCopies: files.map(\.nodes),
+                                   thresholds: thresholds)
+        }
+    }
+
+    /// A suggestion never deletes. It fills the selection and hands over to the
+    /// same confirmation list a hand-made selection ends up in.
+    func review(_ suggestion: CleanupSuggestion) {
+        guard !suggestion.nodes.isEmpty else { return }
+        showCleanup = false
+        checked = Set(suggestion.nodes)
+        Telemetry.record("cleanup.review", ["kind": .text(suggestion.kind.rawValue),
+                                            "items": .int(Int64(suggestion.itemCount)),
+                                            "bytes": .int(suggestion.bytes)])
+        requestBulkTrash()
+    }
+
+    func showTrashInFinder() {
+        FileActions.revealInFinder([URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")])
     }
 
     // MARK: - Bulk trash
