@@ -115,6 +115,10 @@ public struct DiffSummary: Sendable, Equatable {
 public struct FolderComparison: Sendable {
     public var left: String
     public var right: String
+    /// The two folders as one tree of pairs, for a screen that lets you open
+    /// them. Separate from `entries`, which is the flat list of decisions a
+    /// plan is built from — the same walk, asked two different questions.
+    public var tree: DiffTree
     public var entries: [DiffEntry]
     public var summary: DiffSummary
     public var leftTotal: Int64
@@ -137,10 +141,12 @@ public struct FolderComparison: Sendable {
 
     public func entries(_ kind: DiffKind) -> [DiffEntry] { entries.filter { $0.kind == kind } }
 
-    public init(left: String, right: String, entries: [DiffEntry], summary: DiffSummary,
+    public init(left: String, right: String, tree: DiffTree, entries: [DiffEntry],
+                summary: DiffSummary,
                 leftTotal: Int64, rightTotal: Int64, leftItems: Int, rightItems: Int,
                 unreadable: Int, cancelled: Bool, elapsed: Double, verifiedAt: Date? = nil) {
-        self.left = left; self.right = right; self.entries = entries; self.summary = summary
+        self.left = left; self.right = right; self.tree = tree
+        self.entries = entries; self.summary = summary
         self.leftTotal = leftTotal; self.rightTotal = rightTotal
         self.leftItems = leftItems; self.rightItems = rightItems
         self.unreadable = unreadable; self.cancelled = cancelled; self.elapsed = elapsed
@@ -195,25 +201,20 @@ public enum FolderDiff {
         let ls = leftScan.store, rs = rightScan.store
 
         // Subtree hashes let a folder whose contents match all the way down be
-        // reported as one line instead of ten thousand.
-        let lsig = FolderMatches.signatures(ls)
-        let rsig = FolderMatches.signatures(rs)
-        let litems = subtreeItems(ls), ritems = subtreeItems(rs)
+        // reported as one line instead of ten thousand, and let it stay one
+        // line until somebody opens it.
+        let tree = DiffTree(left: ls, right: rs,
+                            leftSig: FolderMatches.signatures(ls),
+                            rightSig: FolderMatches.signatures(rs),
+                            leftItems: subtreeItems(ls), rightItems: subtreeItems(rs))
 
         var entries: [DiffEntry] = []
         var summary = DiffSummary()
-        ls.withNameBytes { lb in
-            rs.withNameBytes { rb in
-                var ctx = Context(l: ls, lb: lb, lsig: lsig, litems: litems,
-                                  r: rs, rb: rb, rsig: rsig, ritems: ritems,
-                                  cancel: cancel)
-                walk(&ctx, 0, 0, prefix: "", into: &entries, summary: &summary)
-            }
-        }
+        collect(tree, 0, prefix: "", into: &entries, summary: &summary, cancel: cancel)
         for index in entries.indices { entries[index].id = index }
 
         let comparison = FolderComparison(
-            left: left, right: right, entries: entries, summary: summary,
+            left: left, right: right, tree: tree, entries: entries, summary: summary,
             leftTotal: ls.totalPhysical.first ?? 0, rightTotal: rs.totalPhysical.first ?? 0,
             leftItems: leftScan.stats.files + leftScan.stats.directories,
             rightItems: rightScan.stats.files + rightScan.stats.directories,
@@ -222,6 +223,7 @@ public enum FolderDiff {
             elapsed: Date().timeIntervalSince(started))
 
         span.end(["entries": .int(Int64(entries.count)),
+                  "treeNodes": .int(Int64(tree.count)),
                   "identical": .int(Int64(summary.identical)),
                   "differing": .int(Int64(summary.differing)),
                   "onlyLeft": .int(Int64(summary.onlyLeft)),
@@ -231,26 +233,14 @@ public enum FolderDiff {
         return .success(comparison)
     }
 
-    // MARK: - Walking the two trees together
-
-    private struct Context {
-        let l: NodeStore
-        let lb: UnsafeBufferPointer<UInt8>
-        let lsig: [UInt64]
-        let litems: [Int32]
-        let r: NodeStore
-        let rb: UnsafeBufferPointer<UInt8>
-        let rsig: [UInt64]
-        let ritems: [Int32]
-        let cancel: CancelToken?
-    }
+    // MARK: - Walking the two folders together
 
     /// How many nodes sit at or below each one.
     ///
     /// Both stores here come from a scan that has just finished, where a
     /// child's index is always greater than its parent's, so one reverse pass
     /// visits every child before its parent.
-    private static func subtreeItems(_ store: NodeStore) -> [Int32] {
+    static func subtreeItems(_ store: NodeStore) -> [Int32] {
         var out = [Int32](repeating: 1, count: store.count)
         guard store.count > 1 else { return out }
         var i = store.count - 1
@@ -262,132 +252,65 @@ public enum FolderDiff {
         return out
     }
 
-    private static func walk(_ c: inout Context, _ ln: Int32, _ rn: Int32, prefix: String,
-                             into out: inout [DiffEntry], summary: inout DiffSummary) {
-        if c.cancel?.isCancelled == true { return }
-        let lk = sortedChildren(c.l, ln, c.lb)
-        let rk = sortedChildren(c.r, rn, c.rb)
+    /// Turns the tree into the list of decisions, opening the folders that
+    /// differ on the way through.
+    ///
+    /// Where it stops is the whole design. A folder the other side does not
+    /// have is one decision however many files it holds, and so is a folder
+    /// whose contents match all the way down; neither is walked into, so
+    /// neither costs anything until somebody opens it on screen. A folder that
+    /// differs is walked into, because the differences are why we are here.
+    private static func collect(_ tree: DiffTree, _ id: Int32, prefix: String,
+                                into out: inout [DiffEntry], summary: inout DiffSummary,
+                                cancel: CancelToken?) {
+        if cancel?.isCancelled == true { return }
+        for child in tree.children(of: id) {
+            if cancel?.isCancelled == true { return }
+            let kind = tree.kind(child)
+            let name = tree.name(child)
+            let relative = prefix.isEmpty ? name : prefix + "/" + name
 
-        var i = 0, j = 0
-        while i < lk.count || j < rk.count {
-            if c.cancel?.isCancelled == true { return }
-            if j == rk.count {
-                emit(one: .left, c.l, lk[i], c.litems, prefix, &out, &summary); i += 1; continue
+            if kind == .differs,
+               tree.isDirectory(child, on: .left), tree.isDirectory(child, on: .right) {
+                collect(tree, child, prefix: relative, into: &out, summary: &summary,
+                        cancel: cancel)
+                tree.absorb(child, into: id)
+                continue
             }
-            if i == lk.count {
-                emit(one: .right, c.r, rk[j], c.ritems, prefix, &out, &summary); j += 1; continue
+
+            let side: Side = tree.isPresent(child, on: .left) ? .left : .right
+            let isDirectory = tree.isDirectory(child, on: side)
+            let below = tree.items(child, on: side)
+
+            switch kind {
+            case .identical:
+                summary.identical += isDirectory ? below + 1 : 1
+                summary.identicalBytes += tree.bytes(child, on: .left)
+            case .differs:
+                summary.differing += 1
+                summary.differingBytes += max(tree.bytes(child, on: .left),
+                                              tree.bytes(child, on: .right))
+            case .onlyLeft:
+                summary.onlyLeft += isDirectory ? below + 1 : 1
+                summary.onlyLeftBytes += tree.bytes(child, on: .left)
+            case .onlyRight:
+                summary.onlyRight += isDirectory ? below + 1 : 1
+                summary.onlyRightBytes += tree.bytes(child, on: .right)
+            case .typeClash:
+                summary.typeClashes += 1
             }
-            let order = compareNames(c.lb, c.l.nameSpan(lk[i]), c.rb, c.r.nameSpan(rk[j]))
-            if order < 0 {
-                emit(one: .left, c.l, lk[i], c.litems, prefix, &out, &summary); i += 1
-            } else if order > 0 {
-                emit(one: .right, c.r, rk[j], c.ritems, prefix, &out, &summary); j += 1
-            } else {
-                both(&c, lk[i], rk[j], prefix, &out, &summary)
-                i += 1; j += 1
-            }
-        }
-    }
+            if tree.dataless(child) { summary.datalessItems += 1 }
 
-    private static func both(_ c: inout Context, _ ln: Int32, _ rn: Int32, _ prefix: String,
-                             _ out: inout [DiffEntry], _ summary: inout DiffSummary) {
-        let name = c.l.name(ln)
-        let relative = prefix.isEmpty ? name : prefix + "/" + name
-        let leftIsDir = c.l.isDirectory(ln), rightIsDir = c.r.isDirectory(rn)
-
-        if leftIsDir != rightIsDir {
-            summary.typeClashes += 1
-            out.append(entry(relative, .typeClash, c, ln, rn, isDirectory: leftIsDir))
-            return
+            out.append(DiffEntry(
+                id: 0, relativePath: relative, kind: kind, isDirectory: isDirectory,
+                leftBytes: tree.bytes(child, on: .left),
+                rightBytes: tree.bytes(child, on: .right),
+                leftModified: tree.modified(child, on: .left),
+                rightModified: tree.modified(child, on: .right),
+                items: isDirectory ? below : 0,
+                dataless: tree.dataless(child)))
+            tree.absorb(child, into: id)
         }
-        if leftIsDir {
-            // The whole subtree hashes the same, so there is nothing below to
-            // report and no reason to walk it.
-            if c.lsig[Int(ln)] == c.rsig[Int(rn)] {
-                summary.identical += Int(c.litems[Int(ln)])
-                summary.identicalBytes += c.l.totalPhysical[Int(ln)]
-                out.append(entry(relative, .identical, c, ln, rn, isDirectory: true))
-                return
-            }
-            walk(&c, ln, rn, prefix: relative, into: &out, summary: &summary)
-            return
-        }
-        if c.l.totalLogical[Int(ln)] == c.r.totalLogical[Int(rn)] {
-            summary.identical += 1
-            summary.identicalBytes += c.l.totalPhysical[Int(ln)]
-            out.append(entry(relative, .identical, c, ln, rn, isDirectory: false))
-        } else {
-            summary.differing += 1
-            summary.differingBytes += max(c.l.totalPhysical[Int(ln)], c.r.totalPhysical[Int(rn)])
-            out.append(entry(relative, .differs, c, ln, rn, isDirectory: false))
-        }
-    }
-
-    private static func entry(_ relative: String, _ kind: DiffKind, _ c: Context,
-                              _ ln: Int32, _ rn: Int32, isDirectory: Bool) -> DiffEntry {
-        let placeholder = c.l.flagSet(ln).contains(.dataless) || c.r.flagSet(rn).contains(.dataless)
-        return DiffEntry(id: 0, relativePath: relative, kind: kind, isDirectory: isDirectory,
-                         leftBytes: c.l.totalPhysical[Int(ln)],
-                         rightBytes: c.r.totalPhysical[Int(rn)],
-                         leftModified: c.l.mtime[Int(ln)], rightModified: c.r.mtime[Int(rn)],
-                         items: isDirectory ? Int(c.litems[Int(ln)]) - 1 : 0,
-                         dataless: placeholder)
-    }
-
-    /// A name that only one side has. Its subtree is not enumerated: copying or
-    /// removing the folder is one decision, whatever it holds.
-    private static func emit(one side: Side, _ store: NodeStore, _ node: Int32,
-                             _ subtree: [Int32], _ prefix: String,
-                             _ out: inout [DiffEntry], _ summary: inout DiffSummary) {
-        let name = store.name(node)
-        let relative = prefix.isEmpty ? name : prefix + "/" + name
-        let isDir = store.isDirectory(node)
-        let bytes = store.totalPhysical[Int(node)]
-        let placeholder = store.flagSet(node).contains(.dataless)
-        if placeholder { summary.datalessItems += 1 }
-        let below = Int(subtree[Int(node)])
-
-        if side == .left {
-            summary.onlyLeft += below
-            summary.onlyLeftBytes += bytes
-            out.append(DiffEntry(id: 0, relativePath: relative, kind: .onlyLeft,
-                                 isDirectory: isDir, leftBytes: bytes, rightBytes: 0,
-                                 leftModified: store.mtime[Int(node)], rightModified: 0,
-                                 items: isDir ? below - 1 : 0, dataless: placeholder))
-        } else {
-            summary.onlyRight += below
-            summary.onlyRightBytes += bytes
-            out.append(DiffEntry(id: 0, relativePath: relative, kind: .onlyRight,
-                                 isDirectory: isDir, leftBytes: 0, rightBytes: bytes,
-                                 leftModified: 0, rightModified: store.mtime[Int(node)],
-                                 items: isDir ? below - 1 : 0, dataless: placeholder))
-        }
-    }
-
-    private static func sortedChildren(_ store: NodeStore, _ node: Int32,
-                                       _ bytes: UnsafeBufferPointer<UInt8>) -> [Int32] {
-        var kids: [Int32] = []
-        for child in store.children(node) where !store.flagSet(child).contains(.removed) {
-            kids.append(child)
-        }
-        kids.sort { compareNames(bytes, store.nameSpan($0), bytes, store.nameSpan($1)) < 0 }
-        return kids
-    }
-
-    /// Byte order, not collation. Both sides use the same rule, which is all a
-    /// merge needs — and it costs no Strings, which at a million names is the
-    /// difference between a second and a minute.
-    @inline(__always)
-    private static func compareNames(_ a: UnsafeBufferPointer<UInt8>, _ sa: (offset: Int, length: Int),
-                                     _ b: UnsafeBufferPointer<UInt8>,
-                                     _ sb: (offset: Int, length: Int)) -> Int {
-        let shared = min(sa.length, sb.length)
-        if shared > 0, let pa = a.baseAddress, let pb = b.baseAddress {
-            let order = memcmp(pa + sa.offset, pb + sb.offset, shared)
-            if order != 0 { return order < 0 ? -1 : 1 }
-        }
-        if sa.length == sb.length { return 0 }
-        return sa.length < sb.length ? -1 : 1
     }
 
     private static func scan(_ path: String, cancel: CancelToken?) -> ScanResult {

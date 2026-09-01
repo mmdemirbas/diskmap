@@ -643,32 +643,34 @@ struct DiffColumnHeader: View {
     }
 }
 
-/// The two folders, one down each side.
+/// The two folders, one down each side, as a tree you can open.
 ///
 /// Extracted from the sheet so a test can draw it on its own: a list that
 /// renders nothing offscreen is a bug this codebase has shipped seven times,
 /// and it is invisible in a capture of the whole sheet because the header above
 /// it still draws.
 ///
-/// Both panes show the same relative path. That is duplication on purpose — it
-/// is how a folder comparison reads, and the eye needs a fixed thing to scan
-/// down each side while the sizes and dates beside it change.
+/// Rows are pairs, so the two sides open together — there is no state in which
+/// the left is showing a folder's contents and the right is not. Both panes
+/// carry the triangle anyway: whichever side you are reading, the way in is
+/// under your pointer rather than across the row.
 struct DiffRowList: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared
     @Environment(\.colorScheme) private var scheme
 
     static let rowHeight: CGFloat = 30
+    private static let indent: CGFloat = 13
 
     @ViewBuilder var body: some View {
-        if model.compareRows.isEmpty {
+        if model.compareRows.isEmpty || model.folderComparison == nil {
             Text(emptyMessage).font(.callout).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
+        } else if let tree = model.folderComparison?.tree {
             viewportScroller(renderMode: model.renderMode) {
                 LazyVStack(spacing: 0) {
-                    ForEach(model.compareRows.prefix(visibleRows)) { entry in
-                        row(entry)
+                    ForEach(model.compareRows.prefix(visibleRows), id: \.self) { id in
+                        row(tree, id)
                         Divider()
                     }
                     if model.compareRowsOmitted > 0 {
@@ -695,49 +697,53 @@ struct DiffRowList: View {
     /// be drawn to be thrown away.
     var visibleRows: Int { model.renderMode ? 11 : model.compareRows.count }
 
-    func row(_ entry: DiffEntry) -> some View {
+    func row(_ tree: DiffTree, _ id: Int32) -> some View {
         HStack(spacing: 0) {
-            pane(entry, .left)
-            Text(entry.kind.relation)
+            pane(tree, id, .left)
+            Text(tree.kind(id).relation)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(entry.kind.color(scheme))
+                .foregroundStyle(tree.kind(id).color(scheme))
                 .frame(width: DiffColumns.gutter)
-            pane(entry, .right)
+            pane(tree, id, .right)
         }
         .padding(.horizontal, 16)
         .frame(height: Self.rowHeight)
         .contentShape(Rectangle())
-        .contextMenu { menu(entry) }
+        .onTapGesture(count: 2) { toggle(tree, id) }
+        .contextMenu { menu(tree, id) }
     }
 
     /// One side of one row. Absent is drawn as a filled gap rather than left
     /// blank: a row with nothing on the right and a row that has scrolled past
     /// the end look the same otherwise.
-    func pane(_ entry: DiffEntry, _ side: Side) -> some View {
-        let present = entry.isPresent(on: side)
-        let newest = entry.newerSide == side
+    func pane(_ tree: DiffTree, _ id: Int32, _ side: Side) -> some View {
+        let present = tree.isPresent(id, on: side)
+        let newest = tree.newerSide(id) == side
+        let items = tree.items(id, on: side)
         return ZStack {
             RoundedRectangle(cornerRadius: 3)
                 .fill(Color.primary.opacity(0.045))
                 .opacity(present ? 0 : 1)
             HStack(spacing: 6) {
-                Image(systemName: entry.isDirectory(on: side) ? "folder.fill" : "doc")
+                Spacer().frame(width: CGFloat(tree.depth(id)) * Self.indent)
+                disclosure(tree, id, side)
+                Image(systemName: tree.isDirectory(id, on: side) ? "folder.fill" : "doc")
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
                     .frame(width: DiffColumns.icon)
-                Text(entry.relativePath).font(.system(size: 11.5))
-                    .lineLimit(1).truncationMode(.head)
-                if entry.isDirectory(on: side), entry.items > 0 {
-                    Text("· \(loc.itemCount(entry.items))")
+                Text(tree.name(id)).font(.system(size: 11.5))
+                    .lineLimit(1).truncationMode(.middle)
+                if tree.isDirectory(id, on: side), items > 0 {
+                    Text("· \(loc.itemCount(items))")
                         .font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                Text(shortBytes(entry.bytes(on: side)))
+                Text(shortBytes(tree.bytes(id, on: side)))
                     .font(.system(size: 11, design: .monospaced))
                     .frame(width: DiffColumns.size, alignment: .trailing)
                 // The newer of the two dates is the one carrying the answer to
                 // "which of these did I work on last", so it is the one that is
                 // legible; the other stays quiet.
-                Text(loc.shortDate(side == .left ? entry.leftModified : entry.rightModified))
+                Text(loc.shortDate(tree.modified(id, on: side)))
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(newest ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                     .frame(width: DiffColumns.date, alignment: .trailing)
@@ -748,17 +754,50 @@ struct DiffRowList: View {
         .frame(maxWidth: .infinity)
     }
 
-    @ViewBuilder func menu(_ entry: DiffEntry) -> some View {
-        if entry.isPresent(on: .left) {
-            Button("\(loc[.revealInFinder]) — \(loc[.compareLeftSide])") { reveal(entry, .left) }
+    /// Reserved whether or not there is anything to open, so the names below a
+    /// folder line up with the names beside it.
+    ///
+    /// Shown per side rather than per row: where a folder faces a file, only
+    /// the folder has anything to open, and a triangle beside the file would be
+    /// claiming otherwise.
+    @ViewBuilder private func disclosure(_ tree: DiffTree, _ id: Int32,
+                                         _ side: Side) -> some View {
+        let node = tree.node(id, on: side)
+        let can = tree.isExpandable(id) && node >= 0
+            && tree.store(side).isDirectory(node)
+            && tree.store(side).childCount[Int(node)] > 0
+        Image(systemName: model.isCompareExpanded(id) ? "chevron.down" : "chevron.right")
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 11)
+            .opacity(can ? 1 : 0)
+            .contentShape(Rectangle())
+            .onTapGesture { if can { toggle(tree, id) } }
+    }
+
+    private func toggle(_ tree: DiffTree, _ id: Int32) {
+        guard tree.isExpandable(id) else { return }
+        model.toggleCompareExpanded(id)
+    }
+
+    @ViewBuilder func menu(_ tree: DiffTree, _ id: Int32) -> some View {
+        if tree.isExpandable(id) {
+            Button(model.isCompareExpanded(id) ? loc[.collapseFolder] : loc[.expandFolder]) {
+                toggle(tree, id)
+            }
+            Divider()
         }
-        if entry.isPresent(on: .right) {
-            Button("\(loc[.revealInFinder]) — \(loc[.compareRightSide])") { reveal(entry, .right) }
+        if tree.isPresent(id, on: .left) {
+            Button("\(loc[.revealInFinder]) — \(loc[.compareLeftSide])") { reveal(tree, id, .left) }
+        }
+        if tree.isPresent(id, on: .right) {
+            Button("\(loc[.revealInFinder]) — \(loc[.compareRightSide])") { reveal(tree, id, .right) }
         }
     }
 
-    func reveal(_ entry: DiffEntry, _ side: Side) {
+    func reveal(_ tree: DiffTree, _ id: Int32, _ side: Side) {
         guard let comparison = model.folderComparison else { return }
-        FileActions.revealInFinder([URL(fileURLWithPath: comparison.path(entry.relativePath, on: side))])
+        let path = comparison.path(tree.relativePath(id), on: side)
+        FileActions.revealInFinder([URL(fileURLWithPath: path)])
     }
 }

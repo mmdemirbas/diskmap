@@ -201,10 +201,10 @@ final class SyncPlanTests: XCTestCase {
 
     func testWritingIntoAWholeVolumeIsRefused() throws {
         try write(left, "a.txt", bytes: 10)
-        let comparison = FolderComparison(
-            left: left.path, right: "/", entries: [], summary: DiffSummary(),
-            leftTotal: 0, rightTotal: 0, leftItems: 0, rightItems: 0,
-            unreadable: 0, cancelled: false, elapsed: 0)
+        // A real comparison with the target swapped afterwards, because the
+        // one thing that cannot be done is comparing something against "/".
+        var comparison = try compare()
+        comparison.right = "/"
         switch SyncPlanner.plan(comparison, direction: .mirrorLeftToRight) {
         case .success: XCTFail("mirroring onto a volume root must be refused")
         case .failure(let f): XCTAssertEqual(f, CompareRefusal.wouldWriteToAVolumeRoot("/"))

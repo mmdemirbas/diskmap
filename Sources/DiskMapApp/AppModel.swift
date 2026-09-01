@@ -113,11 +113,19 @@ enum CompareFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    func accepts(_ entry: DiffEntry) -> Bool {
+    /// Which kinds this chip wants. Matched against what a node's subtree
+    /// holds rather than against the node's own kind, so a closed folder that
+    /// could contain a match is never hidden — hiding it would make everything
+    /// inside unreachable.
+    var mask: DiffKindMask {
         switch self {
-        case .all: true
-        case .differences: entry.kind != .identical
-        default: entry.kind == kind
+        case .all: .everything
+        case .differences: DiffKindMask.everything.subtracting(.identical)
+        case .identical: .identical
+        case .differs: .differs
+        case .onlyLeft: .onlyLeft
+        case .onlyRight: .onlyRight
+        case .typeClash: .typeClash
         }
     }
 }
@@ -140,12 +148,14 @@ enum DateFilter: String, CaseIterable, Identifiable {
     /// so every filter but `any` excludes it. That is the honest answer rather
     /// than an accident: "what did I touch more recently over there" is not a
     /// question about a file that only exists here.
-    func accepts(_ entry: DiffEntry) -> Bool {
+    func accepts(_ tree: DiffTree, _ id: Int32) -> Bool {
         switch self {
-        case .any: true
-        case .leftNewer: entry.newerSide == .left
-        case .rightNewer: entry.newerSide == .right
-        case .sameDate: entry.leftModified > 0 && entry.leftModified == entry.rightModified
+        case .any: return true
+        case .leftNewer: return tree.newerSide(id) == .left
+        case .rightNewer: return tree.newerSide(id) == .right
+        case .sameDate:
+            let left = tree.modified(id, on: .left)
+            return left > 0 && left == tree.modified(id, on: .right)
         }
     }
 }
@@ -372,10 +382,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var compareVerification: VerifyDifferences?
     @Published private(set) var compareVerifying = false
     @Published private(set) var compareVerifyBytes: Int64 = 0
-    /// The rows on screen, biggest first. Held rather than derived: sorting a
-    /// million entries inside `body` would do it again on every redraw.
-    @Published private(set) var compareRows: [DiffEntry] = []
+    /// The rows on screen, as tree nodes. Held rather than derived: walking the
+    /// tree inside `body` would do it again on every redraw.
+    @Published private(set) var compareRows: [Int32] = []
     @Published private(set) var compareRowsOmitted = 0
+    @Published private(set) var compareExpanded: Set<Int32> = []
     private var compareCancel: CancelToken?
     private var compareGeneration = 0
 
@@ -1777,6 +1788,7 @@ final class AppModel: ObservableObject {
                 self.folderComparison = comparison
                 self.compareLeft = comparison.left
                 self.compareRight = comparison.right
+                self.openTheDifferences(comparison.tree)
                 self.rebuildCompareRows()
             case .failure(let refusal):
                 self.compareRefusal = refusal
@@ -1791,15 +1803,62 @@ final class AppModel: ObservableObject {
     static let compareRowLimit = 2000
 
     func rebuildCompareRows() {
-        guard let comparison = folderComparison else {
+        guard let tree = folderComparison?.tree else {
             compareRows = []; compareRowsOmitted = 0; return
         }
-        let wanted = comparison.entries.filter {
-            compareFilter.accepts($0) && dateFilter.accepts($0)
+        var rows: [Int32] = []
+        appendCompareRows(tree, 0, into: &rows)
+        compareRowsOmitted = max(0, rows.count - Self.compareRowLimit)
+        compareRows = Array(rows.prefix(Self.compareRowLimit))
+    }
+
+    /// The visible frontier: the children of the root, and of everything open
+    /// below it, in the order the tree holds them — biggest first within each
+    /// folder.
+    private func appendCompareRows(_ tree: DiffTree, _ id: Int32, into rows: inout [Int32]) {
+        for child in tree.children(of: id) {
+            guard compareExpanded.contains(child), tree.isExpandable(child) else {
+                if showsCompareRow(tree, child) { rows.append(child) }
+                continue
+            }
+            // An open folder is judged on what is under it: if the filter
+            // emptied it and the folder is not itself a match, it goes too,
+            // rather than sitting there as a row that leads nowhere.
+            let start = rows.count
+            rows.append(child)
+            appendCompareRows(tree, child, into: &rows)
+            if rows.count == start + 1, !showsCompareRow(tree, child) { rows.removeLast() }
         }
-        let sorted = wanted.sorted { max($0.leftBytes, $0.rightBytes) > max($1.leftBytes, $1.rightBytes) }
-        compareRows = Array(sorted.prefix(Self.compareRowLimit))
-        compareRowsOmitted = sorted.count - compareRows.count
+    }
+
+    /// A closed folder is judged on itself; the kind filter keeps it when its
+    /// subtree could hold a match, so the way in is never hidden. The date
+    /// filter has no such escape — what is under a closed folder was never
+    /// paired up, so there are no two dates to compare — and judging it on its
+    /// own pair of dates is the honest reading of the row on screen.
+    private func showsCompareRow(_ tree: DiffTree, _ id: Int32) -> Bool {
+        guard !compareFilter.mask.isDisjoint(with: tree.contains(id)) else { return false }
+        return dateFilter.accepts(tree, id)
+    }
+
+    func toggleCompareExpanded(_ id: Int32) {
+        if compareExpanded.contains(id) { compareExpanded.remove(id) }
+        else { compareExpanded.insert(id) }
+        rebuildCompareRows()
+    }
+
+    func isCompareExpanded(_ id: Int32) -> Bool { compareExpanded.contains(id) }
+
+    /// Opens the folders the comparison itself had to walk into — the ones that
+    /// differ — so the screen starts on the differences instead of on a closed
+    /// root. Everything it stopped at stays shut, which is the point of having
+    /// stopped.
+    func openTheDifferences(_ tree: DiffTree) {
+        var open = Set<Int32>()
+        for id in 0..<Int32(tree.count) where tree.isOpen(id) && tree.isExpandable(id) {
+            open.insert(id)
+        }
+        compareExpanded = open
     }
 
     /// What each chip would show, in items rather than rows — the same measure

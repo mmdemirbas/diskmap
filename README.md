@@ -392,17 +392,43 @@ columns at the same x, and the relation between them in the gutter: `=`, `≠`,
 blank space, because a row with nothing on the right and the end of the list
 look the same otherwise. Of the two dates, the newer one is the legible one.
 
+**Both sides open.** It is a tree table: folders carry a disclosure triangle on
+each side and open together, because a row is a *pair* and there is no sensible
+state where the left is showing a folder's contents and the right is not. The
+folders the comparison had to walk into — the ones that differ — start open, so
+the screen opens on the differences rather than on a closed root. The ones it
+stopped at start shut, which is the point of having stopped: a
+hundred-thousand-file match is one row until you click it, and opening it is a
+merge of two child lists rather than a walk of the disk.
+
+Under that, the tree stores nothing either scan already holds — no paths, no
+names, no sizes, just the two node numbers a name resolves to — so a node is
+twenty-odd bytes and a folder nobody opens costs nothing at all.
+
 **The key is the filter.** Clicking *Only left*, *Same*, *Different* or any
 other swatch narrows the list to it; *Differences* is the default and *All*
 turns the filter off. A separate row of filter controls would say the same words
 twice and cost a band of chrome.
+
+Filtering a tree has one rule worth stating, because getting it wrong hides
+things: **a closed folder is kept when its subtree could hold a match**, since
+hiding it would make everything inside unreachable. For folders the comparison
+walked into that is exact, accumulated from what it found; for the ones it
+stopped at it follows from why it stopped — a matching folder holds only
+matches, and a folder one side does not have holds only things that side does
+not have. An open folder is judged the other way round, on what is under it: if
+the filter emptied it, it goes too rather than sitting there as a row leading
+nowhere.
 
 **Which side is newer is a second, independent filter**, because two files can
 hold the same bytes and still have been written at different times — *left is
 newer*, *right is newer*, *same date*. That combination is the only way to find
 a file edited in place: same name, same length, months apart. An item present on
 one side only has no second date to be newer than, so every date filter but
-*any* leaves it out.
+*any* leaves it out. Dates are the one thing a closed folder cannot answer for
+its contents — they were never paired up — so under a date filter a closed
+folder is judged on its own two dates, and finding a file edited in place inside
+a matching folder means opening it.
 
 | Direction | What happens |
 |---|---|
@@ -506,10 +532,13 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
   a rescan compacts.
 - A scan can be cancelled, but a cancelled scan is discarded rather than shown
   as a partial tree, because a partial total would read as a real one.
-- **A comparison holds one entry per name the two folders share**, so two very
-  large trees cost memory while the sheet is open. It is freed when the sheet
+- **A comparison holds the two scans for as long as the sheet is open**, so it
+  can open a folder without going back to the disk. They are freed when it
   closes. The list on screen is capped and says how many rows it is not showing;
-  the plan is always built from every entry, never from the visible rows.
+  the plan is always built from every decision, never from the visible rows.
+- **A chain of folders that differ by one file deep inside shows every level of
+  the chain.** That is what a tree is, and collapsing single-child chains would
+  hide where the file actually lives.
 - **A sync is not undoable in one step.** What it moved to the Trash can be put
   back from Finder, and the result screen opens it there; what it copied stays.
   A single undo would be half an undo presented as a whole one.
@@ -517,7 +546,7 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
 ## Development
 
 ```sh
-swift test                                   # 245 tests, including FSEvents end-to-end
+swift test                                   # 247 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation

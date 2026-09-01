@@ -57,6 +57,12 @@ final class CompareFlowTests: XCTestCase {
         XCTFail("timed out waiting for \(what)")
     }
 
+    /// What is on screen, as paths, which is what the assertions are about.
+    private func paths(_ m: AppModel) -> [String] {
+        guard let tree = m.folderComparison?.tree else { return [] }
+        return m.compareRows.map { tree.relativePath($0) }
+    }
+
     private func model() -> AppModel {
         let m = AppModel()
         m.compareLeft = left.path
@@ -122,6 +128,7 @@ final class CompareFlowTests: XCTestCase {
             XCTAssertEqual(m.compareRows.count, expected, "\(filter)")
             XCTAssertEqual(m.compareRowsOmitted, 0)
         }
+        m.compareFilter = .differences
         XCTAssertNotNil(m.folderComparison, "filtering re-walked the disk")
         XCTAssertEqual(m.folderComparison?.entries.count, held?.entries.count)
     }
@@ -144,27 +151,28 @@ final class CompareFlowTests: XCTestCase {
         m.compareFilter = .all
         m.dateFilter = .leftNewer
         m.rebuildCompareRows()
-        XCTAssertEqual(m.compareRows.map(\.relativePath), ["same-but-newer.bin"],
+        XCTAssertEqual(paths(m), ["same-but-newer.bin"],
                        "matched by content, still newer on the left")
 
         m.dateFilter = .sameDate
         m.rebuildCompareRows()
-        XCTAssertEqual(m.compareRows.map(\.relativePath), ["untouched.bin"])
+        XCTAssertEqual(paths(m), ["untouched.bin"])
 
         // Something present on one side only has no second date to beat, so
         // every date filter but "any" leaves it out.
         m.dateFilter = .rightNewer
         m.rebuildCompareRows()
-        XCTAssertTrue(m.compareRows.isEmpty, "\(m.compareRows.map(\.relativePath))")
+        XCTAssertTrue(m.compareRows.isEmpty, "\(paths(m))")
 
         m.dateFilter = .any
         m.compareFilter = .onlyLeft
         m.rebuildCompareRows()
-        XCTAssertEqual(m.compareRows.map(\.relativePath), ["mine.bin"])
+        XCTAssertEqual(paths(m), ["mine.bin"])
     }
 
-    /// Rows are biggest first, because that is the order in which the decisions
-    /// are worth making.
+    /// Biggest first within each folder, because that is the order in which
+    /// the decisions inside it are worth making. Across folders the tree's own
+    /// order wins, which is what makes it a tree.
     func testRowsAreBiggestFirst() async throws {
         try write(left, "small.bin", bytes: 1_000)
         try write(left, "large.bin", bytes: 900_000)
@@ -175,7 +183,8 @@ final class CompareFlowTests: XCTestCase {
         m.runComparison()
         try await waitFor("the comparison") { m.folderComparison != nil }
         XCTAssertGreaterThan(m.compareRows.count, 3, "not enough rows to be a test")
-        let sizes = m.compareRows.map { max($0.leftBytes, $0.rightBytes) }
+        let tree = try XCTUnwrap(m.folderComparison?.tree)
+        let sizes = m.compareRows.map { max(tree.bytes($0, on: .left), tree.bytes($0, on: .right)) }
         XCTAssertEqual(sizes, sizes.sorted(by: >))
     }
 
@@ -225,26 +234,82 @@ final class CompareFlowTests: XCTestCase {
     /// pictures, which a list drawing nothing cannot do.
     func testTheRowsThemselvesReachThePageOffscreen() async throws {
         for i in 0..<12 { try write(left, "difference-\(i).bin", bytes: 10_000 + i * 97) }
+        try write(right, "theirs.bin", bytes: 5_000)
 
-        let many = model()
-        many.renderMode = true
-        many.runComparison()
-        try await waitFor("the wide comparison") { many.folderComparison != nil }
-        XCTAssertGreaterThan(many.compareRows.count, 6, "not enough rows to be a test")
+        let m = model()
+        m.renderMode = true
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+        XCTAssertGreaterThan(m.compareRows.count, 6, "not enough rows to be a test")
+        let wide = try XCTUnwrap(render(DiffRowList(model: m)), "the list drew nothing")
 
-        // The same screen with one row in it.
-        let few = AppModel()
-        few.renderMode = true
-        few.folderComparison = many.folderComparison
-        few.rebuildCompareRows()
-        few.folderComparison?.entries = Array(many.folderComparison!.entries.prefix(1))
-        few.rebuildCompareRows()
-        XCTAssertEqual(few.compareRows.count, 1)
+        // The same tree, filtered down to the one thing only the right has.
+        m.compareFilter = .onlyRight
+        m.rebuildCompareRows()
+        XCTAssertEqual(m.compareRows.count, 1)
+        let narrow = try XCTUnwrap(render(DiffRowList(model: m)), "the list drew nothing")
 
-        let wide = try XCTUnwrap(render(DiffRowList(model: many)), "the list drew nothing")
-        let narrow = try XCTUnwrap(render(DiffRowList(model: few)), "the list drew nothing")
         XCTAssertNotEqual(wide.data, narrow.data,
                           "twelve rows and one row drew the same picture, so the rows are not there")
+    }
+
+    /// Opening a folder the comparison stopped at is the whole point of the
+    /// tree: a hundred-thousand-file match costs one row until it is clicked,
+    /// and then it costs what is inside it.
+    func testOpeningAFolderTheComparisonStoppedAtShowsItsContents() async throws {
+        for i in 0..<8 { try write(left, "archive/file-\(i).bin", bytes: 1_000 + i) }
+        try write(left, "loose.bin", bytes: 50)
+        try write(right, "loose.bin", bytes: 50)
+
+        let m = model()
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+        let tree = try XCTUnwrap(m.folderComparison?.tree)
+
+        XCTAssertEqual(paths(m), ["archive"], "one row for the whole folder")
+        let folder = try XCTUnwrap(m.compareRows.first)
+        XCTAssertTrue(tree.isExpandable(folder))
+        XCTAssertFalse(tree.isOpen(folder), "it should not have been walked into")
+
+        m.toggleCompareExpanded(folder)
+        XCTAssertEqual(m.compareRows.count, 9, "the folder and its eight files")
+        XCTAssertEqual(Set(paths(m).dropFirst()),
+                       Set((0..<8).map { "archive/file-\($0).bin" }))
+        for id in m.compareRows.dropFirst() {
+            XCTAssertEqual(tree.kind(id), .onlyLeft, "everything inside is one-sided too")
+        }
+
+        m.toggleCompareExpanded(folder)
+        XCTAssertEqual(paths(m), ["archive"], "and it shuts again")
+    }
+
+    /// Opening a matching folder must not turn it into a difference: the rows
+    /// underneath are all `identical`, so the default filter hides them and the
+    /// folder shuts back to a single row.
+    func testOpeningAMatchingFolderShowsMatchesRatherThanDifferences() async throws {
+        for base in [left!, right!] {
+            for i in 0..<6 { try write(base, "same/file-\(i).bin", bytes: 2_000 + i) }
+        }
+        try write(left, "extra.bin", bytes: 40)
+
+        let m = model()
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+        let tree = try XCTUnwrap(m.folderComparison?.tree)
+        XCTAssertEqual(paths(m), ["extra.bin"], "a matching folder is not a difference")
+
+        m.compareFilter = .all
+        m.rebuildCompareRows()
+        let folder = try XCTUnwrap(m.compareRows.first { tree.name($0) == "same" })
+        m.toggleCompareExpanded(folder)
+        XCTAssertEqual(m.compareRows.count, 8, "the folder, its six files and the extra")
+
+        // Back to differences: the folder is open, everything under it matches,
+        // so the open folder is dropped rather than left as a row leading
+        // nowhere.
+        m.compareFilter = .differences
+        m.rebuildCompareRows()
+        XCTAssertEqual(paths(m), ["extra.bin"])
     }
 
     private func render<V: View>(_ view: V) -> (data: Data, size: CGSize)? {
