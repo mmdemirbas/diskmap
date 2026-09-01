@@ -1,0 +1,194 @@
+---
+title: Reading a scan from another program
+eyebrow: DiskMap
+subtitle: The JSON document, field by field, and what it deliberately leaves out
+audience: Anyone integrating with DiskMap
+date: 2026-09-01
+accent: teal
+summary: One versioned JSON document, produced either by the `diskmap` command or by Export Results in the app. Folders above a size floor, the largest files, the totals and the volumes — with the floor and the cut-off reported so a consumer can tell what is missing rather than assume it saw everything.
+documents_history: true
+---
+
+## How do I get one?
+
+Two ways, producing the same document.
+
+**From the command line**, for anything automated:
+
+```
+diskmap ~/Downloads ~/Movies --out report.json
+diskmap / --min-folder 500MB --top-files 200 --duplicates
+diskmap ~/dev --compact | jq '.totals.physical'
+```
+
+Paths may be folders or whole disks, and any number of either can be given —
+they are measured as one total. A path inside another is dropped rather than
+counted twice, and the reason is printed on stderr. With no `--out` the document
+goes to stdout, so stderr carries progress and stdout carries only JSON.
+
+Exit codes: `0` success, `1` bad usage, `2` nothing could be measured, `3` the
+write failed.
+
+**From the app**, when a scan is already on screen: File → Export Results…
+(⌘E). Cleanup suggestions are included if they have already been worked out;
+duplicates are not, because finding them is a second pass over the tree and a
+save dialog is the wrong place to spend a minute. Use `--duplicates` for those.
+
+## What is in it?
+
+```json
+{
+  "schema": "diskmap.export/1",
+  "generatedAt": "2026-09-01T15:06:05Z",
+  "roots": ["/Users/md/Downloads"],
+  "totals": { "physical": 2506752, "logical": 2500000, "files": 2, ... },
+  "volumes": [ { "path": "/", "name": "Macintosh HD", ... } ],
+  "limits": { "folderMinimumBytes": 10000000, "foldersOmitted": 4211, ... },
+  "folders": [ { "path": "...", "physical": 503808, "items": 1, ... } ],
+  "largestFiles": [ { "path": "...", "physical": 2002944, ... } ]
+}
+```
+
+### `schema`
+
+`diskmap.export/N`. **Refuse a major version you do not know** rather than
+guessing at it. Version 1 is the current one. The number changes when a field
+changes meaning or disappears; new optional fields do not change it.
+
+### `totals`
+
+The scan as a whole.
+
+| Field | Meaning |
+|---|---|
+| `physical` | Bytes actually occupied on disk |
+| `logical` | Apparent size, which can far exceed `physical` |
+| `files`, `directories`, `symlinks` | Counts |
+| `datalessFiles`, `datalessLogical` | iCloud placeholders. Their apparent size is **not** on this disk, and deleting them frees nothing |
+| `hardlinkDuplicates`, `hardlinkDuplicateLogical` | Files reached by a second name and counted once |
+| `unreadableDirectories` | Could not be opened, usually for want of Full Disk Access. **Non-zero means every total here is an understatement** |
+| `elapsedSeconds` | How long the walk took |
+| `cancelled` | True if the walk was stopped early, in which case the totals are partial |
+
+Prefer `physical` for "how much space is this using". `logical` is what the
+files claim, and on a disk leaning on iCloud or sparse files the two differ by
+terabytes.
+
+### `volumes`
+
+One entry per disk the roots live on.
+
+| Field | Meaning |
+|---|---|
+| `capacity` | Size of the volume |
+| `used` | `capacity − freeWritable` |
+| `freeWritable` | What can be written right now |
+| `freeAsFinderShows` | What Finder reports, which counts purgeable space as free |
+| `purgeable` | `freeAsFinderShows − freeWritable` |
+
+`freeAsFinderShows` is the larger and the less useful number: those bytes are
+still occupied and macOS only reclaims them when the disk fills up. If you are
+deciding whether a copy will fit, use `freeWritable`.
+
+### `limits` — read this before concluding anything is absent
+
+A full tree is millions of entries, so the document carries the folders that
+matter and says so.
+
+| Field | Meaning |
+|---|---|
+| `folderMinimumBytes` | Folders smaller than this are not listed. Their bytes are still counted in their listed ancestors and in `totals` |
+| `foldersListed` / `foldersOmitted` | How many made the cut, and how many did not |
+| `largestFilesLimit` / `largestFilesListed` | Asked for, and returned |
+
+**A folder absent from `folders` is not a folder that does not exist.** It is
+below the floor. `diskmap --min-folder 0` lists everything, at the cost of a
+much larger document.
+
+### `folders` and `largestFiles`
+
+Both are arrays of the same entry shape, largest first.
+
+| Field | Meaning |
+|---|---|
+| `path` | Absolute path |
+| `physical`, `logical` | For a folder, the total of everything beneath it |
+| `isDirectory` | |
+| `items` | Direct children. Folders only |
+| `modified` | Last modification time, ISO 8601 |
+| `dataless` | Present and true only for iCloud placeholders |
+| `hardlinkDuplicate` | Present and true only for a second name for a file already counted |
+
+`dataless` and `hardlinkDuplicate` are absent rather than false when they do not
+apply, so `"dataless" in entry` is the test.
+
+### `duplicateGroups` — only with `--duplicates`
+
+**Absent** when not requested; an empty array means "looked, found none". Same
+for `suggestions`.
+
+| Field | Meaning |
+|---|---|
+| `kind` | `folder` or `file` |
+| `exact` | Every name and size matches recursively. A partial folder match is a similarity, not a copy |
+| `reclaimable` | Freed by keeping one copy and removing the rest |
+| `paths` | Every copy, including the one you would keep |
+
+### `suggestions` — only with `--suggestions`
+
+| Field | Meaning |
+|---|---|
+| `kind` | `duplicateFolders`, `duplicateFiles`, `buildOutput`, `appCaches`, `installers`, `stale`, `trash` |
+| `safety` | `comesBack` (a toolchain rebuilds it), `aCopyRemains`, `yourCall` |
+| `bytes`, `itemCount` | What acting on it would free, and over how many items |
+| `omitted` | Left out because the list would be too long to review |
+| `paths` | The items proposed. Empty for `trash`, which is reported and never proposed for deletion |
+
+**These are proposals, not instructions.** Nothing in DiskMap deletes without a
+confirmation naming every path, and an integration should hold to the same
+standard.
+
+## What it will not do
+
+- **It does not delete anything, and there is no flag that makes it.** Removal
+  goes through the app, through a confirmation listing every path, and into the
+  Trash where it can be put back.
+- **It does not follow mount points.** A drive mounted inside a scanned folder
+  is a separate budget; pass its path explicitly to include it.
+- **It does not stream.** The document is built whole, so `--min-folder 0` on a
+  nine-million-node disk produces a very large file. Pick a floor.
+
+## A worked example
+
+Fail a build when a repository's ignored output passes a gigabyte:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+report=$(mktemp)
+trap 'rm -f "$report"' EXIT
+
+diskmap "$PWD" --min-folder 100MB --top-files 0 --quiet --out "$report"
+
+# Anything unreadable makes every figure below an understatement.
+unreadable=$(jq '.totals.unreadableDirectories' "$report")
+[ "$unreadable" -eq 0 ] || echo "warning: $unreadable directories were unreadable"
+
+# The leading [.]? matters: .build and .gradle are the common cases and
+# "/build$" quietly matches neither, so the check passes having found nothing.
+bytes=$(jq '[.folders[] | select(.path | test("/[.]?(build|target|DerivedData|node_modules)$")) | .physical] | add // 0' "$report")
+if [ "$bytes" -gt $((1024 * 1024 * 1024)) ]; then
+  echo "build output is $((bytes / 1024 / 1024)) MB"
+  exit 1
+fi
+```
+
+Run against this repository the script reports 363 MB in `.build`, at a
+100 MB floor that listed 5 folders and omitted 1,433.
+
+Two things in it are worth copying. The `unreadableDirectories` check, because a
+scan without Full Disk Access silently reports less than is there and a
+threshold compared against an understated number passes when it should not. And
+the `[.]?` in the pattern: the obvious `/build$` matches neither `.build` nor
+`.gradle`, so the check finds nothing and passes, which looks exactly like
+success.

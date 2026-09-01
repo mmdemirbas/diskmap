@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import DiskMapCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct Row: Identifiable, Equatable {
     let id: Int32
@@ -1302,6 +1303,55 @@ final class AppModel: ObservableObject {
         // A copy suggestion is judged against the groups it came from, so the
         // review can show which copy it proposes keeping.
         requestBulkTrash(groups: suggestion.groups)
+    }
+
+    // MARK: - Handing the result to another program
+
+    /// Writes the scan as JSON another program can read.
+    ///
+    /// The same document the `diskmap` command prints, so a script and a person
+    /// get the same shape. Cleanup suggestions ride along when they have
+    /// already been worked out; copies do not, because finding them is a second
+    /// pass and a save dialog is the wrong place to spend a minute. The command
+    /// line takes --duplicates for that.
+    func exportResults() {
+        guard let tree, let stats else {
+            toast = L10n.shared[.nothingToExport]
+            return
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = defaultExportName()
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let volumes = targetedVolumes
+        let suggestions = self.suggestions
+        let document = tree.withStore { store -> Data? in
+            var doc = Export.document(store: store, stats: stats, volumes: volumes)
+            if !suggestions.isEmpty {
+                Export.addSuggestions(to: &doc, store: store, suggestions: suggestions)
+            }
+            return try? Export.encode(doc)
+        }
+        guard let document else {
+            toast = L10n.shared[.exportFailed]
+            return
+        }
+        do {
+            try document.write(to: url, options: .atomic)
+            toast = L10n.shared.exportedTo(url.lastPathComponent, shortBytes(Int64(document.count)))
+        } catch {
+            toast = L10n.shared[.exportFailed]
+        }
+    }
+
+    private func defaultExportName() -> String {
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyy-MM-dd-HHmm"
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        let label = rootLabel.replacingOccurrences(of: "/", with: "-")
+        return "diskmap-\(label)-\(stamp.string(from: Date())).json"
     }
 
     func showTrashInFinder() {

@@ -1,5 +1,6 @@
 import DiskMapCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct DiskMapApp: App {
@@ -34,6 +35,11 @@ struct DiskMapApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .saveItem) {
+                Button(loc[.exportResults]) { model.exportResults() }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(model.phase != .ready)
+            }
             CommandGroup(after: .toolbar) {
                 Picker(loc[.appearance], selection: $model.appearance) {
                     ForEach(Appearance.allCases) { a in Text(loc[a.key]).tag(a) }

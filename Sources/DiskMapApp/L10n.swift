@@ -190,6 +190,10 @@ final class L10n: ObservableObject {
             ? "\(fmt(count)) sabit bağlantı zaten sayılmış dosyaları gösteriyor: \(size) yalnızca bir kez var."
             : "\(fmt(count)) hard links point at files already counted: \(size) that exists only once."
     }
+    func exportedTo(_ name: String, _ size: String) -> String {
+        active == .tr ? "\(name) yazıldı (\(size))" : "Wrote \(name) (\(size))"
+    }
+
     func locationCount(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) konum" : (n == 1 ? "1 location" : "\(fmt(n)) locations")
     }
@@ -246,6 +250,7 @@ final class L10n: ObservableObject {
         case suggestInstallersWhy, suggestStaleWhy, suggestTrashWhy
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
         case colourTypeShort, colourAgeShort, newScanHelp, disksHeader, foldersHeader
+        case exportResults, nothingToExport, exportFailed
         case theDiskSays, finderSays, theGapIsPurgeable, sameDiskTwoAnswers
         case measuredByScan, notAttributed, whatTheScanReached, theNumbers
         case inUseNotPurgeable, finderCountsAsFree
@@ -422,6 +427,9 @@ final class L10n: ObservableObject {
         .newScanHelp: ("Measure something else", "Başka bir şey ölç"),
         .disksHeader: ("DISKS", "DİSKLER"),
         .foldersHeader: ("FOLDERS", "KLASÖRLER"),
+        .exportResults: ("Export Results…", "Sonuçları Dışa Aktar…"),
+        .nothingToExport: ("Measure something first", "Önce bir şey ölçün"),
+        .exportFailed: ("Could not write the file", "Dosya yazılamadı"),
         .theDiskSays: ("The disk", "Disk"),
         .finderSays: ("Finder shows", "Finder gösterir"),
         .sameDiskTwoAnswers: ("The same disk, two answers for how much is free",
