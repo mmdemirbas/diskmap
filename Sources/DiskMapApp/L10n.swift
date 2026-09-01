@@ -428,7 +428,7 @@ final class L10n: ObservableObject {
                              "Finder, temizlenebilir alanı boş tarafa ekler. O baytlar hâlâ dolu: macOS onları ancak disk dolduğunda geri alır, bu yüzden Finder'ın boş dediği bir diskte kopyalama başarısız olabilir."),
         .whatTheScanReached: ("What the scan could account for", "Taramanın hesabını verebildiği"),
         .measuredByScan: ("Measured, file by file", "Dosya dosya ölçüldü"),
-        .notAttributed: ("In use, not attributed to any file", "Kullanımda, hiçbir dosyaya bağlanamadı"),
+        .notAttributed: ("Not attributed to any file", "Hiçbir dosyaya bağlanamadı"),
         .theNumbers: ("The numbers", "Sayılar"),
         .inUseNotPurgeable: ("In use, cannot be reclaimed", "Kullanımda, geri alınamaz"),
         .finderCountsAsFree: ("Counted as free by Finder", "Finder boş sayıyor"),

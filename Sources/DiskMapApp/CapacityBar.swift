@@ -186,6 +186,10 @@ struct ReconciliationSheet: View {
         }
         .padding(24)
         .frame(width: 680, height: 700)
+        // Its own, like every other sheet here. Leaning on the presenter for a
+        // background means dark-mode text on whatever happens to be behind it,
+        // which is white, which is nothing at all.
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     // MARK: - The disagreement, as two lengths
@@ -336,7 +340,7 @@ struct ReconciliationSheet: View {
     private func row(_ label: String, _ value: String, _ note: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(label).font(.system(size: 12))
-                .frame(width: 150, alignment: .leading)
+                .frame(width: 196, alignment: .leading)
             Text(value).font(.system(size: 12, design: .monospaced))
                 .frame(width: 96, alignment: .trailing)
             if let note {

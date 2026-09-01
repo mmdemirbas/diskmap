@@ -58,7 +58,6 @@ struct ContentView: View {
             if let v = model.volume {
                 ReconciliationSheet(volume: v, reconciliation: model.reconciliation,
                                     stats: model.stats, renderMode: model.renderMode)
-                    .background(Color(nsColor: .windowBackgroundColor))
                     .preferredColorScheme(model.appearance.colorScheme)
             }
         }
