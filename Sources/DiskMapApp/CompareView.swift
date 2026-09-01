@@ -27,7 +27,7 @@ struct CompareView: View {
             case .result: resultPage
             }
         }
-        .frame(width: 900, height: 660)
+        .frame(width: 980, height: 700)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -54,6 +54,8 @@ struct CompareView: View {
             pickers
             Divider()
             summaryBand
+            Divider()
+            DiffColumnHeader()
             Divider()
             DiffRowList(model: model)
             Divider()
@@ -102,46 +104,76 @@ struct CompareView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The picture, then the counts, then the one sentence that matters most.
+    /// The picture, then the key, then the one sentence that matters most.
     /// Fixed height whatever state it is in.
     private var summaryBand: some View {
         VStack(alignment: .leading, spacing: 8) {
             DiffBar(summary: model.folderComparison?.summary)
                 .frame(height: 14)
-            HStack(spacing: 14) {
-                ForEach(DiffKind.allCases, id: \.rawValue) { kind in
-                    swatch(kind)
+            chips.frame(height: 18)
+            HStack(spacing: 10) {
+                headline
+                // Only when a filter is narrowing the list. In the default
+                // state the row count and the difference count agree closely
+                // enough that saying both is noise.
+                if narrowed {
+                    Text(loc.rowsShown(model.compareRows.count + model.compareRowsOmitted))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .lineLimit(1).fixedSize()
                 }
-                Spacer(minLength: 0)
             }
-            .frame(height: 14)
-            headline.frame(height: 22)
+            .frame(height: 22)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
-        .frame(height: 94)
+        .frame(height: 98)
     }
 
-    private func swatch(_ kind: DiffKind) -> some View {
-        let count = counts(kind)
+    /// The key is the filter.
+    ///
+    /// A separate row of filter controls would say the same words twice and
+    /// cost a band of chrome; a swatch that already names a class and counts it
+    /// is the natural place to ask for only that class. The two spanning chips
+    /// are set apart from the five kinds, because they overlap them and a row
+    /// of seven equals would imply they did not.
+    private var chips: some View {
+        viewportScroller(renderMode: model.renderMode, axis: .horizontal) {
+            HStack(spacing: 6) {
+                chip(.differences)
+                chip(.all)
+                Divider().frame(height: 12).padding(.horizontal, 3)
+                chip(.identical)
+                chip(.differs)
+                chip(.onlyLeft)
+                chip(.onlyRight)
+                chip(.typeClash)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 18)
+        }
+    }
+
+    private func chip(_ filter: CompareFilter) -> some View {
+        let count = model.compareCount(filter)
+        let chosen = model.compareFilter == filter
         return HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 2).fill(kind.color(scheme))
-                .frame(width: 9, height: 9)
-            Text(kind.localizedLabel).font(.system(size: 10)).foregroundStyle(.secondary)
+            if let kind = filter.kind {
+                RoundedRectangle(cornerRadius: 2).fill(kind.color(scheme))
+                    .frame(width: 8, height: 8)
+            }
+            Text(loc[filter.key]).font(.system(size: 10, weight: chosen ? .semibold : .regular))
             Text(count.map { "\($0)" } ?? "–")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
         }
         .fixedSize()
-        .opacity(count == 0 ? 0.4 : 1)
-    }
-
-    private func counts(_ kind: DiffKind) -> Int? {
-        guard let s = model.folderComparison?.summary else { return nil }
-        switch kind {
-        case .identical: return s.identical
-        case .differs: return s.differing
-        case .onlyLeft: return s.onlyLeft
-        case .onlyRight: return s.onlyRight
-        case .typeClash: return s.typeClashes
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(RoundedRectangle(cornerRadius: 4)
+            .fill(chosen ? Color.accentColor.opacity(0.22) : Color.clear))
+        .opacity(count == 0 && !chosen ? 0.4 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            model.compareFilter = filter
+            model.rebuildCompareRows()
         }
     }
 
@@ -174,6 +206,11 @@ struct CompareView: View {
         } else {
             Text(loc[.comparePickBoth]).font(.system(size: 11)).foregroundStyle(.tertiary)
         }
+    }
+
+    private var narrowed: Bool {
+        model.folderComparison != nil
+            && (model.compareFilter != .differences || model.dateFilter != .any)
     }
 
     /// The side that holds nothing the other does not, preferring the right
@@ -220,9 +257,12 @@ struct CompareView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 420)
                 .disabled(model.folderComparison == nil)
-                Toggle(loc[.compareShowMatching], isOn: $model.showMatchingToo)
-                    .toggleStyle(.checkbox).font(.system(size: 11))
-                    .onChange(of: model.showMatchingToo) { _, _ in model.rebuildCompareRows() }
+                Picker("", selection: $model.dateFilter) {
+                    ForEach(DateFilter.allCases) { d in Text(loc[d.key]).tag(d) }
+                }
+                .labelsHidden().frame(width: 150)
+                .onChange(of: model.dateFilter) { _, _ in model.rebuildCompareRows() }
+                .help(loc[.columnDate])
                 Spacer(minLength: 0)
             }
             HStack(spacing: 8) {
@@ -559,23 +599,70 @@ struct DiffBar: View {
     }
 }
 
-/// The rows themselves, extracted so a test can draw them on their own.
+/// One geometry, shared by the column header and every row, so the two cannot
+/// drift apart. A header whose columns do not sit over the values under them is
+/// worse than no header at all.
+enum DiffColumns {
+    static let gutter: CGFloat = 28
+    static let size: CGFloat = 76
+    static let date: CGFloat = 74
+    static let icon: CGFloat = 13
+    static let pad: CGFloat = 9
+}
+
+/// What each column holds, written once above the two panes.
+struct DiffColumnHeader: View {
+    @ObservedObject private var loc = L10n.shared
+
+    var body: some View {
+        HStack(spacing: 0) {
+            pane()
+            Spacer().frame(width: DiffColumns.gutter)
+            pane()
+        }
+        .font(.system(size: 9, weight: .medium))
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 16)
+        .frame(height: 20)
+    }
+
+    /// No Left/Right label here. It would have to sit over the icon column,
+    /// where it is both too narrow to fit the word and in the wrong place; the
+    /// two path pickers a few points above already say which side is which, and
+    /// they do not scroll away.
+    private func pane() -> some View {
+        HStack(spacing: 6) {
+            Spacer().frame(width: DiffColumns.icon)
+            Text(loc[.name])
+            Spacer(minLength: 6)
+            Text(loc[.size]).frame(width: DiffColumns.size, alignment: .trailing)
+            Text(loc[.columnDate]).frame(width: DiffColumns.date, alignment: .trailing)
+        }
+        .padding(.horizontal, DiffColumns.pad)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// The two folders, one down each side.
 ///
-/// A list that renders nothing offscreen is a bug this codebase has shipped
-/// seven times, and it is invisible in a capture of the whole sheet because the
-/// header above it still draws. Rendering the list alone is the only way to ask
-/// the question directly.
+/// Extracted from the sheet so a test can draw it on its own: a list that
+/// renders nothing offscreen is a bug this codebase has shipped seven times,
+/// and it is invisible in a capture of the whole sheet because the header above
+/// it still draws.
+///
+/// Both panes show the same relative path. That is duplication on purpose — it
+/// is how a folder comparison reads, and the eye needs a fixed thing to scan
+/// down each side while the sizes and dates beside it change.
 struct DiffRowList: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared
     @Environment(\.colorScheme) private var scheme
 
-    static let rowHeight: CGFloat = 34
+    static let rowHeight: CGFloat = 30
 
     @ViewBuilder var body: some View {
         if model.compareRows.isEmpty {
-            Text(model.folderComparison == nil ? loc[.comparePickBoth] : loc[.compareInSync])
-                .font(.callout).foregroundStyle(.secondary)
+            Text(emptyMessage).font(.callout).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             viewportScroller(renderMode: model.renderMode) {
@@ -595,86 +682,83 @@ struct DiffRowList: View {
         }
     }
 
+    /// Three different empty screens, and saying which one this is saves the
+    /// reader from concluding the folders match when they only picked a filter
+    /// nothing falls into.
+    private var emptyMessage: String {
+        guard let comparison = model.folderComparison else { return loc[.comparePickBoth] }
+        if comparison.summary.inSync { return loc[.compareInSync] }
+        return loc[.nothingMatchesFilter]
+    }
+
     /// Offscreen there is no viewport to clip against, so the whole list would
     /// be drawn to be thrown away.
-    var visibleRows: Int { model.renderMode ? 9 : model.compareRows.count }
+    var visibleRows: Int { model.renderMode ? 11 : model.compareRows.count }
 
     func row(_ entry: DiffEntry) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(entry.kind.color(scheme)).frame(width: 7, height: 7)
-            // Each side carries its own type mark. A folder on one side facing
-            // a file on the other is the one row where a single icon would be
-            // wrong about half of what it is describing.
-            sideCell(entry, .left)
+        HStack(spacing: 0) {
+            pane(entry, .left)
             Text(entry.kind.relation)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(entry.kind.color(scheme))
-                .frame(width: 22)
-            sideCell(entry, .right)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(entry.name).font(.system(size: 12, weight: .medium))
-                    .lineLimit(1).truncationMode(.middle)
-                Text(parentPath(entry)).font(.system(size: 9)).foregroundStyle(.tertiary)
-                    .lineLimit(1).truncationMode(.head)
-            }
-            Spacer(minLength: 6)
-            Text(trailingNote(entry)).font(.system(size: 10)).foregroundStyle(.tertiary)
-                .lineLimit(1).frame(width: 108, alignment: .trailing)
+                .frame(width: DiffColumns.gutter)
+            pane(entry, .right)
         }
         .padding(.horizontal, 16)
         .frame(height: Self.rowHeight)
         .contentShape(Rectangle())
-        .contextMenu {
-            if entry.leftBytes > 0 || entry.kind == .onlyLeft {
-                Button("\(loc[.revealInFinder]) — \(loc[.compareLeftSide])") { reveal(entry, .left) }
+        .contextMenu { menu(entry) }
+    }
+
+    /// One side of one row. Absent is drawn as a filled gap rather than left
+    /// blank: a row with nothing on the right and a row that has scrolled past
+    /// the end look the same otherwise.
+    func pane(_ entry: DiffEntry, _ side: Side) -> some View {
+        let present = entry.isPresent(on: side)
+        let newest = entry.newerSide == side
+        return ZStack {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.primary.opacity(0.045))
+                .opacity(present ? 0 : 1)
+            HStack(spacing: 6) {
+                Image(systemName: entry.isDirectory(on: side) ? "folder.fill" : "doc")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .frame(width: DiffColumns.icon)
+                Text(entry.relativePath).font(.system(size: 11.5))
+                    .lineLimit(1).truncationMode(.head)
+                if entry.isDirectory(on: side), entry.items > 0 {
+                    Text("· \(loc.itemCount(entry.items))")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text(shortBytes(entry.bytes(on: side)))
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(width: DiffColumns.size, alignment: .trailing)
+                // The newer of the two dates is the one carrying the answer to
+                // "which of these did I work on last", so it is the one that is
+                // legible; the other stays quiet.
+                Text(loc.shortDate(side == .left ? entry.leftModified : entry.rightModified))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(newest ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                    .frame(width: DiffColumns.date, alignment: .trailing)
             }
-            if entry.rightBytes > 0 || entry.kind == .onlyRight {
-                Button("\(loc[.revealInFinder]) — \(loc[.compareRightSide])") { reveal(entry, .right) }
-            }
+            .padding(.horizontal, DiffColumns.pad)
+            .opacity(present ? 1 : 0)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder func menu(_ entry: DiffEntry) -> some View {
+        if entry.isPresent(on: .left) {
+            Button("\(loc[.revealInFinder]) — \(loc[.compareLeftSide])") { reveal(entry, .left) }
+        }
+        if entry.isPresent(on: .right) {
+            Button("\(loc[.revealInFinder]) — \(loc[.compareRightSide])") { reveal(entry, .right) }
         }
     }
 
     func reveal(_ entry: DiffEntry, _ side: Side) {
         guard let comparison = model.folderComparison else { return }
         FileActions.revealInFinder([URL(fileURLWithPath: comparison.path(entry.relativePath, on: side))])
-    }
-
-    /// The type mark and the size, in one fixed-width cell so the numbers line
-    /// up down the column whatever the row holds. Both mirror-image: the left
-    /// reads outward-in, the right inward-out.
-    func sideCell(_ entry: DiffEntry, _ side: Side) -> some View {
-        let present = entry.isPresent(on: side)
-        let bytes = entry.bytes(on: side)
-        return HStack(spacing: 5) {
-            if side == .right { size(bytes, present) }
-            Image(systemName: entry.isDirectory(on: side) ? "folder.fill" : "doc")
-                .font(.system(size: 9)).foregroundStyle(.tertiary)
-                .frame(width: 11)
-                .opacity(present ? 1 : 0)
-            if side == .left { size(bytes, present) }
-        }
-        .frame(width: 92, alignment: side == .left ? .trailing : .leading)
-    }
-
-    func size(_ bytes: Int64, _ present: Bool) -> some View {
-        Text(present ? shortBytes(bytes) : "—")
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(present ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary))
-    }
-
-    /// A space rather than nothing for a top-level item: an empty Text has no
-    /// height, so its row's name would sit lower than every other row's.
-    func parentPath(_ entry: DiffEntry) -> String {
-        let parent = (entry.relativePath as NSString).deletingLastPathComponent
-        return parent.isEmpty ? " " : parent
-    }
-
-    /// The one extra fact worth the width: how big a one-sided folder is in
-    /// items, and for two files that disagree, which one was written last.
-    func trailingNote(_ entry: DiffEntry) -> String {
-        if entry.isDirectory, entry.kind != .identical { return loc.itemCount(entry.items) }
-        guard let newer = entry.newerSide else { return "" }
-        return (newer == .left ? "◀ " : "▶ ")
-            + (newer == .left ? loc[.compareLeftSide] : loc[.compareRightSide])
     }
 }

@@ -111,7 +111,12 @@ enum OffscreenRenderer {
             if let d = env["DISKMAP_COMPARE_DIR"], let direction = SyncDirection(rawValue: d) {
                 model.syncDirection = direction
             }
-            if env["DISKMAP_COMPARE_MATCHING"] != nil { model.showMatchingToo = true }
+            if let f = env["DISKMAP_COMPARE_FILTER"], let filter = CompareFilter(rawValue: f) {
+                model.compareFilter = filter
+            }
+            if let d = env["DISKMAP_COMPARE_DATE"], let filter = DateFilter(rawValue: d) {
+                model.dateFilter = filter
+            }
             if case .success(let comparison) = FolderDiff.compare(left: model.compareLeft,
                                                                   right: model.compareRight) {
                 model.folderComparison = comparison

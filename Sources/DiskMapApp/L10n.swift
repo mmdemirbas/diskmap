@@ -33,6 +33,23 @@ final class L10n: ObservableObject {
 
     var locale: Locale { Locale(identifier: active == .tr ? "tr_TR" : "en_US") }
 
+    /// Compact enough for a column that repeats on every row, and in the
+    /// language the user picked rather than the system one.
+    private static var shortDateFormatters: [String: DateFormatter] = [:]
+    func shortDate(_ unix: Int32) -> String {
+        guard unix > 0 else { return "" }
+        let key = locale.identifier
+        if let cached = Self.shortDateFormatters[key] {
+            return cached.string(from: Date(timeIntervalSince1970: TimeInterval(unix)))
+        }
+        let f = DateFormatter()
+        f.locale = locale
+        f.dateStyle = .short
+        f.timeStyle = .none
+        Self.shortDateFormatters[key] = f
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(unix)))
+    }
+
     /// The app has its own language switch, so a date left to the system
     /// locale makes the screen read as half-translated. Cached per locale
     /// because building a DateFormatter is not free.
@@ -267,6 +284,14 @@ final class L10n: ObservableObject {
         return side == .right ? "Move the right copy to the Trash"
                               : "Move the left copy to the Trash"
     }
+    /// Rows, not items. The chips above count items — a folder that matched
+    /// all the way down is one row and a thousand items — so when a filter is
+    /// narrowing the list, the number of lines actually on screen has to be
+    /// said in its own words or it reads as a contradiction.
+    func rowsShown(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) satır gösteriliyor"
+                      : (n == 1 ? "showing 1 row" : "showing \(fmt(n)) rows")
+    }
     func compareSideSummary(_ size: String, _ items: Int) -> String {
         active == .tr ? "\(size) · \(fmt(items)) öğe" : "\(size) · \(fmt(items)) items"
     }
@@ -353,7 +378,7 @@ final class L10n: ObservableObject {
         case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
         case compareTitle, compareSubtitle, compareChoose, compareChooseMessage, compareWith
         case compareRun, compareLeftSide, compareRightSide, compareSwap, comparePickBoth
-        case compareInSync, compareWorking, compareShowMatching
+        case compareInSync, compareWorking
         case diffIdentical, diffDiffers, diffOnlyLeft, diffOnlyRight, diffClash
         case compareVerifyContents, compareVerified
         case dirMirrorRight, dirMirrorLeft, dirMerge
@@ -362,6 +387,8 @@ final class L10n: ObservableObject {
         case stepCopy, stepReplace, stepRemove, compareTargetFolder
         case compareUnresolved, compareNotEnoughRoom, compareDownloadsFromCloud
         case compareRedundantHint, syncStopped, syncShowInTrash
+        case filterDifferences, filterAll, dateAny, dateLeftNewer, dateRightNewer, dateSame
+        case columnDate, nothingMatchesFilter
         case compareAgain, refuseNotAFolder, refuseSameFolder, refuseNested
         case refuseVolumeRoot, refuseExcluded, refuseNothingToDo, refuseNotRedundant
         case refuseUnreadable, compareUnreadableWarning
@@ -610,7 +637,6 @@ final class L10n: ObservableObject {
         .comparePickBoth: ("Pick two folders", "İki klasör seçin"),
         .compareInSync: ("Both folders hold the same thing", "İki klasör de aynı şeyi tutuyor"),
         .compareWorking: ("Reading both folders…", "İki klasör de okunuyor…"),
-        .compareShowMatching: ("Show matching items too", "Eşleşenleri de göster"),
         .diffIdentical: ("Same", "Aynı"),
         .diffDiffers: ("Different", "Farklı"),
         .diffOnlyLeft: ("Only left", "Yalnızca solda"),
@@ -644,6 +670,15 @@ final class L10n: ObservableObject {
                                      "Bunların bazıları yalnızca iCloud'da duruyor. Kopyalamak onları indirir."),
         .compareRedundantHint: ("Offered only while the other folder holds everything this one does",
                                 "Yalnızca öteki klasör bunun tuttuğu her şeyi tuttuğu sürece sunulur"),
+        .filterDifferences: ("Differences", "Farklar"),
+        .filterAll: ("All", "Tümü"),
+        .dateAny: ("Any date", "Tarihe bakma"),
+        .dateLeftNewer: ("Left is newer", "Sol daha yeni"),
+        .dateRightNewer: ("Right is newer", "Sağ daha yeni"),
+        .dateSame: ("Same date", "Aynı tarih"),
+        .columnDate: ("Date", "Tarih"),
+        .nothingMatchesFilter: ("Nothing here matches that filter",
+                                "Bu süzgece uyan bir şey yok"),
         .syncStopped: ("Stopped part-way", "Yarıda durduruldu"),
         .syncShowInTrash: ("Show what went to the Trash", "Çöpe gidenleri göster"),
         .compareAgain: ("Compare again", "Yeniden karşılaştır"),

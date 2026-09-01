@@ -75,6 +75,81 @@ enum PanelMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which rows of a folder comparison are on screen.
+///
+/// Two axes rather than one, because they are genuinely independent: a file can
+/// hold the same bytes on both sides and still have been written more recently
+/// on one of them. Folding them into a single list of states would make
+/// "everything the left touched last" unaskable.
+enum CompareFilter: String, CaseIterable, Identifiable {
+    /// Everything except what matched. The default, because it is the question.
+    case differences
+    case all
+    case identical, differs, onlyLeft, onlyRight, typeClash
+
+    var id: String { rawValue }
+
+    /// The kind this chip stands for, or nil for the two that span kinds.
+    var kind: DiffKind? {
+        switch self {
+        case .differences, .all: nil
+        case .identical: .identical
+        case .differs: .differs
+        case .onlyLeft: .onlyLeft
+        case .onlyRight: .onlyRight
+        case .typeClash: .typeClash
+        }
+    }
+
+    var key: L10n.K {
+        switch self {
+        case .differences: .filterDifferences
+        case .all: .filterAll
+        case .identical: .diffIdentical
+        case .differs: .diffDiffers
+        case .onlyLeft: .diffOnlyLeft
+        case .onlyRight: .diffOnlyRight
+        case .typeClash: .diffClash
+        }
+    }
+
+    func accepts(_ entry: DiffEntry) -> Bool {
+        switch self {
+        case .all: true
+        case .differences: entry.kind != .identical
+        default: entry.kind == kind
+        }
+    }
+}
+
+/// The other axis: which side was written last.
+enum DateFilter: String, CaseIterable, Identifiable {
+    case any, leftNewer, rightNewer, sameDate
+    var id: String { rawValue }
+
+    var key: L10n.K {
+        switch self {
+        case .any: .dateAny
+        case .leftNewer: .dateLeftNewer
+        case .rightNewer: .dateRightNewer
+        case .sameDate: .dateSame
+        }
+    }
+
+    /// An item present on one side only has no second date to be newer than,
+    /// so every filter but `any` excludes it. That is the honest answer rather
+    /// than an accident: "what did I touch more recently over there" is not a
+    /// question about a file that only exists here.
+    func accepts(_ entry: DiffEntry) -> Bool {
+        switch self {
+        case .any: true
+        case .leftNewer: entry.newerSide == .left
+        case .rightNewer: entry.newerSide == .right
+        case .sameDate: entry.leftModified > 0 && entry.leftModified == entry.rightModified
+        }
+    }
+}
+
 protocol KeyedLayout: Sendable { var key: String { get } }
 
 struct SunburstLayout: KeyedLayout {
@@ -287,9 +362,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var comparing = false
     @Published private(set) var compareRefusal: CompareRefusal?
     @Published var comparePage: ComparePage = .diff
-    /// Off by default: the differences are what the screen is for, and on two
-    /// large copies the matching rows outnumber them by thousands to one.
-    @Published var showMatchingToo = false
+    @Published var compareFilter: CompareFilter = .differences
+    @Published var dateFilter: DateFilter = .any
     @Published var syncDirection: SyncDirection = .mirrorLeftToRight
     @Published private(set) var syncPlan: SyncPlan?
     @Published private(set) var syncOutcome: SyncOutcome?
@@ -1720,12 +1794,27 @@ final class AppModel: ObservableObject {
         guard let comparison = folderComparison else {
             compareRows = []; compareRowsOmitted = 0; return
         }
-        let wanted = showMatchingToo
-            ? comparison.entries
-            : comparison.entries.filter { $0.kind != .identical }
+        let wanted = comparison.entries.filter {
+            compareFilter.accepts($0) && dateFilter.accepts($0)
+        }
         let sorted = wanted.sorted { max($0.leftBytes, $0.rightBytes) > max($1.leftBytes, $1.rightBytes) }
         compareRows = Array(sorted.prefix(Self.compareRowLimit))
         compareRowsOmitted = sorted.count - compareRows.count
+    }
+
+    /// What each chip would show, in items rather than rows — the same measure
+    /// the key has always used.
+    func compareCount(_ filter: CompareFilter) -> Int? {
+        guard let s = folderComparison?.summary else { return nil }
+        switch filter {
+        case .differences: return s.differences
+        case .all: return s.differences + s.identical
+        case .identical: return s.identical
+        case .differs: return s.differing
+        case .onlyLeft: return s.onlyLeft
+        case .onlyRight: return s.onlyRight
+        case .typeClash: return s.typeClashes
+        }
     }
 
     /// True when one side holds nothing the other does not, which is the only

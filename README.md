@@ -382,7 +382,27 @@ byte of both sides and names the files where they disagree.
 row, not the ten thousand files inside it; so is a folder whose contents match
 all the way down, where the subtree hashes agree and the walk stops. The counts
 in the key are items rather than rows, because "1" next to "2 only on the right"
-would read as though the two were comparable.
+would read as though the two were comparable — and when a filter is narrowing
+the list, the number of rows actually on screen is said in its own words beside
+them.
+
+**Two panes, one row each.** Name, size and date down both sides, the same
+columns at the same x, and the relation between them in the gutter: `=`, `≠`,
+`→`, `←`, `⚠`. A side that does not have the item is a filled gap rather than
+blank space, because a row with nothing on the right and the end of the list
+look the same otherwise. Of the two dates, the newer one is the legible one.
+
+**The key is the filter.** Clicking *Only left*, *Same*, *Different* or any
+other swatch narrows the list to it; *Differences* is the default and *All*
+turns the filter off. A separate row of filter controls would say the same words
+twice and cost a band of chrome.
+
+**Which side is newer is a second, independent filter**, because two files can
+hold the same bytes and still have been written at different times — *left is
+newer*, *right is newer*, *same date*. That combination is the only way to find
+a file edited in place: same name, same length, months apart. An item present on
+one side only has no second date to be newer than, so every date filter but
+*any* leaves it out.
 
 | Direction | What happens |
 |---|---|
@@ -497,7 +517,7 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
 ## Development
 
 ```sh
-swift test                                   # 244 tests, including FSEvents end-to-end
+swift test                                   # 245 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation

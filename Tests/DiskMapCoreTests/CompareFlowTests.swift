@@ -36,11 +36,15 @@ final class CompareFlowTests: XCTestCase {
         if let root { try? fm.removeItem(at: root) }
     }
 
-    private func write(_ base: URL, _ relative: String, bytes: Int) throws {
+    private func write(_ base: URL, _ relative: String, bytes: Int,
+                       modified: Date? = nil) throws {
         let url = base.appendingPathComponent(relative)
         try fm.createDirectory(at: url.deletingLastPathComponent(),
                                withIntermediateDirectories: true)
         try Data(count: bytes).write(to: url)
+        if let modified {
+            try fm.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+        }
     }
 
     /// The model does its work on detached tasks, so a test has to wait for the
@@ -96,22 +100,67 @@ final class CompareFlowTests: XCTestCase {
         XCTAssertNil(m.folderComparison)
     }
 
-    /// Ticking "show matching items too" must not go back to the disk: the
-    /// comparison is already in hand and re-walking it would be seconds of
-    /// nothing on a screen that was showing an answer a moment ago.
-    func testShowingMatchesJustRebuildsTheRows() async throws {
+    /// Changing a filter must not go back to the disk: the comparison is
+    /// already in hand, and re-walking it would be seconds of nothing on a
+    /// screen that was showing an answer a moment ago.
+    func testFilteringJustRebuildsTheRows() async throws {
         for base in [left!, right!] { try write(base, "same.bin", bytes: 100) }
         try write(left, "extra.bin", bytes: 50)
+        try write(right, "theirs.bin", bytes: 70)
 
         let m = model()
         m.runComparison()
         try await waitFor("the comparison") { m.folderComparison != nil }
-        XCTAssertEqual(m.compareRows.count, 1)
+        let held = m.folderComparison
 
-        m.showMatchingToo = true
+        XCTAssertEqual(m.compareRows.count, 2, "differences, which is the default")
+
+        for (filter, expected) in [(CompareFilter.all, 3), (.identical, 1),
+                                   (.onlyLeft, 1), (.onlyRight, 1), (.differs, 0)] {
+            m.compareFilter = filter
+            m.rebuildCompareRows()
+            XCTAssertEqual(m.compareRows.count, expected, "\(filter)")
+            XCTAssertEqual(m.compareRowsOmitted, 0)
+        }
+        XCTAssertNotNil(m.folderComparison, "filtering re-walked the disk")
+        XCTAssertEqual(m.folderComparison?.entries.count, held?.entries.count)
+    }
+
+    /// The other axis, and the reason it is its own control: two files can hold
+    /// the same bytes and still have been written at different times.
+    func testTheDateFilterIsIndependentOfTheKind() async throws {
+        let old = Date(timeIntervalSince1970: 1_000_000_000)
+        let recent = Date(timeIntervalSince1970: 1_700_000_000)
+        try write(left, "same-but-newer.bin", bytes: 100, modified: recent)
+        try write(right, "same-but-newer.bin", bytes: 100, modified: old)
+        try write(left, "untouched.bin", bytes: 200, modified: old)
+        try write(right, "untouched.bin", bytes: 200, modified: old)
+        try write(left, "mine.bin", bytes: 300, modified: recent)
+
+        let m = model()
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+
+        m.compareFilter = .all
+        m.dateFilter = .leftNewer
         m.rebuildCompareRows()
-        XCTAssertEqual(m.compareRows.count, 2)
-        XCTAssertEqual(m.compareRowsOmitted, 0)
+        XCTAssertEqual(m.compareRows.map(\.relativePath), ["same-but-newer.bin"],
+                       "matched by content, still newer on the left")
+
+        m.dateFilter = .sameDate
+        m.rebuildCompareRows()
+        XCTAssertEqual(m.compareRows.map(\.relativePath), ["untouched.bin"])
+
+        // Something present on one side only has no second date to beat, so
+        // every date filter but "any" leaves it out.
+        m.dateFilter = .rightNewer
+        m.rebuildCompareRows()
+        XCTAssertTrue(m.compareRows.isEmpty, "\(m.compareRows.map(\.relativePath))")
+
+        m.dateFilter = .any
+        m.compareFilter = .onlyLeft
+        m.rebuildCompareRows()
+        XCTAssertEqual(m.compareRows.map(\.relativePath), ["mine.bin"])
     }
 
     /// Rows are biggest first, because that is the order in which the decisions
