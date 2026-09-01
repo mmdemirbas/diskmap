@@ -31,6 +31,10 @@ struct DuplicatesView: View {
                 header
                 Divider()
                 list
+                if !model.checked.isEmpty {
+                    Divider()
+                    actionBar
+                }
             }
         }
     }
@@ -194,16 +198,44 @@ struct DuplicatesView: View {
         verifyRow(id, copies, readBytes)
     }
 
+    /// What is ticked, what it comes to, and the way out. It only appears when
+    /// something is ticked, so the panel is not carrying a delete button while
+    /// you are only reading.
+    private var actionBar: some View {
+        HStack(spacing: 10) {
+            Text(loc.selectedForRemoval(model.checked.count, shortBytes(model.checkedBytes)))
+                .font(.system(size: 11, weight: .medium))
+            Spacer(minLength: 4)
+            Button(loc[.clearSelection]) { model.clearChecked() }
+                .controlSize(.small).buttonStyle(.borderless)
+            Button(loc[.moveSelectedToTrash]) { model.requestBulkTrash() }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
     /// One copy. The first is not marked as the one to keep on purpose — this
     /// match is a candidate, so which copy is the real one is your call.
     private func pathRow(_ copy: PathRef) -> some View {
-        HStack(spacing: 8) {
+        let ticked = model.checked.contains(copy.id)
+        // The last surviving copy cannot be ticked at all. Refusing at the tick
+        // says why while the selection is still small enough to understand.
+        let blocked = !ticked && model.wouldBeTheLastCopy(copy.id)
+        return HStack(spacing: 8) {
+            Image(systemName: ticked ? "checkmark.square.fill" : "square")
+                .font(.system(size: 11))
+                .foregroundStyle(blocked ? AnyShapeStyle(.quaternary)
+                                         : AnyShapeStyle(ticked ? Color.accentColor : Color.secondary))
+                .frame(width: 13)
+                .onTapGesture { if !blocked { model.toggleChecked(copy.id) } }
+                .help(blocked ? loc[.keepsOneCopy] : "")
             Text(copy.path)
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.head)
             Spacer(minLength: 4)
         }
-        .padding(.leading, 34).padding(.trailing, 12).padding(.vertical, 3)
+        .padding(.leading, 21).padding(.trailing, 12).padding(.vertical, 3)
         .background(model.selection == copy.id ? Color.accentColor.opacity(0.22) : .clear)
         .contentShape(Rectangle())
         .onTapGesture { model.select(copy.id) }
@@ -239,6 +271,8 @@ struct DuplicatesView: View {
                     .controlSize(.small)
                 Text(loc.readsBytes(shortBytes(readBytes)))
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
+                Button(loc[.selectExtras]) { model.checkExtras(copies) }
+                    .controlSize(.small).buttonStyle(.borderless)
             }
             Spacer(minLength: 0)
         }

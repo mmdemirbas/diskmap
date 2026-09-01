@@ -47,8 +47,13 @@ final class L10n: ObservableObject {
             ? "Finder \(finder) boş diyor. Gerçekte yalnızca \(real) boş."
             : "Finder says \(finder) free. Only \(real) really is."
     }
+    /// Turkish takes no plural suffix after a number, so only English varies.
+    private func count(_ n: Int, _ one: String, _ many: String) -> String {
+        n == 1 ? "1 \(one)" : "\(fmt(n)) \(many)"
+    }
+
     func itemCount(_ n: Int) -> String {
-        active == .tr ? "\(fmt(n)) öğe" : "\(fmt(n)) items"
+        active == .tr ? "\(fmt(n)) öğe" : count(n, "item", "items")
     }
     func sharedItems(_ shared: Int, _ of: Int) -> String {
         active == .tr ? "\(of) öğenin \(shared)'i ortak" : "\(shared) of \(of) items shared"
@@ -65,13 +70,49 @@ final class L10n: ObservableObject {
     }
     func verifyPartial(_ n: Int) -> String {
         active == .tr ? "eşleşti, ancak \(fmt(n)) dosya okunamadı"
-                      : "matched, but \(fmt(n)) files were not read"
+                      : "matched, but \(count(n, "file was", "files were")) not read"
+    }
+    func wouldRemoveEveryCopy(_ name: String) -> String {
+        active == .tr
+            ? "\(name) için tek kopya bile kalmıyor. En az birini işaretsiz bırakın."
+            : "That would leave no copy of \(name). Untick at least one."
+    }
+    func someCouldNotBeTrashed(_ failed: Int, _ moved: Int) -> String {
+        active == .tr
+            ? "\(fmt(moved)) taşındı, \(fmt(failed)) taşınamadı"
+            : "Moved \(fmt(moved)), could not move \(fmt(failed))"
+    }
+    func restoredCount(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) öğe geri alındı" : "Restored \(count(n, "item", "items"))"
+    }
+    func restoredSome(_ restored: Int, _ total: Int) -> String {
+        active == .tr
+            ? "\(fmt(total)) öğeden \(fmt(restored)) tanesi geri alındı"
+            : "Restored \(fmt(restored)) of \(fmt(total))"
+    }
+    func selectedForRemoval(_ n: Int, _ size: String) -> String {
+        active == .tr ? "\(fmt(n)) öğe işaretli · \(size)" : "\(fmt(n)) ticked · \(size)"
+    }
+    func confirmBulkTitle(_ n: Int, _ size: String) -> String {
+        active == .tr
+            ? "\(fmt(n)) öğe Çöp Kutusu'na taşınsın mı? (\(size))"
+            : "Move \(fmt(n)) items to the Trash? (\(size))"
+    }
+    func alsoCovered(_ n: Int) -> String {
+        active == .tr
+            ? "\(fmt(n)) öğe zaten seçili bir klasörün içinde, ayrıca taşınmayacak"
+            : "\(count(n, "more is", "more are")) inside a folder already listed, so not shown separately"
+    }
+    func syncedItemCount(_ n: Int, _ providers: String) -> String {
+        active == .tr
+            ? "\(fmt(n)) öğe \(providers) içinde"
+            : "\(count(n, "item is", "items are")) in \(providers)"
     }
     func copyCount(_ n: Int) -> String {
-        active == .tr ? "\(fmt(n)) kopya" : "\(fmt(n)) copies"
+        active == .tr ? "\(fmt(n)) kopya" : count(n, "copy", "copies")
     }
     func folderCount(_ n: Int) -> String {
-        active == .tr ? "\(fmt(n)) klasör" : "\(fmt(n)) folders"
+        active == .tr ? "\(fmt(n)) klasör" : count(n, "folder", "folders")
     }
     func scannedIn(_ seconds: Double) -> String {
         let t = String(format: "%.1f", seconds)
@@ -80,7 +121,7 @@ final class L10n: ObservableObject {
     func unreadableWarning(_ n: Int) -> String {
         active == .tr
             ? "\(fmt(n)) klasör okunamadı — Tam Disk Erişimi verin"
-            : "\(fmt(n)) folders unreadable — grant Full Disk Access"
+            : "\(count(n, "folder", "folders")) unreadable — grant Full Disk Access"
     }
     func freedBytes(_ size: String) -> String {
         active == .tr ? "Çöp Kutusu'na taşındı · \(size) boşaldı" : "Moved to Trash · freed \(size)"
@@ -148,6 +189,9 @@ final class L10n: ObservableObject {
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
         case showDiagnostics, itemGone
+        case nothingToRemove, selectionChanged, cannotRemoveScanRoot, cannotRemoveOutside
+        case selectExtras, clearSelection, moveSelectedToTrash, keepsOneCopy
+        case syncWarningTitle, alsoDeletedFromService, reviewBeforeTrashing, trashIsRecoverable
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
         case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
         case duplicatesNote, duplicatesEmpty, reclaimable, sectionFolders, sectionFiles
@@ -207,6 +251,23 @@ final class L10n: ObservableObject {
         .cancelScan: ("Stop scanning", "Taramayı durdur"),
         .showDiagnostics: ("Show diagnostics log", "Tanılama kaydını göster"),
         .itemGone: ("That item is no longer there", "Bu öğe artık yok"),
+        .nothingToRemove: ("Nothing is ticked", "İşaretli bir şey yok"),
+        .selectionChanged: ("The disk changed — check the list again",
+                            "Disk değişti, listeyi yeniden kontrol edin"),
+        .cannotRemoveScanRoot: ("That is a folder the scan is rooted at",
+                                "Bu, taramanın başladığı klasör"),
+        .cannotRemoveOutside: ("That is outside what was scanned",
+                               "Bu, taranan alanın dışında"),
+        .selectExtras: ("Tick the extras", "Fazlalıkları işaretle"),
+        .clearSelection: ("Clear", "Temizle"),
+        .moveSelectedToTrash: ("Move to Trash…", "Çöp Kutusu'na taşı…"),
+        .keepsOneCopy: ("One copy of each is always kept", "Her birinden bir kopya her zaman kalır"),
+        .syncWarningTitle: ("Some of these are synced", "Bunların bazıları eşitleniyor"),
+        .alsoDeletedFromService: ("Deleting here removes them from the service and from your other devices too. Put Back restores only the local copy.",
+                                  "Buradan silmek onları servisten ve diğer cihazlarınızdan da kaldırır. Geri Koy yalnızca yerel kopyayı geri getirir."),
+        .reviewBeforeTrashing: ("Everything that will be moved:", "Taşınacak her şey:"),
+        .trashIsRecoverable: ("Goes to the Trash, and ⌘Z puts it all back",
+                              "Çöp Kutusu'na gider, ⌘Z hepsini geri alır"),
         .scanning: ("Scanning", "Taranıyor"),
         .size: ("Size", "Boyut"),
         .share: ("Share", "Pay"),

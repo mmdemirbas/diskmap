@@ -144,3 +144,27 @@ func percentString(_ fraction: Double) -> String {
     f.minimumFractionDigits = 1
     return f.string(from: NSNumber(value: fraction)) ?? "0%"
 }
+
+/// A ScrollView, except when rendering offscreen.
+///
+/// An offscreen render has no viewport, so a ScrollView measures zero and draws
+/// nothing at all — the header appears above an empty box and the render looks
+/// like a layout bug rather than a missing viewport. This has now been
+/// rediscovered in four separate lists, so it lives in one place.
+///
+/// Lists that can hold thousands of rows should still use a GeometryReader and
+/// take only the rows that fit; this is for the ones whose content is bounded.
+@ViewBuilder
+func viewportScroller<Content: View>(renderMode: Bool,
+                                     @ViewBuilder content: () -> Content) -> some View {
+    if renderMode {
+        VStack(spacing: 0) {
+            content()
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .clipped()
+    } else {
+        ScrollView { content() }
+    }
+}

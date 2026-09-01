@@ -198,6 +198,14 @@ struct ItemInfo: Equatable {
 }
 
 /// A destructive action waiting for confirmation.
+/// One trash operation, undone as a unit. Trashing forty copies and then
+/// pressing undo forty times is not an undo.
+struct TrashBatch: Identifiable {
+    let id = UUID()
+    let items: [TrashedItem]
+    var bytes: Int64 { items.reduce(0) { $0 + $1.bytesFreed } }
+}
+
 struct PendingTrash: Identifiable, Equatable {
     let id = UUID()
     var node: Int32
@@ -252,7 +260,17 @@ final class AppModel: ObservableObject {
 
     @Published var liveActive = false
     @Published var toast: String?
-    @Published var undoStack: [TrashedItem] = []
+    @Published var undoStack: [TrashBatch] = []
+    /// Explicitly ticked for a bulk action. Kept apart from `selection`, which
+    /// is only what the eye is on — a highlight must never become a delete.
+    @Published var checked: Set<Int32> = []
+    @Published var pendingBulkTrash: TrashPlan?
+    /// Every set of things the app called copies of each other, so the planner
+    /// can refuse to empty one.
+    private var matchGroups: [[Int32]] = []
+    /// Not a constant so the offscreen renderer can point it at a fixture; a
+    /// warning nobody can render is a warning nobody has checked.
+    var syncRoots = SyncRoots.detected()
     @Published var pendingTrash: PendingTrash?
     @Published var hasFullDiskAccess = FileActions.hasFullDiskAccess()
 
@@ -827,6 +845,10 @@ final class AppModel: ObservableObject {
         largeFiles = computed.largest
         duplicates = computed.duplicates
         folderMatches = computed.folders
+        matchGroups = computed.folders.map { $0.copies.map(\.id) }
+            + computed.duplicates.map { $0.copies.map(\.id) }
+        // A tick refers to a node in the report that produced it.
+        checked = []
         summarizing = false
     }
 
@@ -870,6 +892,96 @@ final class AppModel: ObservableObject {
                                    .sorted { $0.path < $1.path })
             }
             return ReportData(summary: summary, largest: files, duplicates: groups, folders: folders)
+        }
+    }
+
+    // MARK: - Choosing things to remove
+
+    func toggleChecked(_ node: Int32) {
+        if checked.contains(node) { checked.remove(node) }
+        else if !wouldBeTheLastCopy(node) { checked.insert(node) }
+    }
+
+    /// True when ticking this would leave a group with nothing in it. The
+    /// planner refuses that too; stopping the tick is better, because it says
+    /// so before the user has built a selection they cannot use.
+    func wouldBeTheLastCopy(_ node: Int32) -> Bool {
+        for group in matchGroups where group.contains(node) {
+            let survivors = group.filter { $0 != node && !checked.contains($0) }
+            if survivors.isEmpty { return true }
+        }
+        return false
+    }
+
+    /// Ticks every copy but the first. The first is a choice the user can undo
+    /// by hand — nothing here decides which copy is the real one.
+    func checkExtras(_ copies: [PathRef]) {
+        for copy in copies.dropFirst() where !wouldBeTheLastCopy(copy.id) {
+            checked.insert(copy.id)
+        }
+    }
+
+    func clearChecked() { checked = [] }
+
+    var checkedBytes: Int64 {
+        guard let tree else { return 0 }
+        return tree.withStore { store in
+            checked.reduce(0) { total, node in
+                guard node > 0, node < Int32(store.count) else { return total }
+                return total + store.totalPhysical[Int(node)]
+            }
+        }
+    }
+
+    // MARK: - Bulk trash
+
+    func requestBulkTrash() {
+        guard let tree else { return }
+        let result = tree.withStore {
+            TrashPlanner.plan(store: $0, selected: checked, groups: matchGroups, syncRoots: syncRoots)
+        }
+        switch result {
+        case .success(let plan):
+            guard !plan.isEmpty else { toast = L10n.shared[.nothingToRemove]; return }
+            pendingBulkTrash = plan
+        case .failure(let refusal):
+            Telemetry.problem("bulk.refused", String(describing: refusal))
+            toast = localizedRefusal(refusal)
+        }
+    }
+
+    func cancelBulkTrash() { pendingBulkTrash = nil }
+
+    /// Re-plans from the tree as it is now and acts only if that matches what
+    /// was on screen. Between showing the list and pressing the button the disk
+    /// can move, and a stale plan is a plan to delete the wrong thing.
+    func confirmBulkTrash() {
+        guard let tree, let approved = pendingBulkTrash else { return }
+        pendingBulkTrash = nil
+
+        let fresh = tree.withStore {
+            TrashPlanner.plan(store: $0, selected: checked, groups: matchGroups, syncRoots: syncRoots)
+        }
+        guard case .success(let plan) = fresh else {
+            if case .failure(let refusal) = fresh { toast = localizedRefusal(refusal) }
+            return
+        }
+        guard Set(plan.items.map(\.node)) == Set(approved.items.map(\.node)) else {
+            Telemetry.problem("bulk.stale", "the tree changed between preview and confirmation")
+            toast = L10n.shared[.selectionChanged]
+            pendingBulkTrash = plan
+            return
+        }
+        performTrash(plan.items.map { (URL(fileURLWithPath: $0.path), $0.node, $0.bytes) },
+                     label: L10n.shared.freedBytes(shortBytes(plan.bytes)))
+    }
+
+    private func localizedRefusal(_ refusal: TrashRefusal) -> String {
+        switch refusal {
+        case .nothingSelected: L10n.shared[.nothingToRemove]
+        case .wouldRemoveEveryCopy(let name): L10n.shared.wouldRemoveEveryCopy(name)
+        case .includesAScanRoot: L10n.shared[.cannotRemoveScanRoot]
+        case .outsideTheScannedTree: L10n.shared[.cannotRemoveOutside]
         }
     }
 
@@ -975,37 +1087,78 @@ final class AppModel: ObservableObject {
             rebuild()
             return
         }
+        performTrash([(url: URL(fileURLWithPath: path), node: node, bytes: bytes)],
+                     label: L10n.shared.freedBytes(shortBytes(bytes)))
+    }
+
+    /// The one place anything is moved to the Trash. Everything above it
+    /// decides *what*; this decides nothing.
+    private func performTrash(_ targets: [(url: URL, node: Int32, bytes: Int64)], label: String) {
+        guard let tree, !targets.isEmpty else { return }
         do {
-            let (trashed, failures) = try FileActions.moveToTrash(
-                [(url: URL(fileURLWithPath: path), node: node, bytes: bytes)])
-            if let first = failures.first {
-                Telemetry.problem("trash", first.errorDescription ?? "unknown")
-                toast = first.errorDescription; return
+            let (trashed, failures) = try FileActions.moveToTrash(targets)
+            for item in trashed {
+                // Reflect it now; the FSEvents relist that follows is a no-op.
+                tree.markRemoved(item.node)
+                checked.remove(item.node)
+                if selection == item.node { select(nil) }
             }
-            // Reflect it now; the FSEvents relist that follows is a no-op.
-            tree.markRemoved(node)
-            undoStack.append(contentsOf: trashed)
-            if selection == node { select(nil) }
-            Telemetry.record("action.trash", ["physical": .int(bytes)])
-            toast = L10n.shared.freedBytes(shortBytes(bytes))
+            if !trashed.isEmpty {
+                undoStack.append(TrashBatch(items: trashed))
+                Telemetry.record("action.trash", [
+                    "items": .int(Int64(trashed.count)),
+                    "physical": .int(trashed.reduce(0) { $0 + $1.bytesFreed }),
+                ])
+            }
+            if let first = failures.first {
+                Telemetry.problem("trash", first.errorDescription ?? "unknown",
+                                  ["failed": .int(Int64(failures.count))])
+                toast = failures.count == 1
+                    ? (first.errorDescription ?? "")
+                    : L10n.shared.someCouldNotBeTrashed(failures.count, trashed.count)
+            } else {
+                toast = label
+            }
             refreshVolume()
             rebuild()
+            if panel != .contents { refreshSummary() }
         } catch {
+            Telemetry.problem("trash", error.localizedDescription)
             toast = error.localizedDescription
         }
     }
 
+    /// Undoes the whole batch, because that is what was done.
     func undoLastTrash() {
-        guard let item = undoStack.popLast() else { return }
-        do {
-            try FileActions.restore(item)
-            toast = L10n.shared.restored(item.originalURL.lastPathComponent)
-            tree?.refresh(directory: item.originalURL.deletingLastPathComponent().path)
-            refreshVolume()
-            rebuild()
-        } catch {
-            Telemetry.problem("undo", error.localizedDescription)
-            toast = L10n.shared.couldNotRestore(error.localizedDescription)
+        guard let batch = undoStack.popLast() else { return }
+        var restored = 0
+        var lastFailure: String?
+        for item in batch.items {
+            do { try FileActions.restore(item); restored += 1 }
+            catch { lastFailure = error.localizedDescription }
         }
+
+        // Only the folders that actually got something back need re-reading.
+        var parents = Set<String>()
+        for item in batch.items { parents.insert(item.originalURL.deletingLastPathComponent().path) }
+        for parent in parents { tree?.refresh(directory: parent) }
+
+        if let lastFailure, restored < batch.items.count {
+            Telemetry.problem("undo", lastFailure,
+                              ["restored": .int(Int64(restored)),
+                               "of": .int(Int64(batch.items.count))])
+            toast = restored == 0
+                ? L10n.shared.couldNotRestore(lastFailure)
+                : L10n.shared.restoredSome(restored, batch.items.count)
+        } else {
+            Telemetry.record("action.undo", ["items": .int(Int64(restored))])
+            toast = batch.items.count == 1
+                ? L10n.shared.restored(batch.items[0].originalURL.lastPathComponent)
+                : L10n.shared.restoredCount(restored)
+        }
+        refreshVolume()
+        rebuild()
+        if panel != .contents { refreshSummary() }
     }
+
 }

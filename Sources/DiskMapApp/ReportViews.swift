@@ -86,7 +86,7 @@ struct TypeBreakdownView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let summary = model.summary {
-            scroller {
+            viewportScroller(renderMode: model.renderMode) {
                 VStack(alignment: .leading, spacing: 14) {
                     section(loc[.panelTypes], summary.byCategory.map {
                         ($0.category.localizedLabel, $0.bytes, $0.files, $0.category.color(scheme))
@@ -140,13 +140,4 @@ struct TypeBreakdownView: View {
         total > 0 ? min(1, CGFloat(value) / CGFloat(total)) : 0
     }
 
-    /// Offscreen rendering has no viewport, so a ScrollView draws nothing.
-    @ViewBuilder private func scroller<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        if model.renderMode {
-            VStack(spacing: 0) { content(); Spacer(minLength: 0) }
-                .frame(maxHeight: .infinity, alignment: .top).clipped()
-        } else {
-            ScrollView { content() }
-        }
-    }
 }

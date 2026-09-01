@@ -69,9 +69,27 @@ enum OffscreenRenderer {
         if let biggest = model.rows.first { model.select(biggest.id) }
 
         let scheme: ColorScheme = model.appearance == .dark ? .dark : .light
-        let view = ContentView(model: model)
-            .environment(\.colorScheme, scheme)
-            .frame(width: width, height: height)
+
+        // A sheet cannot be captured through the window it sits over, and the
+        // trash confirmation is the one screen that must be checked rather than
+        // assumed. Rendering it directly is the only way to see it here.
+        let view: AnyView
+        if let home = env["DISKMAP_SYNC_HOME"] { model.syncRoots = SyncRoots.detected(home: home) }
+        if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
+            model.checkExtras(match.copies)
+            model.requestBulkTrash()
+            if let plan = model.pendingBulkTrash {
+                view = AnyView(TrashConfirmView(model: model, plan: plan)
+                    .environment(\.colorScheme, scheme))
+            } else {
+                view = AnyView(Text(model.toast ?? "no plan").padding()
+                    .frame(width: width, height: height))
+            }
+        } else {
+            view = AnyView(ContentView(model: model)
+                .environment(\.colorScheme, scheme)
+                .frame(width: width, height: height))
+        }
 
         // System colours resolve through NSAppearance, not the SwiftUI
         // environment, so both have to be set for an offscreen render.

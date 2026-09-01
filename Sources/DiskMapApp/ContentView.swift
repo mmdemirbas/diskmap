@@ -1,6 +1,12 @@
 import DiskMapCore
 import SwiftUI
 
+/// `TrashPlan` is a value, not an identity; the sheet needs one.
+struct IdentifiedPlan: Identifiable {
+    let id = UUID()
+    let plan: TrashPlan
+}
+
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared
@@ -25,6 +31,10 @@ struct ContentView: View {
         // without it the panels stay light while dark-mode text turns white.
         .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(model.appearance.colorScheme)
+        .sheet(item: Binding(get: { model.pendingBulkTrash.map { IdentifiedPlan(plan: $0) } },
+                             set: { if $0 == nil { model.cancelBulkTrash() } })) { wrapper in
+            TrashConfirmView(model: model, plan: wrapper.plan)
+        }
         .sheet(isPresented: $showReconciliation) {
             if let v = model.volume {
                 ReconciliationSheet(volume: v, reconciliation: model.reconciliation, stats: model.stats)
