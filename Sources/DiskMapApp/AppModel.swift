@@ -280,6 +280,14 @@ final class AppModel: ObservableObject {
     @Published private(set) var reviewPlan: TrashPlan?
     @Published private(set) var reviewRefusal: TrashRefusal?
     @Published var suggestions: [CleanupSuggestion] = []
+    @Published var showFind = false
+    @Published var findText = ""
+    @Published private(set) var findResults: [FoundItem] = []
+    /// How many matched altogether. The list is capped, and a reader must not
+    /// take the rows they can see for the whole answer.
+    @Published private(set) var findTotal = 0
+    @Published private(set) var findSearching = false
+    private var findTask: Task<Void, Never>?
     @Published var suggestionsLoading = false
     @Published var showCleanup = false
     /// Sizes below which a suggestion is not worth making. A field rather than
@@ -1339,6 +1347,72 @@ final class AppModel: ObservableObject {
         // review can show which copy it proposes keeping.
         requestBulkTrash(groups: suggestion.groups)
     }
+
+    // MARK: - Finding one thing
+
+    /// The filter box narrows the folder being browsed, which answers "what is
+    /// in here". This answers "where is that", over the whole tree.
+    func openFind() {
+        showFind = true
+        if !findText.isEmpty { runFind() }
+    }
+
+    func runFind() {
+        guard let tree else { return }
+        let needle = findText
+        guard needle.trimmingCharacters(in: .whitespaces).count >= 2 else {
+            findResults = []; findTotal = 0; findSearching = false
+            return
+        }
+        findSearching = true
+        let limit = 300
+        findTask?.cancel()
+        findTask = Task { [weak self] in
+            // A search over nine million names costs about two tenths of a
+            // second, which is fine once and wasteful on every keystroke.
+            // Waiting for the typing to settle is cheaper than cancelling
+            // work that has already started.
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            let (found, total) = await Task.detached(priority: .userInitiated) {
+                tree.withStore { store in
+                    let all = Find.search(store: store, needle: needle, limit: .max)
+                    return (Array(all.prefix(limit)), all.count)
+                }
+            }.value
+            guard !Task.isCancelled, let self, self.findText == needle else { return }
+            self.findResults = found
+            self.findTotal = total
+            self.findSearching = false
+        }
+    }
+
+    /// Show a found item where it lives: open its folder, put the selection on
+    /// it, and leave the sheet. Finding something and being told only its path
+    /// would make the user do the navigating twice.
+    func focus(_ item: FoundItem) {
+        guard let tree else { return }
+        let parent = tree.withStore { store -> Int32 in
+            guard item.node > 0, item.node < Int32(store.count) else { return 0 }
+            return store.parent[Int(item.node)]
+        }
+        showFind = false
+        // A filter still in force would hide the very row being focused.
+        if !filterText.isEmpty { filterText = "" }
+        expanded.removeAll()
+        if parent >= 0, parent != currentDirectory {
+            backStack.append(currentDirectory)
+            forwardStack.removeAll()
+            moveTo(parent)
+        } else {
+            rebuild()
+        }
+        select(item.node)
+        scrollTo = item.node
+    }
+
+    /// The row the list should bring into view. Cleared once it has.
+    @Published var scrollTo: Int32?
 
     // MARK: - Handing the result to another program
 

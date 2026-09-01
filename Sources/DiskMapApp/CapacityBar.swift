@@ -107,7 +107,11 @@ private struct ProportionBar: View {
                 ForEach(bands) { band in
                     ZStack {
                         Rectangle().fill(band.color)
-                        if let hatch = band.hatch { Hatching().stroke(hatch, lineWidth: 1.4) }
+                        if let hatch = band.hatch {
+                            Hatching().stroke(hatch.opacity(0.55), lineWidth: 1)
+                            Rectangle().strokeBorder(hatch.opacity(0.8),
+                                                     style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                        }
                     }
                     .frame(width: max(0, geo.size.width * CGFloat(band.bytes) / CGFloat(max(scale, 1))))
                 }
@@ -120,6 +124,11 @@ private struct ProportionBar: View {
 }
 
 /// Diagonal rule, for the band that two systems disagree about.
+///
+/// Sparse on purpose. Ruled densely it reads as a third kind of material
+/// sitting between "in use" and "free", when what it means is "free, according
+/// to one of them" — so the fill has to stay the free colour and the rule has
+/// to stay a mark on top of it.
 private struct Hatching: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
@@ -127,7 +136,7 @@ private struct Hatching: Shape {
         while x < rect.width {
             path.move(to: CGPoint(x: x, y: rect.maxY))
             path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
-            x += 7
+            x += 14
         }
         return path
     }
@@ -230,13 +239,22 @@ struct ReconciliationSheet: View {
             .padding(.leading, 94)
 
             // The caption carries the finding; the bars carry the evidence.
-            HStack(alignment: .top, spacing: 7) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Palette.purgeable(scheme)).frame(width: 10, height: 10)
-                    .padding(.top, 3)
-                Text(loc[.theGapIsPurgeable])
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(loc.impossibleSum(shortBytes(volume.finderAvailable),
+                                       shortBytes(volume.used),
+                                       shortBytes(volume.finderAvailable + volume.used),
+                                       shortBytes(volume.total)))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.warning(scheme))
                     .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 7) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Palette.purgeable(scheme)).frame(width: 10, height: 10)
+                        .padding(.top, 3)
+                    Text(loc[.theGapIsPurgeable])
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.top, 2)
         }

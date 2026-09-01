@@ -196,6 +196,24 @@ final class L10n: ObservableObject {
         active == .tr ? "\(name) (Sistem)" : "\(name) (System)"
     }
 
+    /// The two figures macOS publishes for one disk, added up. They cannot
+    /// both be true, and the sum says so faster than any explanation.
+    func impossibleSum(_ finderFree: String, _ used: String,
+                       _ sum: String, _ capacity: String) -> String {
+        active == .tr
+            ? "\(finderFree) boş + \(used) kullanılan = \(sum), ama disk \(capacity)."
+            : "\(finderFree) free + \(used) used = \(sum), on a \(capacity) disk."
+    }
+
+    func matchCount(_ n: Int) -> String {
+        active == .tr ? "\(n) eşleşme" : count(n, "match", "matches")
+    }
+
+    func showingOfMatches(_ shown: Int, _ total: Int) -> String {
+        active == .tr ? "\(total) eşleşmenin en büyük \(shown) tanesi"
+                      : "Largest \(shown) of \(total) matches"
+    }
+
     func exportedTo(_ name: String, _ size: String) -> String {
         active == .tr ? "\(name) yazıldı (\(size))" : "Wrote \(name) (\(size))"
     }
@@ -257,6 +275,7 @@ final class L10n: ObservableObject {
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
         case colourTypeShort, colourAgeShort, newScanHelp, disksHeader, foldersHeader
         case exportResults, nothingToExport, exportFailed
+        case findTitle, findPlaceholder, findHint, findNothing, showIt
         case theDiskSays, finderSays, theGapIsPurgeable, sameDiskTwoAnswers
         case measuredByScan, notAttributed, whatTheScanReached, theNumbers
         case inUseNotPurgeable, finderCountsAsFree
@@ -436,6 +455,12 @@ final class L10n: ObservableObject {
         .exportResults: ("Export Results…", "Sonuçları Dışa Aktar…"),
         .nothingToExport: ("Measure something first", "Önce bir şey ölçün"),
         .exportFailed: ("Could not write the file", "Dosya yazılamadı"),
+        .findTitle: ("Find…", "Bul…"),
+        .findPlaceholder: ("Type part of a name, or a path", "Adın bir parçasını veya bir yol yazın"),
+        .findHint: ("Biggest matches first. Double-click to go there.",
+                    "Önce en büyük eşleşmeler. Gitmek için çift tıklayın."),
+        .findNothing: ("Nothing matched", "Eşleşen bir şey yok"),
+        .showIt: ("Show", "Göster"),
         .theDiskSays: ("The disk", "Disk"),
         .finderSays: ("Finder shows", "Finder gösterir"),
         .sameDiskTwoAnswers: ("The same disk, two answers for how much is free",

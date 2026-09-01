@@ -33,6 +33,13 @@ public final class NodeStore {
     public var isMultiRoot: Bool { roots.count > 1 }
 
     public internal(set) var nameBytes: [UInt8] = []
+
+    /// Direct access to the interned names, for a search that would otherwise
+    /// build a Swift string per node to throw it away again.
+    public func withNameBytes<T>(_ body: (UnsafeBufferPointer<UInt8>) -> T) -> T {
+        nameBytes.withUnsafeBufferPointer(body)
+    }
+
     public internal(set) var nameOffset: [UInt32] = []
     /// A filesystem name is at most 255 bytes, so one byte is enough.
     public internal(set) var nameLen: [UInt8] = []

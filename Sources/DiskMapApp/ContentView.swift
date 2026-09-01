@@ -20,6 +20,10 @@ private struct Sheets: ViewModifier {
                                         set: { model.showExclusions = $0 })) {
                 ExclusionsView(model: model)
             }
+            .sheet(isPresented: Binding(get: { model.showFind },
+                                        set: { model.showFind = $0 })) {
+                FindView(model: model)
+            }
             .sheet(isPresented: Binding(get: { model.reviewing != nil },
                                         set: { if !$0 { model.cancelBulkTrash() } })) {
                 TrashConfirmView(model: model, groups: model.reviewing ?? [])
@@ -114,11 +118,16 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var visualization: some View {
-        switch model.visualization {
-        case .treemap: TreemapView(model: model)
-        case .sunburst: SunburstView(model: model)
-        case .icicle: IcicleView(model: model)
+    private var visualization: some View {
+        VStack(spacing: 0) {
+            switch model.visualization {
+            case .treemap: TreemapView(model: model)
+            case .sunburst: SunburstView(model: model)
+            case .icicle: IcicleView(model: model)
+            }
+            Divider()
+            // Under the picture it explains, not in a help topic.
+            Legend(mode: model.colourMode, renderMode: model.renderMode)
         }
     }
 
@@ -183,6 +192,9 @@ struct ContentView: View {
             TextField(loc[.filter], text: $model.filterText)
                 .textFieldStyle(.roundedBorder).frame(width: 120)
                 .onChange(of: model.filterText) { _, _ in model.rebuild() }
+
+            Button { model.openFind() } label: { Image(systemName: "magnifyingglass") }
+                .help(loc[.findTitle]).keyboardShortcut("f", modifiers: .command)
 
             Button { model.openCleanup() } label: {
                 Label(loc[.freeUpSpace], systemImage: "sparkles")

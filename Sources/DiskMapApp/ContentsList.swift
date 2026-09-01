@@ -49,9 +49,21 @@ struct ContentsList: View {
                 }
             }
         } else {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(model.rows) { row in rowView(row) }
+            // Find puts the selection on a row that may be a long way down.
+            // Showing the right row and leaving the reader to scroll for it
+            // would be the same as not showing it.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(model.rows) { row in rowView(row).id(row.id) }
+                    }
+                }
+                .onChange(of: model.scrollTo) { _, target in
+                    guard let target else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
+                    model.scrollTo = nil
                 }
             }
         }

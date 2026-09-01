@@ -488,6 +488,22 @@ func cmdChurn(_ path: String, _ seconds: Int) {
           + "separately: \(chargedEntries.formatted())")
 }
 
+
+/// What a search costs while somebody is typing.
+func cmdFind(_ path: String, _ needle: String) {
+    let store = DiskScanner().scan(ScanOptions(rootPath: path)).store
+    print("\(store.count.formatted()) nodes")
+    for probe in [needle, needle.lowercased(), "/" + needle] {
+        let t0 = DispatchTime.now()
+        let found = Find.search(store: store, needle: probe, limit: 300)
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        print(String(format: "  %-28@ %7.1f ms  %d shown", probe as NSString, ms, found.count))
+    }
+    for item in Find.search(store: store, needle: needle, limit: 5) {
+        print("    \(fmt(item.physical))  \(item.path)")
+    }
+}
+
 final class Tally: @unchecked Sendable {
     private let lock = NSLock()
     private var counts: [String: Int] = [:]
@@ -551,6 +567,8 @@ case "snapshot": cmdSnapshot(args.count > 2 ? args[2] : FileManager.default.home
 case "changes": cmdChanges(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                            args.count > 3 ? args[3] : nil)
 case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
+case "find": cmdFind(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                     args.count > 3 ? args[3] : "node_modules")
 case "churn": cmdChurn(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                        args.count > 3 ? (Int(args[3]) ?? 120) : 120)
 case "live": cmdLive(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
@@ -564,5 +582,5 @@ case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.ho
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
                + " | dupes <path> | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
-               + " | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
+               + " | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
 }
