@@ -3,3 +3,9 @@ build/
 tmp/
 .DS_Store
 *.xcuserstate
+
+# oku build output and kit symlink
+docs/dist/
+docs/_oku
+docs/index.html
+.playwright-mcp/
