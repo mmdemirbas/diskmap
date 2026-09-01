@@ -32,9 +32,8 @@ enum OffscreenRenderer {
         let targetSpec = startOnly ? String(parts[0].dropFirst("start:".count)) : parts[0]
         let paths = targetSpec.split(separator: ",").map(String.init)
 
-        if paths.count > 1 || startOnly {
-            model.addTargets(paths.map { URL(fileURLWithPath: $0) })
-        }
+        model.clearTargets()
+        model.addTargets(paths.map { URL(fileURLWithPath: $0) })
         if let first = paths.first { model.selectedVolumePath = first }
         model.refreshVolume()
         if !startOnly { model.scanSynchronously() }

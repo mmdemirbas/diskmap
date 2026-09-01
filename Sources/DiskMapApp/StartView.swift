@@ -27,11 +27,38 @@ struct StartView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Drop panel
+    // MARK: - One list of things to measure
 
+    /// A disk and a folder are the same kind of thing here: a path to walk.
+    ///
+    /// They used to be two mechanisms — a picker that chose exactly one volume,
+    /// shown only while no folder had been added, and a separate list of
+    /// folders. Between them there was no way to measure two disks at once,
+    /// which is the obvious thing to want from a tool that adds up space. Now
+    /// there is one list. Tick the disks, add the folders, scan the lot.
     private var dropPanel: some View {
         VStack(spacing: 0) {
-            if model.scanTargets.isEmpty { emptyDropZone } else { targetList }
+            sectionHeader(loc[.disksHeader])
+            ForEach(model.volumes, id: \.path) { volume in
+                Divider()
+                diskRow(volume)
+            }
+            Divider()
+            sectionHeader(loc[.foldersHeader], trailing: {
+                Button(loc[.addMore]) { model.chooseFolders() }.controlSize(.mini)
+            })
+            if folderTargets.isEmpty {
+                Divider()
+                emptyFolders
+            } else {
+                targetScroller {
+                    ForEach(folderTargets, id: \.self) { path in
+                        Divider()
+                        folderRow(path)
+                    }
+                }
+                .frame(maxHeight: 132)
+            }
         }
         .background(
             RoundedRectangle(cornerRadius: 10)
@@ -39,59 +66,73 @@ struct StartView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(isTargeted ? Color.accentColor : Color(nsColor: .separatorColor),
-                              style: StrokeStyle(lineWidth: isTargeted ? 2 : 1,
-                                                 dash: model.scanTargets.isEmpty ? [6, 4] : [])))
+                              style: StrokeStyle(lineWidth: isTargeted ? 2 : 1)))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
         .dropDestination(for: URL.self) { urls, _ in
             model.addTargets(urls)
             return true
         } isTargeted: { isTargeted = $0 }
     }
 
-    private var emptyDropZone: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "folder.badge.plus").font(.system(size: 22)).foregroundStyle(.tertiary)
-            Text(loc[.dropFolders]).font(.callout).foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                Text(loc[.orWord]).font(.caption).foregroundStyle(.tertiary)
-                Button(loc[.chooseFolders]) { model.chooseFolders() }.controlSize(.small)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 26)
+    /// Whatever is in the list that is not one of the mounted volumes.
+    private var folderTargets: [String] {
+        let disks = Set(model.volumes.map(\.path))
+        return model.scanTargets.filter { !disks.contains($0) }
     }
 
-    private var targetList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(loc[.targetsHeader]).font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Button(loc[.addMore]) { model.chooseFolders() }.controlSize(.mini)
-                Button(loc[.clearTargets]) { model.clearTargets() }.controlSize(.mini)
-            }
-            .padding(.horizontal, 12).padding(.top, 9).padding(.bottom, 5)
-
-            Divider()
-
-            targetScroller {
-                    ForEach(model.scanTargets, id: \.self) { path in
-                        HStack(spacing: 8) {
-                            Image(systemName: "folder.fill")
-                                .foregroundStyle(FileCategory.folder.color(scheme))
-                                .font(.system(size: 11))
-                            Text(path).font(.system(size: 11))
-                                .lineLimit(1).truncationMode(.middle)
-                            Spacer(minLength: 6)
-                            Button { model.removeTarget(path) } label: {
-                                Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 5)
-                    }
-            }
-            .frame(maxHeight: 150)
+    private func sectionHeader<T: View>(_ title: String,
+                                        @ViewBuilder trailing: () -> T = { EmptyView() }) -> some View {
+        HStack {
+            Text(title).font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+            Spacer()
+            trailing()
         }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+    }
+
+    private func diskRow(_ volume: VolumeInfo) -> some View {
+        let on = model.isTargeted(volume)
+        return HStack(spacing: 9) {
+            Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+            Image(systemName: volume.isRemovable ? "externaldrive" : "internaldrive")
+                .foregroundStyle(.secondary)
+            Text(volume.name).font(.system(size: 12, weight: on ? .medium : .regular))
+            Text(volume.path).font(.system(size: 10)).foregroundStyle(.tertiary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
+            Text(loc.usedOfTotal(shortBytes(volume.used), shortBytes(volume.total)))
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture { model.toggle(volume) }
+    }
+
+    private func folderRow(_ path: String) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(FileCategory.folder.color(scheme))
+            Text(path).font(.system(size: 11))
+                .lineLimit(1).truncationMode(.head)
+            Spacer(minLength: 8)
+            Button { model.removeTarget(path) } label: {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain).help(loc[.clearTargets])
+        }
+        .padding(.horizontal, 12).padding(.vertical, 5)
+    }
+
+    private var emptyFolders: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder.badge.plus").font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+            Text(loc[.dropFolders]).font(.system(size: 11)).foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
     }
 
     /// Offscreen rendering has no viewport, so a ScrollView shows nothing.
@@ -102,7 +143,7 @@ struct StartView: View {
     }
 
     private var skipped: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(model.rejectedRoots.enumerated()), id: \.offset) { _, item in
                 Label(loc.rejectedNote(item.path, localizedReason(item.reason)),
                       systemImage: "info.circle")
@@ -114,24 +155,13 @@ struct StartView: View {
 
     // MARK: - Actions
 
-    @ViewBuilder private var actions: some View {
-        if model.scanTargets.isEmpty {
-            HStack(spacing: 10) {
-                Picker("", selection: $model.selectedVolumePath) {
-                    ForEach(model.volumes, id: \.path) { v in
-                        Text("\(v.name) — \(shortBytes(v.used))").tag(v.path)
-                    }
-                }
-                .labelsHidden().frame(width: 260)
-                .onChange(of: model.selectedVolumePath) { _, _ in model.refreshVolume() }
-
-                Button(loc[.scanWholeDisk]) { model.scan() }
-                    .keyboardShortcut(.defaultAction).controlSize(.large)
-            }
-        } else {
-            Button(loc.scanLocations(model.scanTargets.count)) { model.scan() }
-                .keyboardShortcut(.defaultAction).controlSize(.large)
+    private var actions: some View {
+        Button(model.scanTargets.count == 1 ? loc[.scanWholeDisk]
+                                            : loc.scanLocations(model.scanTargets.count)) {
+            model.scan()
         }
+        .keyboardShortcut(.defaultAction).controlSize(.large)
+        .disabled(!model.canScan)
     }
 
     private var accessWarning: some View {

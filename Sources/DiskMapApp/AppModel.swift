@@ -238,8 +238,12 @@ struct ScanProgressSnapshot: Equatable {
 final class AppModel: ObservableObject {
     @Published var phase: Phase = .idle
     @Published var volumes: [VolumeInfo] = []
+    /// Kept only as the volume the capacity bar falls back to before anything
+    /// has been scanned. It is not a scan target; there is only one of those.
     @Published var selectedVolumePath: String = "/System/Volumes/Data"
-    /// Folders chosen explicitly. Empty means "measure the selected volume".
+    /// Everything to measure, as one total. A whole disk and a folder are the
+    /// same kind of thing here — a path to walk — so both live in this list and
+    /// any number of either can be chosen at once.
     @Published var scanTargets: [String] = []
     @Published var rejectedRoots: [RejectedRoot] = []
     @Published var rootsSpanVolumes = false
@@ -392,8 +396,48 @@ final class AppModel: ObservableObject {
         if volumes.first(where: { $0.path == selectedVolumePath }) == nil {
             selectedVolumePath = volumes.first?.path ?? "/"
         }
+        // Something sensible to scan on opening, in the same list the user
+        // edits, rather than a separate default hidden behind a picker.
+        // "/" and not the Data volume: the disk list names the startup disk by
+        // its mount point, so seeding the other one would leave the default
+        // target unticked in that list and showing up as a stray folder. The
+        // scan expands "/" to both volumes on its own.
+        scanTargets = RootSet.normalize(["/"]).roots
         refreshVolume()
         observeVisibility()
+    }
+
+    /// A disk that was plugged in after launch is still a disk.
+    func refreshVolumes() {
+        volumes = VolumeInfo.mountedVolumes()
+    }
+
+    /// True when this volume is one of the things about to be measured.
+    func isTargeted(_ volume: VolumeInfo) -> Bool {
+        scanTargets.contains(volume.path)
+    }
+
+    func toggle(_ volume: VolumeInfo) {
+        if scanTargets.contains(volume.path) {
+            removeTarget(volume.path)
+        } else {
+            addTargets([URL(fileURLWithPath: volume.path)])
+        }
+    }
+
+    /// The volumes the chosen targets actually live on, in the order the
+    /// targets were given. One capacity bar per disk being measured: showing a
+    /// single disk's bar while measuring two is a screen that misstates itself.
+    var targetedVolumes: [VolumeInfo] {
+        let paths = tree?.roots ?? scanTargets
+        var seen = Set<String>()
+        var out: [VolumeInfo] = []
+        for path in paths {
+            guard let mount = volumeMountPoint(path), seen.insert(mount).inserted,
+                  let info = VolumeInfo.forPath(mount) else { continue }
+            out.append(info)
+        }
+        return out.isEmpty ? [volume].compactMap { $0 } : out
     }
 
     // MARK: - Doing nothing while nobody is looking
@@ -508,10 +552,13 @@ final class AppModel: ObservableObject {
 
     // MARK: - Scanning
 
+    var canScan: Bool { !scanTargets.isEmpty }
+
     func scan() {
+        guard canScan else { return }
         cancelScan()                       // bumps the generation
         let generation = scanGeneration
-        let targets = scanTargets.isEmpty ? [selectedVolumePath] : scanTargets
+        let targets = scanTargets
         let path = targets[0]
         tree?.stopWatching()
         tree = nil
@@ -1385,7 +1432,7 @@ final class AppModel: ObservableObject {
 
     /// Blocking scan used by the offscreen renderer.
     func scanSynchronously() {
-        var options = ScanOptions(roots: scanTargets.isEmpty ? [selectedVolumePath] : scanTargets)
+        var options = ScanOptions(roots: scanTargets)
         options.threadCount = min(12, ProcessInfo.processInfo.activeProcessorCount)
         adopt(LiveTree(result: DiskScanner().scan(options)))
     }

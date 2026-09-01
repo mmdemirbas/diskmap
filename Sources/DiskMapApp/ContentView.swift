@@ -35,7 +35,9 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let v = model.volume {
+            // One bar per disk being measured. A single bar while two disks
+            // are in the total is a screen that misstates itself.
+            ForEach(model.targetedVolumes, id: \.path) { v in
                 CapacityBar(volume: v) { showReconciliation = true }
                 Divider()
             }

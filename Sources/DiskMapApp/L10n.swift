@@ -245,7 +245,7 @@ final class L10n: ObservableObject {
         case suggestFoldersWhy, suggestFilesWhy, suggestBuildWhy, suggestCachesWhy
         case suggestInstallersWhy, suggestStaleWhy, suggestTrashWhy
         case treemapView, sunburstView, icicleView, colourBy, colourByType, colourByAge
-        case colourTypeShort, colourAgeShort, newScanHelp
+        case colourTypeShort, colourAgeShort, newScanHelp, disksHeader, foldersHeader
         case theDiskSays, finderSays, theGapIsPurgeable, sameDiskTwoAnswers
         case measuredByScan, notAttributed, whatTheScanReached, theNumbers
         case inUseNotPurgeable, finderCountsAsFree
@@ -420,6 +420,8 @@ final class L10n: ObservableObject {
         .colourTypeShort: ("Type", "Tür"),
         .colourAgeShort: ("Age", "Yaş"),
         .newScanHelp: ("Measure something else", "Başka bir şey ölç"),
+        .disksHeader: ("DISKS", "DİSKLER"),
+        .foldersHeader: ("FOLDERS", "KLASÖRLER"),
         .theDiskSays: ("The disk", "Disk"),
         .finderSays: ("Finder shows", "Finder gösterir"),
         .sameDiskTwoAnswers: ("The same disk, two answers for how much is free",

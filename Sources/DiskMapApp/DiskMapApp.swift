@@ -21,9 +21,13 @@ struct DiskMapApp: App {
                         "memory": .int(Int64(ProcessInfo.processInfo.physicalMemory)),
                     ])
                     // Lets the app be pointed at a folder from the command line.
-                    if let p = ProcessInfo.processInfo.environment["DISKMAP_SCAN_PATH"] {
-                        model.selectedVolumePath = p
-                        model.refreshVolume()
+                    // Several, separated by colons, since a scan can measure
+                    // any number of disks and folders as one total.
+                    if let spec = ProcessInfo.processInfo.environment["DISKMAP_SCAN_PATH"] {
+                        model.clearTargets()
+                        model.addTargets(spec.split(separator: ":").map {
+                            URL(fileURLWithPath: String($0))
+                        })
                         model.scan()
                     }
                 }
