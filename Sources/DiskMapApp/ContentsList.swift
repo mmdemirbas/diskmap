@@ -210,61 +210,123 @@ struct DetailsPanel: View {
     @ObservedObject private var loc = L10n.shared
     @Environment(\.colorScheme) private var scheme
 
+    /// Every row exists whether or not anything is selected.
+    ///
+    /// Selecting a file used to replace a two-line placeholder with a five-row
+    /// block, so the panel roughly tripled in height and the list below it
+    /// jumped down. Two of those rows were themselves conditional — the path
+    /// took one, two or three lines, and a note appeared only for files whose
+    /// apparent size ran ahead of their blocks — so the panel also moved
+    /// between one selection and the next.
+    ///
+    /// The layout is now the same shape at all times. Selecting fills the rows
+    /// in; it never adds one. Nothing below this panel moves, ever.
+    /// The panel is this tall, always.
+    ///
+    /// Reserving space row by row gets close and does not get there: text that
+    /// really wraps onto a second line pays for the gap between lines, while
+    /// text merely reserving two lines does not, so a long path still moved the
+    /// panel by two points against a short one. Two points is still the list
+    /// jumping under the pointer. The height is therefore fixed outright, and
+    /// `testNothingIsClipped` is what keeps the number honest: it fails if any
+    /// selection, in any language, needs more room than this.
+    static let height: CGFloat = 168
+
     var body: some View {
-        Group {
-            if let item = model.selectedInfo { details(item) } else { placeholder }
+        content
+            .frame(height: Self.height, alignment: .topLeading)
+            .clipped()
+    }
+
+    /// The panel's natural size, before it is pinned. Separate so a test can
+    /// measure what it would have wanted.
+    var content: some View {
+        let item = model.selectedInfo
+        return VStack(alignment: .leading, spacing: 10) {
+            heading(item)
+            subtitle(item)
+            figures(item)
+            actions(item)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
     }
 
-    private func details(_ item: ItemInfo) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 7) {
-                Image(systemName: item.isDirectory ? "folder.fill" : "doc.fill")
-                    .foregroundStyle(item.category.color(scheme))
-                Text(item.name).font(.system(size: 13, weight: .semibold))
-                    .lineLimit(2).truncationMode(.middle)
-            }
-            Text(item.path).font(.system(size: 10)).foregroundStyle(.tertiary)
-                .lineLimit(3).truncationMode(.middle).textSelection(.enabled)
-
-            HStack(spacing: 18) {
-                stat(loc[.onDisk], shortBytes(item.physical))
-                stat(loc[.apparent], shortBytes(item.logical))
-                stat(loc[.ofVolume], percentString(item.fractionOfVolume))
-            }
-
-            if item.logical > item.physical * 2 {
-                Label(loc[.apparentMismatch], systemImage: "info.circle")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 8) {
-                Button { model.reveal(item.node) } label: {
-                    Label(loc[.reveal], systemImage: "arrow.right.circle")
-                }
-                Button(role: .destructive) { model.requestTrash(item.node) } label: {
-                    Label(loc[.trash], systemImage: "trash")
-                }
-                Spacer()
-            }
-            .controlSize(.small)
+    private func heading(_ item: ItemInfo?) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: item.map { $0.isDirectory ? "folder.fill" : "doc.fill" }
+                              ?? "square.dashed")
+                .foregroundStyle(item.map { AnyShapeStyle($0.category.color(scheme)) }
+                                 ?? AnyShapeStyle(.tertiary))
+                .padding(.top, 1)
+            // Two lines always: one long name must not push the panel taller
+            // than the short name that preceded it.
+            Text(item?.name ?? loc[.nothingSelected])
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(item == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                .lineLimit(2, reservesSpace: true)
+                .lineSpacing(0)
+                .truncationMode(.middle)
         }
     }
 
-    private var placeholder: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(loc[.nothingSelected]).font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text(loc[.nothingSelectedHint]).font(.caption).foregroundStyle(.tertiary)
+    private func subtitle(_ item: ItemInfo?) -> some View {
+        Text(item?.path ?? loc[.nothingSelectedHint])
+            .font(.system(size: 10)).foregroundStyle(.tertiary)
+            .lineLimit(2, reservesSpace: true)
+            .lineSpacing(0)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
+    }
+
+    private func figures(_ item: ItemInfo?) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            figure(loc[.onDisk], item.map { shortBytes($0.physical) })
+            // The note about apparent size belongs beside the number it is
+            // about, not on a row of its own that exists for some files and
+            // not others. As a mark in the label it costs no height at all.
+            figure(loc[.apparent], item.map { shortBytes($0.logical) },
+                   flagged: item.map { $0.logical > $0.physical * 2 } ?? false)
+            figure(loc[.ofVolume], item.map { percentString($0.fractionOfVolume) })
+            Spacer(minLength: 0)
         }
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func figure(_ label: String, _ value: String?, flagged: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(label).font(.system(size: 9)).foregroundStyle(.tertiary)
-            Text(value).font(.system(size: 12, weight: .medium, design: .monospaced))
+            HStack(spacing: 3) {
+                Text(label).font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .lineLimit(1, reservesSpace: true)
+                Image(systemName: "info.circle").font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                    .opacity(flagged ? 1 : 0)
+                    .accessibilityHidden(!flagged)
+                    .help(loc[.apparentMismatch])
+            }
+            // Reserved rather than merely present: a line box sized by the
+            // glyphs in it is two points shorter for a dash than for digits,
+            // and two points is still the panel moving.
+            Text(value ?? "—")
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .lineLimit(1, reservesSpace: true)
+                .foregroundStyle(value == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
         }
+    }
+
+    /// Present and disabled rather than absent: what can be done with a
+    /// selection is worth knowing before there is one.
+    private func actions(_ item: ItemInfo?) -> some View {
+        HStack(spacing: 8) {
+            Button { if let item { model.reveal(item.node) } } label: {
+                Label(loc[.reveal], systemImage: "arrow.right.circle")
+            }
+            .disabled(item == nil)
+            Button(role: .destructive) { if let item { model.requestTrash(item.node) } } label: {
+                Label(loc[.trash], systemImage: "trash")
+            }
+            .disabled(item == nil)
+            Spacer()
+        }
+        .controlSize(.small)
     }
 }

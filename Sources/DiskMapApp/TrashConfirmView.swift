@@ -20,7 +20,11 @@ struct TrashConfirmView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if let synced = plan?.synced, !synced.isEmpty { syncWarning(synced) }
+            // Always here, visible only when it applies. Ticking a synced file
+            // used to insert this block and push the whole list down under the
+            // pointer — during the one review whose entire job is to make sure
+            // the right things are being removed.
+            syncWarning(plan?.synced ?? [])
             Divider()
             list
             Divider()
@@ -38,10 +42,10 @@ struct TrashConfirmView: View {
             HStack(spacing: 10) {
                 Label(loc[.tickToChange], systemImage: "hand.tap")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                if let plan, plan.coveredByAnAncestor > 0 {
-                    Text(loc.alsoCovered(plan.coveredByAnAncestor))
-                        .font(.system(size: 11)).foregroundStyle(.tertiary)
-                }
+                Text(loc.alsoCovered(plan?.coveredByAnAncestor ?? 0))
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .opacity((plan?.coveredByAnAncestor ?? 0) > 0 ? 1 : 0)
+                    .accessibilityHidden((plan?.coveredByAnAncestor ?? 0) == 0)
             }
         }
         .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
@@ -50,6 +54,7 @@ struct TrashConfirmView: View {
     /// The one thing the Trash cannot take back. Above the list, in the warning
     /// colour — not a badge on a row that scrolls out of sight.
     private func syncWarning(_ synced: [TrashCandidate]) -> some View {
+        let applies = !synced.isEmpty
         let providers = Array(Set(synced.compactMap(\.syncProvider))).sorted()
             .formatted(.list(type: .and))
         return VStack(alignment: .leading, spacing: 4) {
@@ -60,15 +65,20 @@ struct TrashConfirmView: View {
                 Text(loc.syncedItemCount(synced.count, providers))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            // Two lines whatever the sentence, so the block is the same
+            // height in every language and at every window width.
             Text(loc[.alsoDeletedFromService])
                 .font(.system(size: 11)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(2, reservesSpace: true)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.orange.opacity(0.45)))
+        .background(Color.orange.opacity(applies ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7)
+            .strokeBorder(Color.orange.opacity(applies ? 0.45 : 0)))
         .padding(.horizontal, 18).padding(.bottom, 12)
+        .opacity(applies ? 1 : 0)
+        .accessibilityHidden(!applies)
     }
 
     private var list: some View {

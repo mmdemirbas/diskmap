@@ -267,10 +267,14 @@ struct ContentView: View {
                         if model.toast == toast { model.toast = nil }
                     }
             }
-            if !model.undoStack.isEmpty {
-                Button(loc[.undoTrash]) { model.undoLastTrash() }
-                    .buttonStyle(.link).font(.system(size: 11))
-            }
+            // Reserved, not conditional. Appearing after a trash would shove
+            // the watching indicator to its left, and the one moment the user
+            // is looking at that indicator is right after something moved.
+            Button(loc[.undoTrash]) { model.undoLastTrash() }
+                .buttonStyle(.link).font(.system(size: 11))
+                .disabled(model.undoStack.isEmpty)
+                .opacity(model.undoStack.isEmpty ? 0 : 1)
+                .accessibilityHidden(model.undoStack.isEmpty)
             HStack(spacing: 5) {
                 Circle().fill(model.liveActive ? .green : .gray).frame(width: 7, height: 7)
                 Text(model.liveActive ? loc[.watching] : loc[.notWatching])
