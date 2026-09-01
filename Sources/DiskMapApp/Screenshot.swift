@@ -103,6 +103,26 @@ enum OffscreenRenderer {
             }
             model.suggestionsLoading = false
             view = AnyView(CleanupView(model: model).environment(\.colorScheme, scheme))
+        } else if env["DISKMAP_SHEET"] == "compare" {
+            // Two folders on disk, walked for real. There is no fixture form of
+            // this screen: what it shows is what the comparison found.
+            model.compareLeft = env["DISKMAP_COMPARE_LEFT"] ?? ""
+            model.compareRight = env["DISKMAP_COMPARE_RIGHT"] ?? ""
+            if let d = env["DISKMAP_COMPARE_DIR"], let direction = SyncDirection(rawValue: d) {
+                model.syncDirection = direction
+            }
+            if env["DISKMAP_COMPARE_MATCHING"] != nil { model.showMatchingToo = true }
+            if case .success(let comparison) = FolderDiff.compare(left: model.compareLeft,
+                                                                  right: model.compareRight) {
+                model.folderComparison = comparison
+                model.rebuildCompareRows()
+            }
+            switch env["DISKMAP_COMPARE_PAGE"] {
+            case "plan": model.previewSync()
+            case "redundant": model.previewRemoveRedundant(.right)
+            default: break
+            }
+            view = AnyView(CompareView(model: model).environment(\.colorScheme, scheme))
         } else if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
             model.checkExtras(match.copies)
             model.requestBulkTrash()

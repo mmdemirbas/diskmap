@@ -102,7 +102,7 @@ struct DuplicatesView: View {
                         ForEach(model.folderMatches.prefix(folders)) { entry in
                             folderRow(entry)
                             if model.openMatches.contains(entry.id) {
-                                details(entry.id, entry.copies, entry.readBytes)
+                                details(entry.id, entry.copies, entry.readBytes, folders: true)
                             }
                         }
                     }
@@ -122,7 +122,7 @@ struct DuplicatesView: View {
                             ForEach(model.folderMatches) { entry in
                                 folderRow(entry)
                                 if model.openMatches.contains(entry.id) {
-                                    details(entry.id, entry.copies, entry.readBytes)
+                                    details(entry.id, entry.copies, entry.readBytes, folders: true)
                                 }
                             }
                         } header: {
@@ -134,7 +134,7 @@ struct DuplicatesView: View {
                             ForEach(model.duplicates) { entry in
                                 fileRow(entry)
                                 if model.openMatches.contains(entry.id) {
-                                    details(entry.id, entry.copies, entry.readBytes)
+                                    details(entry.id, entry.copies, entry.readBytes, folders: false)
                                 }
                             }
                         } header: {
@@ -193,9 +193,9 @@ struct DuplicatesView: View {
     // MARK: - Expanded match
 
     @ViewBuilder private func details(_ id: Int64, _ copies: [PathRef],
-                                      _ readBytes: Int64) -> some View {
+                                      _ readBytes: Int64, folders: Bool) -> some View {
         ForEach(copies) { copy in pathRow(copy) }
-        verifyRow(id, copies, readBytes)
+        verifyRow(id, copies, readBytes, folders)
     }
 
     /// What is ticked, what it comes to, and the way out. It only appears when
@@ -251,7 +251,7 @@ struct DuplicatesView: View {
     /// The deep check. It reads every byte, so the button says the price and
     /// the run can be stopped.
     @ViewBuilder private func verifyRow(_ id: Int64, _ copies: [PathRef],
-                                        _ readBytes: Int64) -> some View {
+                                        _ readBytes: Int64, _ folders: Bool) -> some View {
         let status = model.verifications[id]
         HStack(spacing: 8) {
             if let status, status.running {
@@ -273,6 +273,15 @@ struct DuplicatesView: View {
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
                 Button(loc[.selectExtras]) { model.checkExtras(copies) }
                     .controlSize(.small).buttonStyle(.borderless)
+                // Two folders that look alike is where the question "what is
+                // actually different about them" starts, so the way to ask it
+                // belongs here rather than three menus away.
+                if folders, copies.count == 2 {
+                    Button(loc[.compareRun]) {
+                        model.openCompare(left: copies[0].path, right: copies[1].path)
+                    }
+                    .controlSize(.small).buttonStyle(.borderless)
+                }
             }
             Spacer(minLength: 0)
         }

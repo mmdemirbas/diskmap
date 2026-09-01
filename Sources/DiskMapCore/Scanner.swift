@@ -166,9 +166,11 @@ public final class DiskScanner {
         }
     }
 
-    public let cancelToken = CancelToken()
+    public let cancelToken: CancelToken
 
-    public init() {}
+    /// A caller with its own token — a folder comparison runs two scans and one
+    /// Cancel has to stop both — passes it in; everyone else gets a fresh one.
+    public init(cancel: CancelToken = CancelToken()) { cancelToken = cancel }
 
     /// True when the path is the mount point of its filesystem: its device
     /// differs from its parent's, so the inode estimate describes this tree.

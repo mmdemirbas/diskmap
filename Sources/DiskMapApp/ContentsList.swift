@@ -90,6 +90,7 @@ struct ContentsList: View {
             }
         }
         if row.isDirectory { Button(loc[.openHere]) { model.enter(row.id) } }
+        if row.isDirectory { Button(loc[.compareWith]) { model.compareWith(row.id) } }
         Button(loc[.revealInFinder]) { model.reveal(row.id) }
         Button(loc[.copyPath]) { model.copyPath(row.id) }
         Divider()

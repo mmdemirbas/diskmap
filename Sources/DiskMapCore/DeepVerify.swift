@@ -139,6 +139,22 @@ public enum DeepVerify {
     }
 
     private static func hash(_ path: String, cancel: CancelToken?, tally: Tally) -> [UInt8]? {
+        read(path, cancel: cancel) { tally.add($0) }
+    }
+
+    /// One file, hashed on the calling thread. The folder comparison walks its
+    /// pairs in order and keeps its own running total, so it has no use for the
+    /// shared tally — but it should not carry a second copy of this read loop,
+    /// which is where `F_NOCACHE` and cancellation live.
+    static func hashFile(_ path: String, cancel: CancelToken?, bytesRead: inout Int64) -> [UInt8]? {
+        var local: Int64 = 0
+        let digest = read(path, cancel: cancel) { local += $0 }
+        bytesRead += local
+        return digest
+    }
+
+    private static func read(_ path: String, cancel: CancelToken?,
+                             count: (Int64) -> Void) -> [UInt8]? {
         let fd = open(path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
@@ -152,11 +168,11 @@ public enum DeepVerify {
         var buffer = [UInt8](repeating: 0, count: size)
         while true {
             if cancel?.isCancelled == true { return nil }
-            let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, size) }
+            let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, size) }
             if n < 0 { return nil }
             if n == 0 { break }
             buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0[0..<n])) }
-            tally.add(Int64(n))
+            count(Int64(n))
         }
         return Array(hasher.finalize())
     }

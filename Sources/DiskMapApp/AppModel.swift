@@ -280,6 +280,31 @@ final class AppModel: ObservableObject {
     @Published private(set) var reviewPlan: TrashPlan?
     @Published private(set) var reviewRefusal: TrashRefusal?
     @Published var suggestions: [CleanupSuggestion] = []
+    @Published var showCompare = false
+    @Published var compareLeft = ""
+    @Published var compareRight = ""
+    @Published var folderComparison: FolderComparison?
+    @Published private(set) var comparing = false
+    @Published private(set) var compareRefusal: CompareRefusal?
+    @Published var comparePage: ComparePage = .diff
+    /// Off by default: the differences are what the screen is for, and on two
+    /// large copies the matching rows outnumber them by thousands to one.
+    @Published var showMatchingToo = false
+    @Published var syncDirection: SyncDirection = .mirrorLeftToRight
+    @Published private(set) var syncPlan: SyncPlan?
+    @Published private(set) var syncOutcome: SyncOutcome?
+    @Published private(set) var syncRunning = false
+    @Published private(set) var syncProgress: SyncProgress?
+    @Published private(set) var compareVerification: VerifyDifferences?
+    @Published private(set) var compareVerifying = false
+    @Published private(set) var compareVerifyBytes: Int64 = 0
+    /// The rows on screen, biggest first. Held rather than derived: sorting a
+    /// million entries inside `body` would do it again on every redraw.
+    @Published private(set) var compareRows: [DiffEntry] = []
+    @Published private(set) var compareRowsOmitted = 0
+    private var compareCancel: CancelToken?
+    private var compareGeneration = 0
+
     @Published var showFind = false
     @Published var findText = ""
     @Published private(set) var findResults: [FoundItem] = []
@@ -1594,6 +1619,234 @@ final class AppModel: ObservableObject {
         var options = ScanOptions(roots: scanTargets)
         options.threadCount = min(12, ProcessInfo.processInfo.activeProcessorCount)
         adopt(LiveTree(result: DiskScanner().scan(options)))
+    }
+
+    // MARK: - Comparing two folders
+
+    /// Which of the three screens the comparison sheet is showing.
+    ///
+    /// Pages rather than nested sheets: all three are the same size, so moving
+    /// between them moves nothing on screen.
+    enum ComparePage { case diff, plan, result }
+
+    func openCompare(left: String? = nil, right: String? = nil) {
+        if let left { compareLeft = left }
+        if let right { compareRight = right }
+        comparePage = .diff
+        showCompare = true
+        if !compareLeft.isEmpty, !compareRight.isEmpty { runComparison() }
+    }
+
+    /// Opens the sheet with one side already filled in, from a folder in the
+    /// tree or from one of the copies the app found.
+    func compareWith(_ node: Int32) {
+        guard let tree, let path = tree.withStore({ store -> String? in
+            guard node >= 0, node < Int32(store.count) else { return nil }
+            return store.path(node)
+        }) else { return }
+        compareLeft = path
+        compareRight = ""
+        folderComparison = nil
+        compareRefusal = nil
+        comparePage = .diff
+        showCompare = true
+        chooseCompareSide(.right)
+    }
+
+    func chooseCompareSide(_ side: Side) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.shared[.compareChoose]
+        panel.message = L10n.shared[.compareChooseMessage]
+        guard panel.runModal() == .OK, let url = panel.urls.first else { return }
+        if side == .left { compareLeft = url.path } else { compareRight = url.path }
+        if !compareLeft.isEmpty, !compareRight.isEmpty { runComparison() }
+    }
+
+    func swapCompareSides() {
+        let held = compareLeft
+        compareLeft = compareRight
+        compareRight = held
+        if !compareLeft.isEmpty, !compareRight.isEmpty { runComparison() }
+    }
+
+    var canCompare: Bool { !compareLeft.isEmpty && !compareRight.isEmpty && !comparing }
+
+    func runComparison() {
+        guard !compareLeft.isEmpty, !compareRight.isEmpty else { return }
+        cancelComparison()
+        compareGeneration += 1
+        let generation = compareGeneration
+        let left = compareLeft, right = compareRight
+        let token = CancelToken()
+        compareCancel = token
+
+        folderComparison = nil
+        compareRefusal = nil
+        compareVerification = nil
+        syncPlan = nil
+        syncOutcome = nil
+        comparing = true
+        comparePage = .diff
+
+        Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                FolderDiff.compare(left: left, right: right, cancel: token)
+            }.value
+            guard let self, self.compareGeneration == generation else { return }
+            self.comparing = false
+            self.compareCancel = nil
+            switch outcome {
+            case .success(let comparison):
+                self.folderComparison = comparison
+                self.compareLeft = comparison.left
+                self.compareRight = comparison.right
+                self.rebuildCompareRows()
+            case .failure(let refusal):
+                self.compareRefusal = refusal
+            }
+        }
+    }
+
+    /// At most this many rows reach the screen. A folder pair can disagree
+    /// about a million names and no one reads a million rows, but the count of
+    /// what is not shown has to be on screen or the list reads as the whole
+    /// answer. The plan is always built from every entry, never from these.
+    static let compareRowLimit = 2000
+
+    func rebuildCompareRows() {
+        guard let comparison = folderComparison else {
+            compareRows = []; compareRowsOmitted = 0; return
+        }
+        let wanted = showMatchingToo
+            ? comparison.entries
+            : comparison.entries.filter { $0.kind != .identical }
+        let sorted = wanted.sorted { max($0.leftBytes, $0.rightBytes) > max($1.leftBytes, $1.rightBytes) }
+        compareRows = Array(sorted.prefix(Self.compareRowLimit))
+        compareRowsOmitted = sorted.count - compareRows.count
+    }
+
+    /// True when one side holds nothing the other does not, which is the only
+    /// state in which "delete the redundant copy" is a safe sentence.
+    func isRedundant(_ side: Side) -> Bool {
+        guard let comparison = folderComparison else { return false }
+        return comparison.summary.isCoveredByTheOtherSide(side)
+    }
+
+    func cancelComparison() {
+        compareCancel?.cancel()
+        compareCancel = nil
+        comparing = false
+    }
+
+    /// The check the comparison itself will not do: reads both sides of
+    /// everything it called identical, because the same length is not the same
+    /// bytes.
+    func verifyComparison() {
+        guard let comparison = folderComparison, !compareVerifying else { return }
+        let token = CancelToken()
+        compareCancel = token
+        compareVerifying = true
+        compareVerifyBytes = 0
+        compareVerification = nil
+
+        Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                FolderDiff.verify(comparison, cancel: token) { read in
+                    Task { @MainActor [weak self] in self?.compareVerifyBytes = read }
+                }
+            }.value
+            guard let self else { return }
+            self.compareVerifying = false
+            self.compareCancel = nil
+            self.compareVerification = result
+            self.folderComparison?.verifiedAt = Date()
+        }
+    }
+
+    func cancelCompareVerify() {
+        compareCancel?.cancel()
+        compareCancel = nil
+        compareVerifying = false
+    }
+
+    /// Builds the plan and shows it. Nothing is written until it is read.
+    func previewSync() {
+        guard let comparison = folderComparison else { return }
+        apply(SyncPlanner.plan(comparison, direction: syncDirection,
+                               syncRoots: syncRoots, excluded: excludedPaths))
+    }
+
+    /// The whole of one side to the Trash, once the other holds everything it
+    /// does. The planner refuses when that is not true.
+    func previewRemoveRedundant(_ side: Side) {
+        guard let comparison = folderComparison else { return }
+        apply(SyncPlanner.removeRedundant(comparison, side: side,
+                                          syncRoots: syncRoots, excluded: excludedPaths))
+    }
+
+    private func apply(_ result: Result<SyncPlan, CompareRefusal>) {
+        switch result {
+        case .success(let plan):
+            syncPlan = plan
+            compareRefusal = nil
+            comparePage = .plan
+        case .failure(let refusal):
+            syncPlan = nil
+            compareRefusal = refusal
+        }
+    }
+
+    func backToComparison() {
+        comparePage = .diff
+        syncPlan = nil
+        syncOutcome = nil
+    }
+
+    func runSync() {
+        guard let plan = syncPlan, !syncRunning else { return }
+        let token = CancelToken()
+        compareCancel = token
+        syncRunning = true
+        syncOutcome = nil
+        syncProgress = SyncProgress(stepsDone: 0, stepsTotal: plan.steps.count,
+                                    bytesWritten: 0, currentPath: "")
+        comparePage = .result
+
+        Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                SyncRunner.run(plan, cancel: token) { progress in
+                    Task { @MainActor [weak self] in self?.syncProgress = progress }
+                }
+            }.value
+            guard let self else { return }
+            self.syncRunning = false
+            self.compareCancel = nil
+            self.syncOutcome = outcome
+            // The folders are as they are now, so anything on screen about how
+            // they used to differ is stale. Measure again rather than let the
+            // old figures stand.
+            self.folderComparison = nil
+            self.compareVerification = nil
+        }
+    }
+
+    func cancelSync() {
+        compareCancel?.cancel()
+        compareCancel = nil
+    }
+
+    func revealTrashedBySync() {
+        guard let outcome = syncOutcome else { return }
+        FileActions.revealInFinder(outcome.trashed.compactMap(\.trashURL))
+    }
+
+    func closeCompare() {
+        cancelComparison()
+        cancelCompareVerify()
+        showCompare = false
     }
 
     // MARK: - Actions

@@ -24,6 +24,10 @@ private struct Sheets: ViewModifier {
                                         set: { model.showFind = $0 })) {
                 FindView(model: model)
             }
+            .sheet(isPresented: Binding(get: { model.showCompare },
+                                        set: { if !$0 { model.closeCompare() } })) {
+                CompareView(model: model)
+            }
             .sheet(isPresented: Binding(get: { model.reviewing != nil },
                                         set: { if !$0 { model.cancelBulkTrash() } })) {
                 TrashConfirmView(model: model, groups: model.reviewing ?? [])
@@ -195,6 +199,11 @@ struct ContentView: View {
 
             Button { model.openFind() } label: { Image(systemName: "magnifyingglass") }
                 .help(loc[.findTitle]).keyboardShortcut("f", modifiers: .command)
+
+            Button { model.openCompare() } label: {
+                Image(systemName: "rectangle.split.2x1")
+            }
+            .help(loc[.compareTitle])
 
             Button { model.openCleanup() } label: {
                 Label(loc[.freeUpSpace], systemImage: "sparkles")

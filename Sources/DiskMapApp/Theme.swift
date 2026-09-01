@@ -169,3 +169,100 @@ func viewportScroller<Content: View>(renderMode: Bool, axis: Axis = .vertical,
         ScrollView(.horizontal, showsIndicators: false) { content() }
     }
 }
+
+/// Four ways two folders can disagree about one name, plus the one way they
+/// agree. Hues are borrowed from the capacity bar and the type ramp rather than
+/// invented, so a reader who has learned one screen has learned this one.
+extension DiffKind {
+    func color(_ scheme: ColorScheme) -> Color {
+        let (l, d): ((Double, Double, Double), (Double, Double, Double)) = switch self {
+        case .identical: ((0.46, 0.53, 0.49), (0.48, 0.56, 0.52))
+        case .differs:   ((0.80, 0.57, 0.20), (0.88, 0.68, 0.32))
+        case .onlyLeft:  ((0.22, 0.45, 0.74), (0.35, 0.58, 0.86))
+        case .onlyRight: ((0.52, 0.38, 0.76), (0.60, 0.47, 0.85))
+        case .typeClash: ((0.76, 0.28, 0.18), (0.94, 0.52, 0.42))
+        }
+        let c = scheme == .dark ? d : l
+        return Color(red: c.0, green: c.1, blue: c.2)
+    }
+
+    @MainActor var localizedLabel: String {
+        switch self {
+        case .identical: t(.diffIdentical);  case .differs: t(.diffDiffers)
+        case .onlyLeft: t(.diffOnlyLeft);    case .onlyRight: t(.diffOnlyRight)
+        case .typeClash: t(.diffClash)
+        }
+    }
+
+    /// What sits between the two size columns. It reads as a sentence about the
+    /// pair rather than a label on one side of it.
+    var relation: String {
+        switch self {
+        case .identical: "="
+        case .differs: "≠"
+        case .onlyLeft: "→"
+        case .onlyRight: "←"
+        case .typeClash: "⚠"
+        }
+    }
+}
+
+extension SyncAction {
+    @MainActor var localizedLabel: String {
+        switch self {
+        case .copy: t(.stepCopy); case .replace: t(.stepReplace); case .remove: t(.stepRemove)
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .copy: "plus.circle"
+        case .replace: "arrow.triangle.2.circlepath"
+        case .remove: "trash"
+        }
+    }
+    func color(_ scheme: ColorScheme) -> Color {
+        switch self {
+        case .copy: DiffKind.onlyLeft.color(scheme)
+        case .replace: DiffKind.differs.color(scheme)
+        case .remove: Palette.warning(scheme)
+        }
+    }
+}
+
+extension SyncDirection {
+    var key: L10n.K {
+        switch self {
+        case .mirrorLeftToRight: .dirMirrorRight
+        case .mirrorRightToLeft: .dirMirrorLeft
+        case .merge: .dirMerge
+        }
+    }
+    var whyKey: L10n.K {
+        switch self {
+        case .mirrorLeftToRight: .dirMirrorRightWhy
+        case .mirrorRightToLeft: .dirMirrorLeftWhy
+        case .merge: .dirMergeWhy
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .mirrorLeftToRight: "arrow.right"
+        case .mirrorRightToLeft: "arrow.left"
+        case .merge: "arrow.left.arrow.right"
+        }
+    }
+}
+
+@MainActor
+func localizedRefusal(_ refusal: CompareRefusal) -> String {
+    switch refusal {
+    case .notAFolder(let path): "\(t(.refuseNotAFolder)): \((path as NSString).lastPathComponent)"
+    case .sameFolder: t(.refuseSameFolder)
+    case .nested: t(.refuseNested)
+    case .wouldWriteToAVolumeRoot: t(.refuseVolumeRoot)
+    case .onTheNeverTouchList(let path): "\(t(.refuseExcluded)): \((path as NSString).lastPathComponent)"
+    case .nothingToDo: t(.refuseNothingToDo)
+    case .notRedundant: t(.refuseNotRedundant)
+    case .someFoldersUnreadable: t(.refuseUnreadable)
+    }
+}

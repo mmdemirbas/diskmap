@@ -359,6 +359,68 @@ dangerous deletion available — is very often inside one.
 The Trash is reported and never proposed for deletion. Emptying it is the one
 operation that cannot be taken back, so the app shows the size and opens Finder.
 
+## Comparing two folders, and making one match the other
+
+The Copies panel says two folders look alike. It cannot say *what is different
+about them*. ⇧⌘C can: from the toolbar, from the Scan menu, from a right-click
+on a folder in the tree, or straight off a pair in the Copies panel.
+
+Both sides are walked fresh rather than read out of the current scan. A sync
+acts on the disk as it is now, and a tree from ten minutes ago is a different
+disk — and it means two folders can be compared whether or not either was ever
+scanned.
+
+**What counts as the same** is a name at the same length on both sides. Nothing
+is read, which is what keeps this as fast as the rest of the app and safe on
+iCloud placeholders, and the modification date is shown but never decides — so a
+plain `cp -R`, which shifts every date, does not make two copies look completely
+different. The cost is that a file edited without changing its length reads as
+identical here. **Check the contents** is the answer to that: it reads every
+byte of both sides and names the files where they disagree.
+
+**One row per decision.** A folder the other side does not have at all is one
+row, not the ten thousand files inside it; so is a folder whose contents match
+all the way down, where the subtree hashes agree and the walk stops. The counts
+in the key are items rather than rows, because "1" next to "2 only on the right"
+would read as though the two were comparable.
+
+| Direction | What happens |
+|---|---|
+| **Mirror left → right** | The right folder ends up exactly like the left one. What only the right has goes to the Trash. |
+| **Mirror right → left** | The same, the other way round. |
+| **Give each side everything** | Each side gets what the other has, and nothing is removed. Where the two disagree the newer wins; where neither is newer, both are left alone and the plan says how many. |
+
+**Nothing is written from the comparison screen.** *See what would happen* builds
+an explicit list — copy, replace, to Trash — naming the folder it all happens
+in, what it writes, what it moves to the Trash, and every warning that applies:
+not enough room, a mirrored service on the other end, iCloud placeholders that
+would be downloaded, conflicts left alone.
+
+The rules live in `SyncPlanner` and `SyncRunner`, in the core, where tests prove
+them rather than in a view where they would be conventions:
+
+- **nothing is deleted, ever.** Every removal goes to the Trash, including the
+  older version of a file being replaced, so *Put Back* still works;
+- **a mirror is refused outright when any folder could not be read** — what the
+  comparison did not see is exactly what a mirror would propose deleting;
+- **mirroring onto a whole volume is refused**, because it would propose
+  removing everything the source does not happen to have, which on a startup
+  disk is the operating system;
+- **a target on the never-touch list is refused**, matched on resolved paths
+  rather than as text, since `/var` and `/private/var` are the same folder and a
+  guard that misses that is a guard that is silently absent;
+- **removals run before anything is written**, because on a case-insensitive
+  volume `README` and `readme` are two rows here and one name on disk;
+- **no step may touch a path outside the two folders being compared** — checked
+  again in the runner, which is the last place before the filesystem;
+- **a copy never lands on top of a live file.** If something appeared between
+  planning and running, that step fails and says so rather than taking its
+  place.
+
+**Move this copy to the Trash** is its own offer, and it appears only while it
+is a safe sentence — when the other folder holds everything this one does. The
+moment the copy holds something unique, it is refused with that reason.
+
 ## What changed since last time
 
 ⇧⌘D compares the disk now against an earlier scan: what grew, what shrank, what
@@ -424,11 +486,18 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
   a rescan compacts.
 - A scan can be cancelled, but a cancelled scan is discarded rather than shown
   as a partial tree, because a partial total would read as a real one.
+- **A comparison holds one entry per name the two folders share**, so two very
+  large trees cost memory while the sheet is open. It is freed when the sheet
+  closes. The list on screen is capped and says how many rows it is not showing;
+  the plan is always built from every entry, never from the visible rows.
+- **A sync is not undoable in one step.** What it moved to the Trash can be put
+  back from Finder, and the result screen opens it there; what it copied stays.
+  A single undo would be half an undo presented as a whole one.
 
 ## Development
 
 ```sh
-swift test                                   # 60 tests, including FSEvents end-to-end
+swift test                                   # 244 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation

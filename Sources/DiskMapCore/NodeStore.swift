@@ -145,6 +145,15 @@ public final class NodeStore {
         return id
     }
 
+    /// Where a node's interned name sits in the blob.
+    ///
+    /// For a comparison that would otherwise build a Swift String per node only
+    /// to throw it away: at a million names that is the difference between a
+    /// second and a minute.
+    public func nameSpan(_ id: Int32) -> (offset: Int, length: Int) {
+        (Int(nameOffset[Int(id)]), Int(nameLen[Int(id)]))
+    }
+
     public func name(_ id: Int32) -> String {
         let i = Int(id), off = Int(nameOffset[i]), len = Int(nameLen[i])
         guard len > 0 else { return "" }

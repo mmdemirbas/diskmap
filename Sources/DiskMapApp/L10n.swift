@@ -1,3 +1,4 @@
+import DiskMapCore
 import Foundation
 import SwiftUI
 
@@ -205,6 +206,71 @@ final class L10n: ObservableObject {
             : "\(finderFree) free + \(used) used = \(sum), on a \(capacity) disk."
     }
 
+    func differencesFound(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) fark" : count(n, "difference", "differences")
+    }
+    func stepCount(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) adım" : count(n, "step", "steps")
+    }
+    func syncFinished(_ done: Int, _ total: Int) -> String {
+        active == .tr ? "\(fmt(total)) adımın \(fmt(done)) tanesi bitti"
+                      : "\(fmt(done)) of \(fmt(total)) done"
+    }
+    /// Future tense, and separate from `syncWrote` on purpose: a plan that
+    /// describes itself in the past tense reads as something that has already
+    /// happened, on the one screen where nothing has.
+    func syncWillWrite(_ written: String, _ toTrash: String) -> String {
+        active == .tr ? "\(written) yazacak, \(toTrash) Çöp Kutusu'na taşıyacak"
+                      : "Writes \(written), moves \(toTrash) to the Trash"
+    }
+    func syncWrote(_ written: String, _ toTrash: String) -> String {
+        active == .tr ? "\(written) yazıldı, \(toTrash) Çöp Kutusu'na taşındı"
+                      : "Wrote \(written), moved \(toTrash) to the Trash"
+    }
+    func syncFailedSteps(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) adım başarısız oldu" : count(n, "step failed", "steps failed")
+    }
+    func compareVerifyRead(_ items: Int, _ bytes: String) -> String {
+        active == .tr ? "\(fmt(items)) öğe okundu (\(bytes))"
+                      : "Read \(fmt(items)) items (\(bytes))"
+    }
+    func compareContentDiffers(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) öğenin adı ve boyutu aynı ama içeriği farklı"
+                      : (n == 1 ? "1 item matches by name and size but not by content"
+                                : "\(fmt(n)) items match by name and size but not by content")
+    }
+    func compareUnresolvedCount(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) çakışma çözülmedi" : count(n, "conflict left alone", "conflicts left alone")
+    }
+    /// Said as a finding rather than as a caveat: the caveat belongs on the
+    /// button, which is what the caveat is about.
+    ///
+    /// Both sides are written out rather than built from the "Left"/"Right"
+    /// labels. Turkish needs a case suffix on each of them and the labels are
+    /// capitalised, so interpolating produces a sentence with a capital in the
+    /// middle and a suffix chosen by nobody.
+    func compareHoldsNothingExtra(_ side: Side) -> String {
+        if active == .tr {
+            return side == .right
+                ? "Sağdaki klasörde, soldakinde olmayan hiçbir şey yok"
+                : "Soldaki klasörde, sağdakinde olmayan hiçbir şey yok"
+        }
+        return side == .right
+            ? "The right folder holds nothing the left one does not"
+            : "The left folder holds nothing the right one does not"
+    }
+    func compareTrashThisCopy(_ side: Side) -> String {
+        if active == .tr {
+            return side == .right ? "Sağdaki kopyayı Çöp Kutusu'na taşı"
+                                  : "Soldaki kopyayı Çöp Kutusu'na taşı"
+        }
+        return side == .right ? "Move the right copy to the Trash"
+                              : "Move the left copy to the Trash"
+    }
+    func compareSideSummary(_ size: String, _ items: Int) -> String {
+        active == .tr ? "\(size) · \(fmt(items)) öğe" : "\(size) · \(fmt(items)) items"
+    }
+
     func matchCount(_ n: Int) -> String {
         active == .tr ? "\(n) eşleşme" : count(n, "match", "matches")
     }
@@ -285,6 +351,20 @@ final class L10n: ObservableObject {
         case ageWeek, ageMonth, ageHalfYear, ageYear, ageTwoYears, ageOlder, staleNote
         case goBack, goForward, expandFolder, collapseFolder, foldersOnlyNote, chooseFolders, choosePanelMessage, dropFolders, orWord, scanWholeDisk
         case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
+        case compareTitle, compareSubtitle, compareChoose, compareChooseMessage, compareWith
+        case compareRun, compareLeftSide, compareRightSide, compareSwap, comparePickBoth
+        case compareInSync, compareWorking, compareShowMatching
+        case diffIdentical, diffDiffers, diffOnlyLeft, diffOnlyRight, diffClash
+        case compareVerifyContents, compareVerified
+        case dirMirrorRight, dirMirrorLeft, dirMerge
+        case dirMirrorRightWhy, dirMirrorLeftWhy, dirMergeWhy
+        case comparePreview, compareApply, compareWhatWillHappen, compareNothingWritten
+        case stepCopy, stepReplace, stepRemove, compareTargetFolder
+        case compareUnresolved, compareNotEnoughRoom, compareDownloadsFromCloud
+        case compareRedundantHint, syncStopped, syncShowInTrash
+        case compareAgain, refuseNotAFolder, refuseSameFolder, refuseNested
+        case refuseVolumeRoot, refuseExcluded, refuseNothingToDo, refuseNotRedundant
+        case refuseUnreadable, compareUnreadableWarning
         case folderLabel, videoLabel, imageLabel, audioLabel, archiveLabel, documentLabel
         case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, databaseLabel, cacheLabel, otherLabel
     }
@@ -517,6 +597,70 @@ final class L10n: ObservableObject {
                                "Bu klasörler birden çok diskte, bu yüzden yukarıdaki çubuk yalnızca ilkini anlatıyor."),
         .targetsHeader: ("Measuring together", "Birlikte ölçülüyor"),
         .folderLabel: ("Folder", "Klasör"),
+        .compareTitle: ("Compare two folders", "İki klasörü karşılaştır"),
+        .compareSubtitle: ("The same name at the same size counts as a match, and nothing is read — so a file changed without changing size looks the same here. The content check settles that.",
+                           "Aynı boyuttaki aynı ad eşleşme sayılır ve hiçbir dosya okunmaz; boyutu değişmeden içeriği değişen bir dosya burada aynı görünür. İçerik denetimi bunu çözer."),
+        .compareChoose: ("Choose", "Seç"),
+        .compareChooseMessage: ("Pick the folder to compare", "Karşılaştırılacak klasörü seçin"),
+        .compareWith: ("Compare with…", "Şununla karşılaştır…"),
+        .compareRun: ("Compare", "Karşılaştır"),
+        .compareLeftSide: ("Left", "Sol"),
+        .compareRightSide: ("Right", "Sağ"),
+        .compareSwap: ("Swap sides", "Tarafları değiştir"),
+        .comparePickBoth: ("Pick two folders", "İki klasör seçin"),
+        .compareInSync: ("Both folders hold the same thing", "İki klasör de aynı şeyi tutuyor"),
+        .compareWorking: ("Reading both folders…", "İki klasör de okunuyor…"),
+        .compareShowMatching: ("Show matching items too", "Eşleşenleri de göster"),
+        .diffIdentical: ("Same", "Aynı"),
+        .diffDiffers: ("Different", "Farklı"),
+        .diffOnlyLeft: ("Only left", "Yalnızca solda"),
+        .diffOnlyRight: ("Only right", "Yalnızca sağda"),
+        .diffClash: ("Folder against file", "Klasöre karşı dosya"),
+        .compareVerifyContents: ("Check the contents", "İçerikleri denetle"),
+        .compareVerified: ("Every item called the same really is",
+                           "Aynı denilen her öğe gerçekten aynı"),
+        .dirMirrorRight: ("Mirror left → right", "Soldan sağa yansıt"),
+        .dirMirrorLeft: ("Mirror right → left", "Sağdan sola yansıt"),
+        .dirMerge: ("Give each side everything", "Her iki tarafa da tümünü ver"),
+        .dirMirrorRightWhy: ("The right folder ends up exactly like the left one. What only the right has goes to the Trash.",
+                             "Sağdaki klasör tıpatıp soldaki gibi olur. Yalnızca sağda olanlar Çöp Kutusu'na gider."),
+        .dirMirrorLeftWhy: ("The left folder ends up exactly like the right one. What only the left has goes to the Trash.",
+                            "Soldaki klasör tıpatıp sağdaki gibi olur. Yalnızca solda olanlar Çöp Kutusu'na gider."),
+        .dirMergeWhy: ("Each side gets what the other has. Nothing is removed.",
+                       "Her taraf ötekinde olanı alır. Hiçbir şey silinmez."),
+        .comparePreview: ("See what would happen…", "Ne olacağını gör…"),
+        .compareApply: ("Do it", "Uygula"),
+        .compareWhatWillHappen: ("What will happen", "Ne olacak"),
+        .compareNothingWritten: ("Nothing has been written yet", "Henüz hiçbir şey yazılmadı"),
+        .stepCopy: ("Copy", "Kopyala"),
+        .stepReplace: ("Replace", "Değiştir"),
+        .stepRemove: ("To Trash", "Çöpe"),
+        .compareTargetFolder: ("Everything happens inside", "Her şey şunun içinde olur"),
+        .compareUnresolved: ("Left alone: the two sides disagree and neither is clearly newer",
+                             "Dokunulmadı: iki taraf ayrışıyor ve hangisinin daha yeni olduğu belli değil"),
+        .compareNotEnoughRoom: ("There is not enough free space for what this writes",
+                                "Bunun yazacağı kadar boş yer yok"),
+        .compareDownloadsFromCloud: ("Some of these live only in iCloud. Copying them downloads them.",
+                                     "Bunların bazıları yalnızca iCloud'da duruyor. Kopyalamak onları indirir."),
+        .compareRedundantHint: ("Offered only while the other folder holds everything this one does",
+                                "Yalnızca öteki klasör bunun tuttuğu her şeyi tuttuğu sürece sunulur"),
+        .syncStopped: ("Stopped part-way", "Yarıda durduruldu"),
+        .syncShowInTrash: ("Show what went to the Trash", "Çöpe gidenleri göster"),
+        .compareAgain: ("Compare again", "Yeniden karşılaştır"),
+        .refuseNotAFolder: ("That is not a folder", "Bu bir klasör değil"),
+        .refuseSameFolder: ("Those are the same folder", "Bunlar aynı klasör"),
+        .refuseNested: ("One of those is inside the other", "Bunlardan biri ötekinin içinde"),
+        .refuseVolumeRoot: ("That target is a whole disk. Mirroring onto one would propose deleting everything the source does not have.",
+                            "Hedef bütün bir disk. Bir diske yansıtmak, kaynakta olmayan her şeyi silmeyi önerirdi."),
+        .refuseExcluded: ("That folder is on the never-touch list",
+                          "O klasör dokunulmayacaklar listesinde"),
+        .refuseNothingToDo: ("Nothing to do — they already match", "Yapacak bir şey yok, zaten eşleşiyorlar"),
+        .refuseNotRedundant: ("This copy holds something the other one does not",
+                              "Bu kopyada ötekinde olmayan bir şey var"),
+        .refuseUnreadable: ("Some folders could not be read, so a mirror would propose deleting what it never saw. Grant Full Disk Access and compare again.",
+                            "Bazı klasörler okunamadı; yansıtma, hiç görmediği şeyleri silmeyi önerirdi. Tam Disk Erişimi verip yeniden karşılaştırın."),
+        .compareUnreadableWarning: ("Some folders could not be read, so this comparison is not complete",
+                                    "Bazı klasörler okunamadı, bu karşılaştırma eksik"),
         .videoLabel: ("Video", "Video"),
         .imageLabel: ("Image", "Görsel"),
         .audioLabel: ("Audio", "Ses"),
