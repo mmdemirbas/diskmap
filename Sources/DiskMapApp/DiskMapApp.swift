@@ -15,6 +15,11 @@ struct DiskMapApp: App {
         Window(L10n.shared[.appName], id: "main") {
             ContentView(model: model)
                 .onAppear {
+                    Telemetry.record("app.launch", [
+                        "os": .text(ProcessInfo.processInfo.operatingSystemVersionString),
+                        "cores": .int(Int64(ProcessInfo.processInfo.activeProcessorCount)),
+                        "memory": .int(Int64(ProcessInfo.processInfo.physicalMemory)),
+                    ])
                     // Lets the app be pointed at a folder from the command line.
                     if let p = ProcessInfo.processInfo.environment["DISKMAP_SCAN_PATH"] {
                         model.selectedVolumePath = p
@@ -33,6 +38,12 @@ struct DiskMapApp: App {
                     ForEach(L10n.Language.allCases) { l in
                         Text(l == .system ? loc[.appearanceSystem] : l.nativeName).tag(l)
                     }
+                }
+                Divider()
+                // The app measures itself; this is where those measurements
+                // land. Local file, never sent anywhere.
+                Button(loc[.showDiagnostics]) {
+                    FileActions.revealInFinder([Telemetry.logURL])
                 }
             }
             CommandMenu(loc[.scanMenu]) {

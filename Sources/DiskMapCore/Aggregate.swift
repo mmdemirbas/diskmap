@@ -54,6 +54,8 @@ public enum Aggregate {
                                  usePhysicalSize: Bool = true,
                                  largestCount: Int = 300,
                                  now: Date = Date()) -> SubtreeSummary {
+        let span = Telemetry.begin("report.summary")
+        defer { span.end(["nodes": .int(Int64(store.count))]) }
         var summary = SubtreeSummary()
         guard root >= 0, root < Int32(store.count) else { return summary }
 

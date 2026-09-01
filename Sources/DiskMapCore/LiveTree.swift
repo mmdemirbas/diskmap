@@ -22,8 +22,15 @@ public final class LiveTree: @unchecked Sendable {
 
     /// Called on the main queue after the tree changed.
     public var onChange: (@Sendable () -> Void)?
-    public private(set) var liveUpdatesActive = false
-    public private(set) var lastChangeAt: Date?
+    private var watching = false
+    private var lastChange: Date?
+    private var changes = 0
+    /// Increments whenever the store is mutated. Anything cached against the
+    /// tree keys on this rather than on a UI counter, which also moves when
+    /// somebody types in the filter box and the tree has not changed at all.
+    public var changeCount: Int { lock.lock(); defer { lock.unlock() }; return changes }
+    public var liveUpdatesActive: Bool { lock.lock(); defer { lock.unlock() }; return watching }
+    public var lastChangeAt: Date? { lock.lock(); defer { lock.unlock() }; return lastChange }
 
     public private(set) var rejectedRoots: [RejectedRoot]
 
@@ -47,11 +54,12 @@ public final class LiveTree: @unchecked Sendable {
         }
         w.start()
         watcher = w
-        liveUpdatesActive = true
+        lock.lock(); watching = true; lock.unlock()
     }
 
     public func stopWatching() {
-        watcher?.stop(); watcher = nil; liveUpdatesActive = false
+        watcher?.stop(); watcher = nil
+        lock.lock(); watching = false; lock.unlock()
     }
 
     /// True when `path` is one of the roots or sits beneath one. Compares
@@ -70,7 +78,13 @@ public final class LiveTree: @unchecked Sendable {
     }
 
     private func enqueue(_ paths: [String]) {
-        lock.lock()
+        // Resolving an event to a directory costs a stat() and sometimes a
+        // realpath(). Under the lock that would block every UI read on
+        // filesystem calls during an event burst — the exact thing the
+        // three-phase relist below exists to avoid. `roots` is immutable, so
+        // this needs no lock at all.
+        var dirs: [String] = []
+        dirs.reserveCapacity(paths.count)
         for p in paths {
             // Reduce every event to the directory that must be relisted.
             var isDir: ObjCBool = false
@@ -80,9 +94,13 @@ public final class LiveTree: @unchecked Sendable {
                 guard let canon = canonicalPath(dir), isInsideRoot(canon) else { continue }
                 dir = canon
             }
-            pending.insert(dir)
+            dirs.append(dir)
         }
-        let shouldFlush = !flushScheduled && !pending.isEmpty
+        guard !dirs.isEmpty else { return }
+
+        lock.lock()
+        for dir in dirs { pending.insert(dir) }
+        let shouldFlush = !flushScheduled
         if shouldFlush { flushScheduled = true }
         lock.unlock()
 
@@ -107,12 +125,18 @@ public final class LiveTree: @unchecked Sendable {
 
         // No lock across the loop: relist takes it only for the two short
         // phases that touch the store.
+        let span = Telemetry.begin("live.flush")
         var changed = false
-        for d in roots where relist(directory: d) { changed = true }
+        var moved = 0
+        for d in roots where relist(directory: d) { changed = true; moved += 1 }
+        span.end(["events": .int(Int64(dirs.count)), "relisted": .int(Int64(roots.count)),
+                  "changed": .int(Int64(moved))], minMilliseconds: 20)
 
         if changed {
-            lastChangeAt = Date()
+            lock.lock()
+            lastChange = Date()
             let cb = onChange
+            lock.unlock()
             DispatchQueue.main.async { cb?() }
         }
     }
@@ -180,17 +204,36 @@ public final class LiveTree: @unchecked Sendable {
             existing[store.name(c)] = c
         }
 
-        // Skip a no-op so idle event traffic does not churn memory.
-        if entries.count == existing.count {
-            var identical = true
+        // The common event by far is "a file in this folder changed size" —
+        // a build writing output, a log growing, a download filling in. The
+        // names are the same, so nothing needs to be appended: updating the
+        // rows in place keeps the store from growing on every event, which
+        // over a working day is otherwise hundreds of megabytes of nodes that
+        // are immediately marked removed.
+        if entries.count == existing.count,
+           entries.allSatisfy({ e in
+               guard let c = existing[e.name] else { return false }
+               return store.isDirectory(c) == e.flags.contains(.directory)
+           }) {
+            var delta: Int64 = 0, deltaPhysical: Int64 = 0
             for e in entries {
-                guard let c = existing[e.name] else { identical = false; break }
-                if !store.isDirectory(c),
-                   store.totalPhysical[Int(c)] != e.physical || store.totalLogical[Int(c)] != e.logical {
-                    identical = false; break
-                }
+                let c = existing[e.name]!
+                guard !store.isDirectory(c) else { continue }
+                delta += e.logical - store.totalLogical[Int(c)]
+                deltaPhysical += e.physical - store.totalPhysical[Int(c)]
+                store.totalLogical[Int(c)] = e.logical
+                store.totalPhysical[Int(c)] = e.physical
+                store.mtime[Int(c)] = e.mtime
+                store.flags[Int(c)] = e.flags.rawValue
             }
-            if identical { return false }
+            guard delta != 0 || deltaPhysical != 0 else { return false }
+            Telemetry.record("live.resize", ["entries": .int(Int64(entries.count)),
+                                             "physical": .int(deltaPhysical)])
+            changes += 1
+            store.totalLogical[Int(node)] += delta
+            store.totalPhysical[Int(node)] += deltaPhysical
+            store.propagate(from: node, logical: delta, physical: deltaPhysical)
+            return true
         }
 
         let oldLogical = store.totalLogical[Int(node)]
@@ -232,6 +275,13 @@ public final class LiveTree: @unchecked Sendable {
         store.totalLogical[Int(node)] = newLogical
         store.totalPhysical[Int(node)] = newPhysical
         store.propagate(from: node, logical: newLogical - oldLogical, physical: newPhysical - oldPhysical)
+        changes += 1
+        Telemetry.record("live.relist", [
+            "entries": .int(Int64(entries.count)),
+            "reused": .int(Int64(reused.count)),
+            "scanned": .int(Int64(freshSubtrees.count)),
+            "nodes": .int(Int64(store.count)),
+        ])
         return true
     }
 
@@ -245,6 +295,7 @@ public final class LiveTree: @unchecked Sendable {
         store.childCount[Int(node)] = 0
         store.flags[Int(node)] |= NodeFlags.removed.rawValue
         store.propagate(from: node, logical: dl, physical: dp)
+        changes += 1
         return true
     }
 
@@ -266,6 +317,7 @@ public final class LiveTree: @unchecked Sendable {
         store.totalLogical[Int(node)] = 0
         store.totalPhysical[Int(node)] = 0
         store.propagate(from: node, logical: dl, physical: dp)
-        lastChangeAt = Date()
+        lastChange = Date()
+        changes += 1
     }
 }

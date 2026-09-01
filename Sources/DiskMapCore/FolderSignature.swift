@@ -42,16 +42,45 @@ public enum FolderMatches {
         return z ^ (z >> 31)
     }
 
-    /// One hash per node, files first: children always sit at a higher index
-    /// than their parent, so a single reverse pass sees them in order.
+    /// One hash per node, children before parents.
+    ///
+    /// The obvious loop — count-1 down to 0 — works only while every child sits
+    /// at a higher index than its parent, which is true of a fresh scan and
+    /// false the moment a live update runs: relisting a folder appends a new
+    /// node for it and re-points the untouched subtree, whose children keep
+    /// their old, lower indices. Hashing those parents before their children
+    /// gave every reattached folder the same hash, which reads as a flood of
+    /// identical folders that are not identical.
+    ///
+    /// Pre-order is correct whatever the indices look like, because a parent is
+    /// always emitted before its children; walking it backwards is therefore a
+    /// valid post-order.
+    public static func evaluationOrder(_ store: NodeStore) -> [Int32] {
+        var order = [Int32]()
+        order.reserveCapacity(store.count)
+        var stack: [Int32] = [0]
+        while let node = stack.popLast() {
+            order.append(node)
+            // A cycle would mean a folder reachable from itself. It cannot
+            // happen, and if it ever did this would hang the app rather than
+            // return a wrong answer, so it is cheap to refuse.
+            if order.count > store.count { return order }
+            for child in store.children(node) { stack.append(child) }
+        }
+        return order
+    }
+
     public static func signatures(_ store: NodeStore) -> [UInt64] {
+        let span = Telemetry.begin("match.hash")
+        defer { span.end(["nodes": .int(Int64(store.count))]) }
         var sig = [UInt64](repeating: 0, count: store.count)
         guard store.count > 0 else { return sig }
+        let order = evaluationOrder(store)
         store.nameBytes.withUnsafeBufferPointer { names in
             sig.withUnsafeMutableBufferPointer { out in
-                var i = store.count - 1
-                while i >= 0 {
-                    let id = Int32(i)
+                for index in stride(from: order.count - 1, through: 0, by: -1) {
+                    let id = order[index]
+                    let i = Int(id)
                     if store.isDirectory(id) {
                         var acc: UInt64 = 0
                         var kids: UInt64 = 0
@@ -68,21 +97,20 @@ public enum FolderMatches {
                         }
                         out[i] = mix(hash ^ mix(UInt64(bitPattern: store.totalLogical[i])))
                     }
-                    i -= 1
                 }
             }
         }
         return sig
     }
 
-    /// `precomputed` lets a caller reuse the hash pass across navigations: it
-    /// covers the whole tree and only changes when the tree does.
     public static func find(store: NodeStore, root: Int32,
                             minimumSize: Int64 = 50_000_000,
                             similarity: Double = 0.6,
                             limit: Int = 200,
                             precomputed: [UInt64]? = nil) -> [FolderMatch] {
-        let sig = precomputed?.count == store.count ? precomputed! : signatures(store)
+        let span = Telemetry.begin("match.folders")
+        let reused = precomputed?.count == store.count
+        let sig = reused ? precomputed! : signatures(store)
 
         // Only folders big enough to be worth a decision are candidates. That
         // also drops the endless empty and near-empty directories, which would
@@ -99,11 +127,19 @@ public enum FolderMatches {
                 }
             }
         }
-        guard candidates.count > 1 else { return [] }
+        guard candidates.count > 1 else {
+            span.end(["candidates": .int(Int64(candidates.count)), "exact": .int(0),
+                      "partial": .int(0), "hashesReused": .flag(reused)])
+            return []
+        }
 
         var matches = exactGroups(store, sig, candidates)
         matches += similarPairs(store, sig, candidates, threshold: similarity,
                                 exact: matches)
+        span.end(["candidates": .int(Int64(candidates.count)),
+                  "exact": .int(Int64(matches.filter(\.exact).count)),
+                  "partial": .int(Int64(matches.filter { !$0.exact }.count)),
+                  "hashesReused": .flag(reused)])
         return Array(matches.sorted { $0.reclaimable > $1.reclaimable }.prefix(limit))
     }
 

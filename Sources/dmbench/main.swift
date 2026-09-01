@@ -223,15 +223,99 @@ func cmdVerifyTop(_ path: String, budget: Int64) {
           + " unread \(outcome.unread)")
 }
 
+/// What the app has recorded about itself, across every run.
+///
+/// The point of accumulating is comparison over time: a scan that used to take
+/// 66 s and now takes 90 s is a finding, and it is only visible if the old
+/// number was written down when it happened.
+func cmdMetrics(_ limit: Int) {
+    let history = Telemetry.history()
+    guard !history.isEmpty else {
+        print("no records yet at \(Telemetry.logURL.path)")
+        print("(set DISKMAP_METRICS=0 to turn recording off)")
+        exit(0)
+    }
+    let sessions = Set(history.compactMap { $0.fields["s"] }).count
+    print("\(history.count) records from \(sessions) runs")
+    print("  \(history.first?.time ?? "") .. \(history.last?.time ?? "")")
+    print("  \(Telemetry.logURL.path)")
+
+    var byEvent: [String: [Double]] = [:]
+    var counts: [String: Int] = [:]
+    for record in history {
+        counts[record.event, default: 0] += 1
+        if let ms = record.ms { byEvent[record.event, default: []].append(ms) }
+    }
+
+    print("\nstage                    count      p50       p95       max")
+    for event in counts.keys.sorted() {
+        let name = event.rightPadded(22)
+        guard var times = byEvent[event], !times.isEmpty else {
+            print("  \(name) \(String(counts[event]!).leftPadded(7))        -         -         -")
+            continue
+        }
+        times.sort()
+        // Lower median, so two samples do not both report as the slower one.
+        let p50 = times[(times.count - 1) / 2]
+        let p95 = times[min(times.count - 1, Int(Double(times.count) * 0.95))]
+        print("  \(name) \(String(counts[event]!).leftPadded(7))"
+              + "\(ms(p50).leftPadded(9))\(ms(p95).leftPadded(10))\(ms(times.last!).leftPadded(10))")
+    }
+
+    // A relist that finds new folders scans each of them, so most "scan"
+    // records are a handful of nodes. Those are noise in a list meant to show
+    // how full scans behave over time.
+    let scans = history.filter {
+        $0.event == "scan" && (Int64($0.fields["nodes"] ?? "0") ?? 0) >= 1_000
+    }
+    if !scans.isEmpty {
+        print("\nrecent full scans (\(counts["scan"]! - scans.count) smaller ones not shown)")
+        for record in scans.suffix(limit) {
+            let nodes = Int64(record.fields["nodes"] ?? "0") ?? 0
+            let physical = Int64(record.fields["physical"] ?? "0") ?? 0
+            let footprint = Int64(record.fields["footprint"] ?? "0") ?? 0
+            let seconds = (record.ms ?? 0) / 1000
+            let rate = seconds > 0 ? Double(nodes) / seconds : 0
+            print("  \(record.time.prefix(19))  \(String(nodes).leftPadded(10)) nodes"
+                  + "  \(fmt(physical).leftPadded(10))  \(String(format: "%.1fs", seconds).leftPadded(8))"
+                  + "  \(String(format: "%.0f", rate).leftPadded(9))/s"
+                  + "  rss \(fmt(footprint))")
+        }
+    }
+
+    let problems = history.filter { $0.event.hasPrefix("problem.") }
+    if !problems.isEmpty {
+        print("\nproblems")
+        var byKind: [String: Int] = [:]
+        for p in problems { byKind[p.event, default: 0] += 1 }
+        for (kind, count) in byKind.sorted(by: { $0.value > $1.value }) {
+            print("  \(String(count).leftPadded(5)) x \(kind)")
+        }
+    }
+}
+
+private func ms(_ value: Double) -> String { String(format: "%.1f", value) }
+
+extension String {
+    func leftPadded(_ width: Int) -> String {
+        count >= width ? self : String(repeating: " ", count: width - count) + self
+    }
+    /// Pads, never truncates: a clipped event name is a different event.
+    func rightPadded(_ width: Int) -> String {
+        count >= width ? self : self + String(repeating: " ", count: width - count)
+    }
+}
+
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
 case "validate": cmdValidate(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "scan": cmdScan(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
 case "dupes": cmdDupes(args.count > 2 ? Array(args.dropFirst(2)) : [FileManager.default.homeDirectoryForCurrentUser.path])
+case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
 case "verify": cmdVerify(Array(args.dropFirst(2)))
 case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                                budget: args.count > 3 ? (Int64(args[3]) ?? 0) << 30 : 12 << 30)
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
-               + " | dupes <path> | verify <path> <path>]")
+               + " | dupes <path> | verify <path> <path> | verifytop <path> [GB] | metrics [n]]")
 }

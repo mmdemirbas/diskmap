@@ -100,6 +100,8 @@ public enum DeepVerify {
     public static func run(_ plan: VerifyPlan, cancel: CancelToken? = nil,
                            progressStep: Int64 = 64 << 20,
                            progress: ((Int64) -> Void)? = nil) -> VerifyOutcome {
+        guard !plan.items.isEmpty else { return VerifyOutcome(results: [], cancelled: false) }
+        let span = Telemetry.begin("verify")
         let tally = Tally(step: progressStep, report: progress)
         var results = [VerifyResult?](repeating: nil, count: plan.items.count)
 
@@ -127,8 +129,13 @@ public enum DeepVerify {
             }
         }
         tally.flush()
-        return VerifyOutcome(results: results.compactMap { $0 },
-                             cancelled: cancel?.isCancelled == true)
+        let outcome = VerifyOutcome(results: results.compactMap { $0 },
+                                    cancelled: cancel?.isCancelled == true)
+        span.end(["folders": .int(Int64(plan.items.count)), "files": .int(Int64(plan.files)),
+                  "bytes": .int(plan.bytes), "distinct": .int(Int64(outcome.distinct)),
+                  "identical": .flag(outcome.identical), "cancelled": .flag(outcome.cancelled),
+                  "unread": .int(Int64(outcome.unread)), "skipped": .int(Int64(outcome.skipped))])
+        return outcome
     }
 
     private static func hash(_ path: String, cancel: CancelToken?, tally: Tally) -> [UInt8]? {

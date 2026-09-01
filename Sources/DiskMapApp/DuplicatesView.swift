@@ -97,7 +97,9 @@ struct DuplicatesView: View {
                         sectionHeader(loc[.sectionFolders], model.folderMatches.count)
                         ForEach(model.folderMatches.prefix(folders)) { entry in
                             folderRow(entry)
-                            if model.openMatches.contains(entry.id) { details(entry.id, entry.copies) }
+                            if model.openMatches.contains(entry.id) {
+                                details(entry.id, entry.copies, entry.readBytes)
+                            }
                         }
                     }
                     if folders < fits, !model.duplicates.isEmpty {
@@ -115,7 +117,9 @@ struct DuplicatesView: View {
                         Section {
                             ForEach(model.folderMatches) { entry in
                                 folderRow(entry)
-                                if model.openMatches.contains(entry.id) { details(entry.id, entry.copies) }
+                                if model.openMatches.contains(entry.id) {
+                                    details(entry.id, entry.copies, entry.readBytes)
+                                }
                             }
                         } header: {
                             sectionHeader(loc[.sectionFolders], model.folderMatches.count)
@@ -125,7 +129,9 @@ struct DuplicatesView: View {
                         Section {
                             ForEach(model.duplicates) { entry in
                                 fileRow(entry)
-                                if model.openMatches.contains(entry.id) { details(entry.id, entry.copies) }
+                                if model.openMatches.contains(entry.id) {
+                                    details(entry.id, entry.copies, entry.readBytes)
+                                }
                             }
                         } header: {
                             sectionHeader(loc[.sectionFiles], model.duplicates.count)
@@ -182,9 +188,10 @@ struct DuplicatesView: View {
 
     // MARK: - Expanded match
 
-    @ViewBuilder private func details(_ id: Int64, _ copies: [PathRef]) -> some View {
+    @ViewBuilder private func details(_ id: Int64, _ copies: [PathRef],
+                                      _ readBytes: Int64) -> some View {
         ForEach(copies) { copy in pathRow(copy) }
-        verifyRow(id, copies)
+        verifyRow(id, copies, readBytes)
     }
 
     /// One copy. The first is not marked as the one to keep on purpose — this
@@ -211,7 +218,8 @@ struct DuplicatesView: View {
 
     /// The deep check. It reads every byte, so the button says the price and
     /// the run can be stopped.
-    @ViewBuilder private func verifyRow(_ id: Int64, _ copies: [PathRef]) -> some View {
+    @ViewBuilder private func verifyRow(_ id: Int64, _ copies: [PathRef],
+                                        _ readBytes: Int64) -> some View {
         let status = model.verifications[id]
         HStack(spacing: 8) {
             if let status, status.running {
@@ -229,7 +237,7 @@ struct DuplicatesView: View {
             } else {
                 Button(loc[.verify]) { model.verifyMatch(id: id, nodes: copies.map(\.id)) }
                     .controlSize(.small)
-                Text(loc.readsBytes(shortBytes(readCost(id, copies))))
+                Text(loc.readsBytes(shortBytes(readBytes)))
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
@@ -259,11 +267,4 @@ struct DuplicatesView: View {
         }
     }
 
-    private func readCost(_ id: Int64, _ copies: [PathRef]) -> Int64 {
-        if let entry = model.folderMatches.first(where: { $0.id == id }) { return entry.readBytes }
-        if let entry = model.duplicates.first(where: { $0.id == id }) {
-            return entry.bytes * Int64(entry.copies.count)
-        }
-        return 0
-    }
 }

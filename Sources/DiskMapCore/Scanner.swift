@@ -169,6 +169,7 @@ public final class DiskScanner {
     public func scan(_ rawOptions: ScanOptions,
                      progress: (@Sendable (ScanProgress) -> Void)? = nil) -> ScanResult {
         let started = Date()
+        let span = Telemetry.begin("scan")
         // Canonical paths throughout: FSEvents reports the resolved form
         // ("/private/var/..."), so a tree rooted anywhere else silently matches
         // nothing. Normalising also drops duplicates and any folder already
@@ -177,6 +178,7 @@ public final class DiskScanner {
         let normalized = RootSet.normalize(requested,
                                            followMountPoints: rawOptions.followMountPoints)
         guard !normalized.roots.isEmpty else {
+            span.end(["roots": .int(0), "rejected": .int(Int64(normalized.rejected.count))])
             return ScanResult(store: NodeStore(), stats: ScanStats(), roots: [],
                               rejectedRoots: normalized.rejected)
         }
@@ -246,6 +248,27 @@ public final class DiskScanner {
         stats.totalLogical = store.totalLogical[0]
         stats.totalPhysical = store.totalPhysical[0]
         stats.elapsed = Date().timeIntervalSince(started)
+
+        span.end([
+            "roots": .int(Int64(normalized.roots.count)),
+            "threads": .int(Int64(rawOptions.threadCount)),
+            "nodes": .int(Int64(store.count)),
+            "files": .int(Int64(stats.files)),
+            "dirs": .int(Int64(stats.directories)),
+            "logical": .int(stats.totalLogical),
+            "physical": .int(stats.totalPhysical),
+            "dataless": .int(Int64(stats.datalessCount)),
+            "hardlinks": .int(Int64(stats.hardlinkDuplicates)),
+            "unreadable": .int(Int64(stats.unreadableDirectories)),
+            "cancelled": .flag(stats.cancelled),
+            "footprint": .int(Telemetry.footprintBytes()),
+        ])
+        if stats.unreadableDirectories > 0 {
+            // Almost always missing Full Disk Access, which makes every total
+            // on screen an understatement. Worth a record of its own.
+            Telemetry.problem("scan.unreadable", "directories could not be read",
+                              ["count": .int(Int64(stats.unreadableDirectories))])
+        }
         return ScanResult(store: store, stats: stats, roots: normalized.roots,
                           rejectedRoots: normalized.rejected)
     }

@@ -34,6 +34,7 @@ public enum Duplicates {
                             minimumSize: Int64 = 1_000_000,
                             limit: Int = 200,
                             insideMatched: [FolderMatch] = []) -> [DuplicateGroup] {
+        let span = Telemetry.begin("match.files")
         struct Key: Hashable { let name: String; let size: Int64 }
         var groups: [Key: [Int32]] = [:]
         var stack: [Int32] = [root]
@@ -55,6 +56,11 @@ public enum Duplicates {
         var folderOf: [Int32: Set<Int>] = [:]
         for (index, match) in insideMatched.enumerated() {
             for node in match.nodes { folderOf[node, default: []].insert(index) }
+        }
+
+        defer {
+            span.end(["candidates": .int(Int64(groups.count)),
+                      "suppressed": .flag(!insideMatched.isEmpty)])
         }
 
         return groups

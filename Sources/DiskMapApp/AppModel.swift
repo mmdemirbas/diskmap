@@ -131,6 +131,9 @@ struct DuplicateEntry: Identifiable {
     let name: String
     let bytes: Int64
     let reclaimable: Int64
+    /// What verifying this match would read, so the button can say the price
+    /// without the view searching for it on every row it draws.
+    let readBytes: Int64
     let copies: [PathRef]
 }
 
@@ -639,6 +642,7 @@ final class AppModel: ObservableObject {
 
     nonisolated static func compute(tree: LiveTree, root: Int32, size: CGSize,
                                     physical: Bool, filter: String, key: String) -> TreemapLayout {
+        let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
         let needle = filter.lowercased()
         return tree.withStore { store in
@@ -650,6 +654,9 @@ final class AppModel: ObservableObject {
             for c in laid where c.node >= 0 {
                 map[c.node] = cellInfo(store, c.node, physical: physical)
             }
+            span.end(["cells": .int(Int64(laid.count)),
+                      "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
+                      "view": .text("treemap")], minMilliseconds: 40)
             return TreemapLayout(key: key, cells: laid, info: map)
         }
     }
@@ -670,6 +677,7 @@ final class AppModel: ObservableObject {
     nonisolated static func computeSunburst(tree: LiveTree, root: Int32, size: CGSize,
                                             physical: Bool, filter: String,
                                             key: String) -> SunburstLayout {
+        let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
         let needle = filter.lowercased()
         return tree.withStore { store in
@@ -681,6 +689,9 @@ final class AppModel: ObservableObject {
             for segment in segments where segment.node >= 0 {
                 map[segment.node] = cellInfo(store, segment.node, physical: physical)
             }
+            span.end(["cells": .int(Int64(segments.count)),
+                      "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
+                      "view": .text("sunburst")], minMilliseconds: 40)
             return SunburstLayout(key: key, segments: segments, info: map)
         }
     }
@@ -688,6 +699,7 @@ final class AppModel: ObservableObject {
     nonisolated static func computeIcicle(tree: LiveTree, root: Int32, size: CGSize,
                                           physical: Bool, filter: String,
                                           key: String) -> IcicleLayout {
+        let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 4)
         let needle = filter.lowercased()
         return tree.withStore { store in
@@ -699,6 +711,9 @@ final class AppModel: ObservableObject {
             for cell in cells where cell.node >= 0 {
                 map[cell.node] = cellInfo(store, cell.node, physical: physical)
             }
+            span.end(["cells": .int(Int64(cells.count)),
+                      "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
+                      "view": .text("icicle")], minMilliseconds: 40)
             return IcicleLayout(key: key, cells: cells, info: map)
         }
     }
@@ -779,10 +794,15 @@ final class AppModel: ObservableObject {
         let root = currentDirectory
         let physical = usePhysicalSize
         let wantsDuplicates = panel == .duplicates
-        if wantsDuplicates { verifications.removeAll() }
+        // Verdicts belong to the tree that produced them. Dropping the state
+        // without stopping the run would leave gigabytes of reading in flight
+        // for an answer nobody can see any more.
+        if wantsDuplicates { cancelAllVerifications() }
         summarizing = true
         let cache = signatureCache
-        let revision = revision
+        // The tree's own counter, not the view's: retyping a filter must not
+        // throw away a hash pass that is still valid.
+        let revision = tree.changeCount
         Task { [weak self] in
             let computed = await Task.detached(priority: .userInitiated) {
                 Self.report(tree: tree, root: root, physical: physical,
@@ -799,7 +819,7 @@ final class AppModel: ObservableObject {
         guard let tree else { return }
         apply(Self.report(tree: tree, root: currentDirectory, physical: usePhysicalSize,
                           includeDuplicates: panel == .duplicates,
-                          cache: signatureCache, revision: revision))
+                          cache: signatureCache, revision: tree.changeCount))
     }
 
     private func apply(_ computed: ReportData) {
@@ -844,6 +864,7 @@ final class AppModel: ObservableObject {
                                          insideMatched: matches).map { group in
                 DuplicateEntry(id: matchKey(group.nodes), name: group.name, bytes: group.bytes,
                                reclaimable: group.reclaimable,
+                               readBytes: group.bytes * Int64(group.nodes.count),
                                copies: group.nodes
                                    .map { PathRef(id: $0, path: store.path($0)) }
                                    .sorted { $0.path < $1.path })
@@ -885,9 +906,10 @@ final class AppModel: ObservableObject {
         verifyTokens[id] = nil
     }
 
-    func clearVerification(id: Int64) {
-        cancelVerify(id: id)
-        verifications[id] = nil
+    func cancelAllVerifications() {
+        for token in verifyTokens.values { token.cancel() }
+        verifyTokens.removeAll()
+        verifications.removeAll()
     }
 
     /// Blocking scan used by the offscreen renderer.
@@ -944,11 +966,15 @@ final class AppModel: ObservableObject {
         do {
             let (trashed, failures) = try FileActions.moveToTrash(
                 [(url: URL(fileURLWithPath: path), node: node, bytes: bytes)])
-            if let first = failures.first { toast = first.errorDescription; return }
+            if let first = failures.first {
+                Telemetry.problem("trash", first.errorDescription ?? "unknown")
+                toast = first.errorDescription; return
+            }
             // Reflect it now; the FSEvents relist that follows is a no-op.
             tree.markRemoved(node)
             undoStack.append(contentsOf: trashed)
             if selection == node { select(nil) }
+            Telemetry.record("action.trash", ["physical": .int(bytes)])
             toast = L10n.shared.freedBytes(shortBytes(bytes))
             refreshVolume()
             rebuild()
@@ -966,6 +992,7 @@ final class AppModel: ObservableObject {
             refreshVolume()
             rebuild()
         } catch {
+            Telemetry.problem("undo", error.localizedDescription)
             toast = L10n.shared.couldNotRestore(error.localizedDescription)
         }
     }

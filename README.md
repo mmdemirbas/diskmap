@@ -274,9 +274,19 @@ above — 9.58M nodes:
 
 | | |
 |---|---|
-| Duplicate files | **0.07 s**, 7,602 candidate groups, 281 GB |
-| Duplicate folders | **0.58 s**, 399 identical and 1,369 partial, 323 GB |
-| Verifying a match | 9.29 GB read in **4.5 s** (2.05 GB/s), confirmed identical |
+| Duplicate files | **0.07 s**, 51,473 candidates, 7,602 groups, 281 GB |
+| Duplicate folders | **0.59 s** total, of which **0.23 s** is hashing all 9.6M nodes; 11,326 candidates, 400 identical and 1,201 partial |
+| Verifying a match | 9.29 GB read in **4.2 s** (2.2 GB/s), confirmed identical |
+| Laying out a view | never reached the 40 ms recording threshold, on a tree of 3M nodes; a 20-cell icicle measured 0.046 ms |
+
+Those come from `dmbench metrics`, which reads what the app recorded rather than
+from a stopwatch held over one run. Four scans of the same home folder came in
+between 49.3 s and 53.5 s, at 180k–195k entries/s, with a memory footprint of
+490–495 MB.
+
+The layout row is the reason the treemap does not need work: it lays out the
+level being viewed, with a byte-threshold prefilter, so its cost follows the
+number of visible cells rather than the size of the tree.
 
 The folder pass hashes every node, so it costs 8 bytes per node while it runs
 (77 MB on that tree) and is kept across navigations, since the hashes only
@@ -284,6 +294,36 @@ change when the tree does.
 
 Run `dmbench scan <path>` for the same breakdown on any tree, or
 `dmbench dupes <path>` for the duplicate pass on its own.
+
+## What it records about itself
+
+The app measures its own work and keeps the measurements. Two outputs from one
+call site:
+
+- **Signposts** for Instruments. Free when nobody is recording, and the only way
+  to see a stage next to the kernel time around it — which matters here, because
+  96% of a scan is the kernel.
+- **A JSONL file** at `~/Library/Application Support/DiskMap/metrics.jsonl`,
+  appended across runs and rotated at 8 MB. Accumulating is the point: a scan
+  that took 66 s in September and takes 90 s in November is a finding, and it is
+  only visible if the September number was written down at the time.
+
+Recorded: counts, sizes, durations, and the outcome of each stage — scans, live
+relists, the duplicate and folder passes, deep verification, slow layouts,
+trashing, and problems such as unreadable directories.
+
+**Not recorded: any path or file name.** This is a disk analyzer; its own log
+would otherwise be a listing of everything you own. A test walks every
+`Telemetry.record` and `span.end` call site and fails the build if one passes a
+path or a name. Nothing here opens a network connection, and recording is off
+entirely under `DISKMAP_METRICS=0`.
+
+`DISKMAP_METRICS_ALL=1` drops the "only if it was slow" thresholds, which is how
+you check that a stage which is never slow is instrumented at all.
+
+Read it back with `dmbench metrics`, which summarises count, p50, p95 and max
+per stage, lists recent full scans with their throughput and memory, and counts
+problems. *Scan → Show diagnostics log* reveals the file in Finder.
 
 ## Known limits
 
@@ -312,6 +352,7 @@ swift test                                   # 60 tests, including FSEvents end-
 .build/release/dmbench dupes <path>          # duplicate files and folders, and pass cost
 .build/release/dmbench verify <a> <b>        # read both and compare contents
 .build/release/dmbench verifytop <path> <GB> # verify the largest match under a budget
+.build/release/dmbench metrics [n]           # what has been recorded, across runs
 ```
 
 `dmbench validate` exists because `getattrlistbulk` returns a packed buffer whose
