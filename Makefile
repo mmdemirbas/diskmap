@@ -1,4 +1,4 @@
-.PHONY: help install uninstall dev build test bench clean
+.PHONY: help install uninstall dev build cli test bench clean
 .DEFAULT_GOAL := help
 
 help:               ## Show this list
@@ -22,6 +22,14 @@ build:              ## Assemble build/DiskMap.app
 
 test:               ## Run the test suite
 	@swift test
+
+cli:                ## Build the diskmap command and put it on PATH
+	@swift build -c release --product diskmap
+	@mkdir -p "$$HOME/.local/bin"
+	@cp .build/release/diskmap "$$HOME/.local/bin/diskmap"
+	@echo "  installed $$HOME/.local/bin/diskmap"
+	@command -v diskmap >/dev/null 2>&1 \
+		|| echo "  note: $$HOME/.local/bin is not on your PATH"
 
 bench:              ## Capacity report for every mounted volume
 	@swift build -c release --product dmbench

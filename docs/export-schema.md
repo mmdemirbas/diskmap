@@ -13,7 +13,8 @@ documents_history: true
 
 Two ways, producing the same document.
 
-**From the command line**, for anything automated:
+**From the command line**, for anything automated. `make cli` builds it and
+puts it in `~/.local/bin`:
 
 ```
 diskmap ~/Downloads ~/Movies --out report.json
