@@ -83,7 +83,21 @@ public struct DiffEntry: Sendable, Identifiable {
     /// one place and every reader gets the same answer.
     public var newerSide: Side?
 
+    /// What each side is, as the comparison saw it. The runner checks the
+    /// target against this before it moves anything to the Trash, so that a
+    /// plan reviewed on screen cannot act on a file that has since changed.
+    public var leftLogical: Int64 = 0
+    public var rightLogical: Int64 = 0
+    public var leftIsFolder = false
+    public var rightIsFolder = false
+    /// The ignore patterns kept something out of this item's subtree, so
+    /// copying or removing it whole takes along a name nothing compared.
+    public var coversIgnored = false
+
     public func bytes(on side: Side) -> Int64 { side == .left ? leftBytes : rightBytes }
+    public func logical(on side: Side) -> Int64 { side == .left ? leftLogical : rightLogical }
+    public func modified(on side: Side) -> Int32 { side == .left ? leftModified : rightModified }
+    public func isFolder(on side: Side) -> Bool { side == .left ? leftIsFolder : rightIsFolder }
 
     public func isDirectory(on side: Side) -> Bool {
         kind == .typeClash && side == .right ? !isDirectory : isDirectory
@@ -99,7 +113,13 @@ public struct DiffEntry: Sendable, Identifiable {
 
     public init(id: Int, relativePath: String, kind: DiffKind, isDirectory: Bool,
                 leftBytes: Int64, rightBytes: Int64, leftModified: Int32, rightModified: Int32,
-                items: Int, dataless: Bool, newerSide: Side? = nil) {
+                items: Int, dataless: Bool, newerSide: Side? = nil,
+                leftLogical: Int64 = 0, rightLogical: Int64 = 0,
+                leftIsFolder: Bool = false, rightIsFolder: Bool = false,
+                coversIgnored: Bool = false) {
+        self.leftLogical = leftLogical; self.rightLogical = rightLogical
+        self.leftIsFolder = leftIsFolder; self.rightIsFolder = rightIsFolder
+        self.coversIgnored = coversIgnored
         self.id = id; self.relativePath = relativePath; self.kind = kind
         self.isDirectory = isDirectory
         self.leftBytes = leftBytes; self.rightBytes = rightBytes
@@ -239,9 +259,12 @@ public enum FolderDiff {
         // Subtree hashes let a folder whose contents match all the way down be
         // reported as one line instead of ten thousand, and let it stay one
         // line until somebody opens it.
+        let leftSignatures = DiffTree.signatures(ls, ignore: options.ignore)
+        let rightSignatures = DiffTree.signatures(rs, ignore: options.ignore)
         let tree = DiffTree(left: ls, right: rs,
-                            leftSig: FolderMatches.signatures(ls),
-                            rightSig: FolderMatches.signatures(rs),
+                            leftSig: leftSignatures.values, rightSig: rightSignatures.values,
+                            leftHasIgnored: leftSignatures.hasIgnored,
+                            rightHasIgnored: rightSignatures.hasIgnored,
                             leftItems: subtreeItems(ls), rightItems: subtreeItems(rs),
                             options: options)
 
@@ -354,7 +377,13 @@ public enum FolderDiff {
                 rightModified: tree.modified(child, on: .right),
                 items: isDirectory ? below : 0,
                 dataless: tree.dataless(child),
-                newerSide: tree.newerSide(child)))
+                newerSide: tree.newerSide(child),
+                leftLogical: tree.logicalBytes(child, on: .left),
+                rightLogical: tree.logicalBytes(child, on: .right),
+                leftIsFolder: tree.isDirectory(child, on: .left),
+                rightIsFolder: tree.isDirectory(child, on: .right),
+                coversIgnored: tree.coversIgnored(child, on: .left)
+                    || tree.coversIgnored(child, on: .right)))
             tree.endDecisions(child, at: out.count)
             tree.absorb(child, into: id)
         }

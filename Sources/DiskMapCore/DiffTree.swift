@@ -73,6 +73,11 @@ public final class DiffTree: @unchecked Sendable {
     let right: NodeStore
     let leftSig: [UInt64]
     let rightSig: [UInt64]
+    /// Per node, whether anything below it was left out by the ignore
+    /// patterns. A folder that matches only because something was ignored is
+    /// still a folder holding a file the other side has never seen.
+    let leftHasIgnored: [Bool]
+    let rightHasIgnored: [Bool]
     let leftItems: [Int32]
     let rightItems: [Int32]
     public let options: CompareOptions
@@ -85,9 +90,14 @@ public final class DiffTree: @unchecked Sendable {
 
     init(left: NodeStore, right: NodeStore,
          leftSig: [UInt64], rightSig: [UInt64],
+         leftHasIgnored: [Bool] = [], rightHasIgnored: [Bool] = [],
          leftItems: [Int32], rightItems: [Int32],
          options: CompareOptions = CompareOptions()) {
         self.options = options
+        self.leftHasIgnored = leftHasIgnored.isEmpty
+            ? [Bool](repeating: false, count: left.count) : leftHasIgnored
+        self.rightHasIgnored = rightHasIgnored.isEmpty
+            ? [Bool](repeating: false, count: right.count) : rightHasIgnored
         self.left = left
         self.right = right
         self.leftSig = leftSig
@@ -129,6 +139,14 @@ public final class DiffTree: @unchecked Sendable {
     public func bytes(_ id: Int32, on side: Side) -> Int64 {
         let n = node(id, on: side)
         return n >= 0 ? store(side).totalPhysical[Int(n)] : 0
+    }
+
+    /// The size the file system reports, not the space it occupies. Allocated
+    /// size is the honest number for "how much would this free"; this is the
+    /// one that can be checked against the file again later.
+    public func logicalBytes(_ id: Int32, on side: Side) -> Int64 {
+        let n = node(id, on: side)
+        return n >= 0 ? store(side).totalLogical[Int(n)] : 0
     }
 
     public func modified(_ id: Int32, on side: Side) -> Int32 {
@@ -209,25 +227,17 @@ public final class DiffTree: @unchecked Sendable {
 
         left.withNameBytes { lb in
             right.withNameBytes { rb in
-                let lk = sortedChildren(left, parentNode.leftNode, lb)
-                let rk = sortedChildren(right, parentNode.rightNode, rb)
-                var i = 0, j = 0
-                while i < lk.count || j < rk.count {
-                    if j == rk.count {
-                        append(id, depth, lk[i], -1); i += 1; continue
-                    }
-                    if i == lk.count {
-                        append(id, depth, -1, rk[j]); j += 1; continue
-                    }
-                    let order = DiffTree.compareNames(lb, left.nameSpan(lk[i]),
-                                                      rb, right.nameSpan(rk[j]))
-                    if order < 0 {
-                        append(id, depth, lk[i], -1); i += 1
-                    } else if order > 0 {
-                        append(id, depth, -1, rk[j]); j += 1
-                    } else {
-                        append(id, depth, lk[i], rk[j]); i += 1; j += 1
-                    }
+                var lk = sortedChildren(left, parentNode.leftNode, lb)
+                var rk = sortedChildren(right, parentNode.rightNode, rb)
+
+                // Merged on the folded name where that is safe, and on the raw
+                // bytes where it is not. See `foldedKeys`.
+                var lKeys = DiffTree.foldedKeys(left, lk, lb)
+                var rKeys = DiffTree.foldedKeys(right, rk, rb)
+                if DiffTree.sortByKey(&lk, &lKeys), DiffTree.sortByKey(&rk, &rKeys) {
+                    merge(id, depth, lk, lKeys, rk, rKeys)
+                } else {
+                    merge(id, depth, lk, lb, rk, rb)
                 }
             }
         }
@@ -246,6 +256,90 @@ public final class DiffTree: @unchecked Sendable {
         // at it would walk the merge again to find nothing.
         nodes[Int(id)].firstChild = base
         nodes[Int(id)].childCount = end - base
+    }
+
+    /// Walks the two child lists together, pairing the names that match.
+    private func merge(_ id: Int32, _ depth: Int32,
+                       _ lk: [Int32], _ lKeys: [[UInt8]],
+                       _ rk: [Int32], _ rKeys: [[UInt8]]) {
+        var i = 0, j = 0
+        while i < lk.count || j < rk.count {
+            if j == rk.count { append(id, depth, lk[i], -1); i += 1; continue }
+            if i == lk.count { append(id, depth, -1, rk[j]); j += 1; continue }
+            let order = DiffTree.compareKeys(lKeys[i], rKeys[j])
+            if order < 0 { append(id, depth, lk[i], -1); i += 1 }
+            else if order > 0 { append(id, depth, -1, rk[j]); j += 1 }
+            else { append(id, depth, lk[i], rk[j]); i += 1; j += 1 }
+        }
+    }
+
+    private func merge(_ id: Int32, _ depth: Int32,
+                       _ lk: [Int32], _ lb: UnsafeBufferPointer<UInt8>,
+                       _ rk: [Int32], _ rb: UnsafeBufferPointer<UInt8>) {
+        var i = 0, j = 0
+        while i < lk.count || j < rk.count {
+            if j == rk.count { append(id, depth, lk[i], -1); i += 1; continue }
+            if i == lk.count { append(id, depth, -1, rk[j]); j += 1; continue }
+            let order = DiffTree.compareNames(lb, left.nameSpan(lk[i]),
+                                              rb, right.nameSpan(rk[j]))
+            if order < 0 { append(id, depth, lk[i], -1); i += 1 }
+            else if order > 0 { append(id, depth, -1, rk[j]); j += 1 }
+            else { append(id, depth, lk[i], rk[j]); i += 1; j += 1 }
+        }
+    }
+
+    /// The name a folder is merged on, folded the way the volume folds it.
+    ///
+    /// A Mac volume folds case, and folds the two ways a letter such as "ş"
+    /// can be spelled, when it looks a name up — but it stores whichever bytes
+    /// it was handed. Foundation hands it decomposed ones; a zip, an rsync or
+    /// another system hands it precomposed ones. So one file can sit on the
+    /// two sides under different bytes. Compared byte for byte it reads as
+    /// present on one side only, and a mirror acts on that by moving the copy
+    /// on the other side to the Trash.
+    static func foldedKeys(_ store: NodeStore, _ kids: [Int32],
+                           _ bytes: UnsafeBufferPointer<UInt8>) -> [[UInt8]] {
+        kids.map { node in
+            let span = store.nameSpan(node)
+            guard let base = bytes.baseAddress, span.length > 0 else { return [] }
+            var folded = [UInt8](repeating: 0, count: span.length)
+            var ascii = true
+            for k in 0..<span.length {
+                let b = base[span.offset + k]
+                if b >= 0x80 { ascii = false }
+                folded[k] = (b >= 65 && b <= 90) ? b + 32 : b
+            }
+            guard !ascii, let text = String(bytes: folded, encoding: .utf8) else { return folded }
+            return Array(text.precomposedStringWithCanonicalMapping.lowercased().utf8)
+        }
+    }
+
+    /// Sorts a folder's children by folded name, and says whether the result
+    /// can be trusted.
+    ///
+    /// False when two names in one folder fold together. A volume that folds
+    /// names could never hold both, so this folder is on one that does not —
+    /// there the two really are different files, and the raw bytes are the
+    /// only honest way to tell them apart.
+    static func sortByKey(_ kids: inout [Int32], _ keys: inout [[UInt8]]) -> Bool {
+        let order = (0..<kids.count).sorted { compareKeys(keys[$0], keys[$1]) < 0 }
+        kids = order.map { kids[$0] }
+        keys = order.map { keys[$0] }
+        for k in 1..<max(keys.count, 1) where keys[k] == keys[k - 1] { return false }
+        return true
+    }
+
+    @inline(__always)
+    static func compareKeys(_ a: [UInt8], _ b: [UInt8]) -> Int {
+        let shared = min(a.count, b.count)
+        if shared > 0 {
+            let order = a.withUnsafeBytes { pa in
+                b.withUnsafeBytes { pb in memcmp(pa.baseAddress!, pb.baseAddress!, shared) }
+            }
+            if order != 0 { return order < 0 ? -1 : 1 }
+        }
+        if a.count == b.count { return 0 }
+        return a.count < b.count ? -1 : 1
     }
 
     private func append(_ parent: Int32, _ depth: Int32, _ l: Int32, _ r: Int32) {
@@ -269,7 +363,110 @@ public final class DiffTree: @unchecked Sendable {
         let leftIsDir = left.isDirectory(l), rightIsDir = right.isDirectory(r)
         if leftIsDir != rightIsDir { return .typeClash }
         if leftIsDir { return leftSig[Int(l)] == rightSig[Int(r)] ? .identical : .differs }
+
+        // A link and a file are not the same kind of thing whatever their
+        // lengths say, and a link's length is the length of the path it holds
+        // — two links pointing somewhere completely different are the same
+        // size. Nothing downstream can catch that either: the content check
+        // reads regular files, so it never opens a link to disagree.
+        let leftIsLink = left.flagSet(l).contains(.symlink)
+        let rightIsLink = right.flagSet(r).contains(.symlink)
+        if leftIsLink != rightIsLink { return .typeClash }
+        if leftIsLink {
+            return DiffTree.linkTarget(left, l) == DiffTree.linkTarget(right, r)
+                ? .identical : .differs
+        }
         return left.totalLogical[Int(l)] == right.totalLogical[Int(r)] ? .identical : .differs
+    }
+
+    static func linkTarget(_ store: NodeStore, _ node: Int32) -> String {
+        (try? FileManager.default.destinationOfSymbolicLink(atPath: store.path(node))) ?? ""
+    }
+
+    /// True when the ignore patterns kept something out of this item's subtree.
+    ///
+    /// It is the one thing a filter changes that is not cosmetic: a folder that
+    /// matches only because a name was ignored still holds that name, and
+    /// copying or removing the folder whole takes it along.
+    public func coversIgnored(_ id: Int32, on side: Side) -> Bool {
+        let n = node(id, on: side)
+        guard n >= 0 else { return false }
+        let flags = side == .left ? leftHasIgnored : rightHasIgnored
+        return Int(n) < flags.count && flags[Int(n)]
+    }
+
+    /// Subtree hashes, with the two corrections a folder comparison needs that
+    /// the duplicate finder does not.
+    ///
+    /// A name the patterns leave out must not decide whether two folders match
+    /// — otherwise ignoring `.DS_Store` stops the folder collapsing, which is
+    /// the entire point of ignoring it. And a symlink is what it points at, not
+    /// how long that path happens to be.
+    static func signatures(_ store: NodeStore, ignore: [String])
+        -> (values: [UInt64], hasIgnored: [Bool]) {
+        var sig = [UInt64](repeating: 0, count: store.count)
+        var dirty = [Bool](repeating: false, count: store.count)
+        guard store.count > 0 else { return (sig, dirty) }
+        let order = FolderMatches.evaluationOrder(store)
+
+        store.nameBytes.withUnsafeBufferPointer { names in
+            for index in stride(from: order.count - 1, through: 0, by: -1) {
+                let id = order[index]
+                let i = Int(id)
+                if store.isDirectory(id) {
+                    var acc: UInt64 = 0, kids: UInt64 = 0
+                    for c in store.children(id) where !store.flagSet(c).contains(.removed) {
+                        if matchesAny(store, c, names, ignore) { dirty[i] = true; continue }
+                        if dirty[Int(c)] { dirty[i] = true }
+                        acc = acc &+ FolderMatches.mix(sig[Int(c)])
+                        kids &+= 1
+                    }
+                    sig[i] = kids == 0 ? 0 : FolderMatches.mix(acc ^ (kids &* 0x9E37_79B9_7F4A_7C15))
+                } else {
+                    // Folded, so that the hash agrees with the way the folders
+                    // above it were merged — otherwise one file spelled two
+                    // ways stops two matching folders from collapsing.
+                    let start = Int(store.nameOffset[i])
+                    var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+                    var ascii = true
+                    for k in start..<(start + Int(store.nameLen[i])) {
+                        let b = names[k]
+                        if b >= 0x80 { ascii = false }
+                        hash = (hash ^ UInt64((b >= 65 && b <= 90) ? b + 32 : b)) &* 0x100_0000_01b3
+                    }
+                    if !ascii {
+                        hash = 0xcbf2_9ce4_8422_2325
+                        for b in foldedKeys(store, [id], names)[0] {
+                            hash = (hash ^ UInt64(b)) &* 0x100_0000_01b3
+                        }
+                    }
+                    if store.flagSet(id).contains(.symlink) {
+                        for byte in linkTarget(store, id).utf8 {
+                            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
+                        }
+                        // Salted, so a link can never hash equal to a file that
+                        // happens to be the length of its target path.
+                        sig[i] = FolderMatches.mix(hash ^ 0x5EED_C0DE_5EED_C0DE)
+                    } else {
+                        sig[i] = FolderMatches.mix(
+                            hash ^ FolderMatches.mix(UInt64(bitPattern: store.totalLogical[i])))
+                    }
+                }
+            }
+        }
+        return (sig, dirty)
+    }
+
+    static func matchesAny(_ store: NodeStore, _ node: Int32,
+                           _ bytes: UnsafeBufferPointer<UInt8>, _ patterns: [String]) -> Bool {
+        guard !patterns.isEmpty else { return false }
+        let span = store.nameSpan(node)
+        guard span.length > 0, span.length < 255, let base = bytes.baseAddress else { return false }
+        var name = [CChar](repeating: 0, count: span.length + 1)
+        for k in 0..<span.length { name[k] = CChar(bitPattern: base[span.offset + k]) }
+        return patterns.contains { pattern in
+            pattern.withCString { fnmatch($0, name, FNM_CASEFOLD) == 0 }
+        }
     }
 
     /// The run of decisions this row stands for.
@@ -321,14 +518,7 @@ public final class DiffTree: @unchecked Sendable {
     /// in a scheme invented here.
     private func isIgnored(_ store: NodeStore, _ node: Int32,
                            _ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
-        guard !options.ignore.isEmpty else { return false }
-        let span = store.nameSpan(node)
-        guard span.length > 0, span.length < 255, let base = bytes.baseAddress else { return false }
-        var name = [CChar](repeating: 0, count: span.length + 1)
-        for k in 0..<span.length { name[k] = CChar(bitPattern: base[span.offset + k]) }
-        return options.ignore.contains { pattern in
-            pattern.withCString { fnmatch($0, name, FNM_CASEFOLD) == 0 }
-        }
+        DiffTree.matchesAny(store, node, bytes, options.ignore)
     }
 
     @inline(__always)

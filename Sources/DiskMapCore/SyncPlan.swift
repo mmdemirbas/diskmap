@@ -86,16 +86,30 @@ public struct SyncStep: Sendable, Identifiable {
     public var syncProvider: String?
     /// The source is an iCloud placeholder. Copying it downloads it.
     public var dataless: Bool
+    /// What sat at the target when the plan was made: its kind, its length and
+    /// its date. Between a plan appearing on screen and the button being
+    /// pressed, a sync client or another window can put something else at that
+    /// path, and a plan is only a description of the files that were there.
+    public var targetIsFolder: Bool
+    public var targetBytes: Int64
+    public var targetModified: Int32
+    /// Removing or copying this takes along names the comparison never looked
+    /// at, because the ignore patterns left them out.
+    public var coversIgnored: Bool
 
     public var name: String { (relativePath as NSString).lastPathComponent }
 
     public init(id: Int, action: SyncAction, relativePath: String, source: String?,
                 target: String, isDirectory: Bool, bytes: Int64, replacedBytes: Int64,
-                syncProvider: String?, dataless: Bool) {
+                syncProvider: String?, dataless: Bool,
+                targetIsFolder: Bool = false, targetBytes: Int64 = -1,
+                targetModified: Int32 = 0, coversIgnored: Bool = false) {
         self.id = id; self.action = action; self.relativePath = relativePath
         self.source = source; self.target = target; self.isDirectory = isDirectory
         self.bytes = bytes; self.replacedBytes = replacedBytes
         self.syncProvider = syncProvider; self.dataless = dataless
+        self.targetIsFolder = targetIsFolder; self.targetBytes = targetBytes
+        self.targetModified = targetModified; self.coversIgnored = coversIgnored
     }
 }
 
@@ -125,6 +139,13 @@ public struct SyncPlan: Sendable {
     /// Whether the deep check has run at all. A plan that frees space by
     /// trusting name and length alone has to say that is what it is doing.
     public var contentWasChecked: Bool = false
+
+    /// Things moved to the Trash that hold names the comparison never looked
+    /// at, because the ignore patterns left them out. Those names exist on that
+    /// side alone: nothing matched them, so nothing is keeping a copy.
+    public var removesIgnoredItems: Int {
+        steps.filter { $0.action != .copy && $0.coversIgnored }.count
+    }
 
     public var copies: Int { steps.filter { $0.action == .copy }.count }
     public var replacements: Int { steps.filter { $0.action == .replace }.count }
@@ -292,7 +313,8 @@ public enum SyncPlanner {
     /// sentence when nothing on the side being removed is unique to it.
     public static func removeRedundant(_ comparison: FolderComparison, side: Side,
                                        syncRoots: SyncRoots = SyncRoots(roots: []),
-                                       excluded: [String] = []) -> Result<SyncPlan, CompareRefusal> {
+                                       excluded: [String] = [],
+                                       contentDiffers: Set<String> = []) -> Result<SyncPlan, CompareRefusal> {
         let target = side == .left ? comparison.left : comparison.right
         if let refusal = structuralRefusal(left: comparison.left, right: comparison.right,
                                            writesTo: [target], excluded: excluded) {
@@ -301,6 +323,11 @@ public enum SyncPlanner {
         // A folder that could not be fully read cannot be shown to be redundant.
         if comparison.unreadable > 0 { return .failure(.someFoldersUnreadable(comparison.unreadable)) }
         guard comparison.summary.isCoveredByTheOtherSide(side) else { return .failure(.notRedundant) }
+        // "Covered by the other side" is a claim about names and lengths. Once
+        // the content check has read the bytes and disagreed about even one of
+        // them, this side holds something the other one does not, and taking
+        // the whole of it is exactly the mistake the check exists to stop.
+        guard contentDiffers.isEmpty else { return .failure(.notRedundant) }
 
         let bytes = side == .left ? comparison.leftTotal : comparison.rightTotal
         let step = SyncStep(id: 0, action: .remove, relativePath: "", source: nil,
@@ -368,6 +395,7 @@ public enum SyncPlanner {
                              _ comparison: FolderComparison, _ syncRoots: SyncRoots) -> SyncStep {
         let here = comparison.path(entry.relativePath, on: source)
         let target = action == .remove ? here : comparison.path(entry.relativePath, on: source.other)
+        let targetSide = action == .remove ? source : source.other
         return SyncStep(
             id: 0, action: action, relativePath: entry.relativePath,
             source: action == .remove ? nil : here,
@@ -376,7 +404,11 @@ public enum SyncPlanner {
             bytes: entry.bytes(on: source),
             replacedBytes: action == .replace ? entry.bytes(on: source.other) : 0,
             syncProvider: syncRoots.provider(for: target),
-            dataless: entry.dataless)
+            dataless: entry.dataless,
+            targetIsFolder: entry.isFolder(on: targetSide),
+            targetBytes: entry.logical(on: targetSide),
+            targetModified: entry.modified(on: targetSide),
+            coversIgnored: entry.coversIgnored)
     }
 }
 
@@ -440,6 +472,12 @@ public enum SyncRunner {
                 continue
             }
 
+            if step.action != .copy, let changed = drift(step) {
+                outcome.failures.append(SyncFailure(id: step.id, relativePath: step.relativePath,
+                                                    action: step.action, message: changed))
+                continue
+            }
+
             do {
                 switch step.action {
                 case .remove:
@@ -447,11 +485,10 @@ public enum SyncRunner {
                     outcome.trashed.append(item)
                     outcome.bytesTrashed += step.bytes
                 case .replace:
-                    if let item = try trash(step.target, bytes: step.replacedBytes) {
+                    if let item = try replace(step, fm: fm) {
                         outcome.trashed.append(item)
                         outcome.bytesTrashed += step.replacedBytes
                     }
-                    try copy(step.source!, to: step.target, fm: fm)
                     outcome.bytesWritten += step.bytes
                 case .copy:
                     try copy(step.source!, to: step.target, fm: fm)
@@ -478,6 +515,29 @@ public enum SyncRunner {
 
     /// Nil when there was nothing there, which is not a failure: a mirror run
     /// twice, or a folder someone tidied in between, both land here.
+    /// Why this step must not go ahead, or nil when the target is still the
+    /// item the plan described.
+    ///
+    /// A missing target is not drift: nothing is there to lose, and `trash`
+    /// treats it as a step with nothing to do.
+    private static func drift(_ step: SyncStep) -> String? {
+        var info = stat()
+        guard lstat(step.target, &info) == 0 else { return nil }
+        let isFolder = (info.st_mode & S_IFMT) == S_IFDIR
+        if isFolder != step.targetIsFolder {
+            return isFolder
+                ? "a folder is there now, not the file the plan described"
+                : "a file is there now, not the folder the plan described"
+        }
+        if !isFolder, step.targetBytes >= 0, info.st_size != step.targetBytes {
+            return "its size changed after the plan was made, so compare again"
+        }
+        if Int32(truncatingIfNeeded: info.st_mtimespec.tv_sec) != step.targetModified {
+            return "it changed after the plan was made, so compare again"
+        }
+        return nil
+    }
+
     private static func trash(_ path: String, bytes: Int64) throws -> TrashedItem? {
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         var resulting: NSURL?
@@ -485,6 +545,49 @@ public enum SyncRunner {
         try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
         return TrashedItem(originalURL: url, trashURL: resulting as URL?,
                            bytesFreed: bytes, node: -1)
+    }
+
+    /// Writes the replacement beside the target first, and only then moves the
+    /// old one out and puts the new one in its place.
+    ///
+    /// The obvious order — trash the old, copy the new — leaves the path empty
+    /// for as long as the copy takes, and empty for good if the copy fails. A
+    /// full disk, a source that has gone away, a permission: any of them and
+    /// the file the user was replacing is in the Trash with nothing standing
+    /// where it was.
+    private static func replace(_ step: SyncStep, fm: FileManager) throws -> TrashedItem? {
+        let staging = step.target + ".diskmap-incoming-\(step.id)"
+        do {
+            try copy(step.source!, to: staging, fm: fm)
+        } catch {
+            try? discard(staging)
+            throw error
+        }
+        let old: TrashedItem?
+        do {
+            old = try trash(step.target, bytes: step.replacedBytes)
+        } catch {
+            try? discard(staging)
+            throw error
+        }
+        // Atomic, and onto a name nothing is holding: the old item has just
+        // been moved out, and both paths are in the same folder.
+        guard staging.withCString({ from in step.target.withCString { rename(from, $0) } }) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [
+                NSLocalizedDescriptionKey:
+                    "the replacement was written next to it but could not take its place"])
+        }
+        return old
+    }
+
+    /// Gets rid of a half-written replacement this run made itself.
+    ///
+    /// Through the Trash like everything else, because the one thing worse
+    /// than a stray file is a delete path that turns out to have been pointed
+    /// somewhere else.
+    private static func discard(_ path: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
     }
 
     private static func copy(_ source: String, to target: String, fm: FileManager) throws {

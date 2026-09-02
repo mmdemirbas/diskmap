@@ -2048,8 +2048,9 @@ final class AppModel: ObservableObject {
     /// does. The planner refuses when that is not true.
     func previewRemoveRedundant(_ side: Side) {
         guard let comparison = folderComparison else { return }
-        apply(SyncPlanner.removeRedundant(comparison, side: side,
-                                          syncRoots: syncRoots, excluded: excludedPaths))
+        apply(SyncPlanner.removeRedundant(
+            comparison, side: side, syncRoots: syncRoots, excluded: excludedPaths,
+            contentDiffers: Set(compareVerification?.differing ?? [])))
     }
 
     private func apply(_ result: Result<SyncPlan, CompareRefusal>) {

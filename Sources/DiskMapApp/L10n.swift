@@ -300,6 +300,11 @@ final class L10n: ObservableObject {
                       : (n == 1 ? "1 item turned out to differ and was left alone"
                                 : "\(fmt(n)) items turned out to differ and were left alone")
     }
+    func compareRemovesIgnored(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) öğe, yok sayılan adlar da içinde olmak üzere Çöp'e taşınıyor"
+                      : (n == 1 ? "1 item goes to the Trash with ignored names still inside it"
+                                : "\(fmt(n)) items go to the Trash with ignored names still inside them")
+    }
     func compareIncluded(_ included: Int, _ total: Int) -> String {
         active == .tr ? "\(fmt(total)) karardan \(fmt(included)) tanesi seçili"
                       : "\(fmt(included)) of \(fmt(total)) decisions included"

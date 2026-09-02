@@ -464,6 +464,13 @@ struct CompareView: View {
                             }
                         }
                     }
+                    // A pattern hides a name from the comparison; it does not
+                    // hide it from the Trash. Nothing matched those names, so
+                    // no other copy of them is being kept.
+                    if plan.removesIgnoredItems > 0 {
+                        caution(Palette.warning(scheme), "eye.slash",
+                                loc.compareRemovesIgnored(plan.removesIgnoredItems))
+                    }
                     if !plan.keptBecauseContentDiffers.isEmpty {
                         caution(.green, "shield.lefthalf.filled",
                                 loc.compareKeptDiffering(plan.keptBecauseContentDiffers.count))
