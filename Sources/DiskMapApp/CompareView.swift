@@ -442,11 +442,13 @@ struct CompareView: View {
         .frame(height: 52)
     }
 
+    /// The one folder everything happens in, when there is one. A merge touches
+    /// both, so it names neither.
     private func targetLabel(_ plan: SyncPlan) -> String {
-        switch plan.direction {
-        case .mirrorLeftToRight: plan.right
-        case .mirrorRightToLeft: plan.left
-        case .merge: ""
+        switch plan.direction.target {
+        case .left: plan.left
+        case .right: plan.right
+        case nil: ""
         }
     }
 

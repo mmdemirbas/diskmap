@@ -292,6 +292,21 @@ final class L10n: ObservableObject {
         active == .tr ? "\(fmt(n)) satır gösteriliyor"
                       : (n == 1 ? "showing 1 row" : "showing \(fmt(n)) rows")
     }
+    func compareIgnoredCount(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) öğe yok sayıldı" : count(n, "item ignored", "items ignored")
+    }
+    func compareKeptDiffering(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) öğe içerikçe farklı çıktı ve yerinde bırakıldı"
+                      : (n == 1 ? "1 item turned out to differ and was left alone"
+                                : "\(fmt(n)) items turned out to differ and were left alone")
+    }
+    func compareIncluded(_ included: Int, _ total: Int) -> String {
+        active == .tr ? "\(fmt(total)) karardan \(fmt(included)) tanesi seçili"
+                      : "\(fmt(included)) of \(fmt(total)) decisions included"
+    }
+    func compareSkipped(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) karar dışarıda bırakıldı" : count(n, "decision left out", "decisions left out")
+    }
     func compareSideSummary(_ size: String, _ items: Int) -> String {
         active == .tr ? "\(size) · \(fmt(items)) öğe" : "\(size) · \(fmt(items)) items"
     }
@@ -382,6 +397,14 @@ final class L10n: ObservableObject {
         case diffIdentical, diffDiffers, diffOnlyLeft, diffOnlyRight, diffClash
         case compareVerifyContents, compareVerified
         case dirMirrorRight, dirMirrorLeft, dirMerge
+        case dirUpdateRight, dirUpdateLeft, dirFreeLeft, dirFreeRight
+        case dirUpdateRightWhy, dirUpdateLeftWhy, dirFreeLeftWhy, dirFreeRightWhy
+        case dirGroupCopy, dirGroupFree
+        case compareContentNotChecked, compareContentChecked, compareCheckFirst
+        case compareIgnoreTitle, compareIgnoreExplained, compareIgnorePlaceholder
+        case compareIgnoreAdd, compareIgnoreReset, compareIgnoreNone, compareIgnoreButton
+        case dateExact, dateNearest2, dateNearestHour, dateToleranceHelp
+        case selectAll, selectNone, compareRecent, compareNoRecent
         case dirMirrorRightWhy, dirMirrorLeftWhy, dirMergeWhy
         case comparePreview, compareApply, compareWhatWillHappen, compareNothingWritten
         case stepCopy, stepReplace, stepRemove, compareTargetFolder
@@ -648,6 +671,41 @@ final class L10n: ObservableObject {
         .dirMirrorRight: ("Mirror left → right", "Soldan sağa yansıt"),
         .dirMirrorLeft: ("Mirror right → left", "Sağdan sola yansıt"),
         .dirMerge: ("Give each side everything", "Her iki tarafa da tümünü ver"),
+        .dirUpdateRight: ("Update right (never delete)", "Sağı güncelle (hiç silmeden)"),
+        .dirUpdateLeft: ("Update left (never delete)", "Solu güncelle (hiç silmeden)"),
+        .dirFreeLeft: ("Free space on the left", "Solda yer aç"),
+        .dirFreeRight: ("Free space on the right", "Sağda yer aç"),
+        .dirUpdateRightWhy: ("Copies what the right is missing, and replaces a file only where the left is the newer one. Nothing is ever removed.",
+                             "Sağda olmayanları kopyalar; bir dosyayı yalnızca sol daha yeniyse değiştirir. Hiçbir şey kaldırılmaz."),
+        .dirUpdateLeftWhy: ("Copies what the left is missing, and replaces a file only where the right is the newer one. Nothing is ever removed.",
+                            "Solda olmayanları kopyalar; bir dosyayı yalnızca sağ daha yeniyse değiştirir. Hiçbir şey kaldırılmaz."),
+        .dirFreeLeftWhy: ("Moves to the Trash everything on the left that the right already holds. What is only on the left stays where it is.",
+                          "Sağda zaten bulunan her şeyi soldan Çöp Kutusu'na taşır. Yalnızca solda olanlar yerinde kalır."),
+        .dirFreeRightWhy: ("Moves to the Trash everything on the right that the left already holds. What is only on the right stays where it is.",
+                           "Solda zaten bulunan her şeyi sağdan Çöp Kutusu'na taşır. Yalnızca sağda olanlar yerinde kalır."),
+        .dirGroupCopy: ("Copy and mirror", "Kopyala ve yansıt"),
+        .dirGroupFree: ("Free up space", "Yer aç"),
+        .compareContentNotChecked: ("Nothing has been read. Same name and same size is not the same bytes — check the contents before removing anything on this basis.",
+                                    "Hiçbir dosya okunmadı. Aynı ad ve aynı boyut, aynı bayt demek değildir; buna dayanarak bir şey kaldırmadan önce içerikleri denetleyin."),
+        .compareContentChecked: ("The contents were read and agree", "İçerikler okundu ve eşleşti"),
+        .compareCheckFirst: ("Check the contents first", "Önce içerikleri denetle"),
+        .compareIgnoreTitle: ("Names to leave out", "Dışarıda bırakılacak adlar"),
+        .compareIgnoreExplained: ("Shell patterns matched against the name alone, on both sides — *.tmp, node_modules, .git. Ignored items are counted on the comparison screen, never hidden silently.",
+                                  "Her iki tarafta da yalnızca ada uygulanan kabuk kalıpları: *.tmp, node_modules, .git. Atlanan öğeler karşılaştırma ekranında sayılır, sessizce gizlenmez."),
+        .compareIgnorePlaceholder: ("*.tmp", "*.tmp"),
+        .compareIgnoreAdd: ("Add", "Ekle"),
+        .compareIgnoreReset: ("Back to the defaults", "Varsayılanlara dön"),
+        .compareIgnoreNone: ("Nothing is being left out", "Hiçbir şey dışarıda bırakılmıyor"),
+        .compareIgnoreButton: ("Ignore…", "Yok say…"),
+        .dateExact: ("Exact dates", "Tarihler birebir"),
+        .dateNearest2: ("Within 2 seconds", "2 saniyeye kadar aynı"),
+        .dateNearestHour: ("Within an hour", "1 saate kadar aynı"),
+        .dateToleranceHelp: ("exFAT rounds to 2 seconds, and a daylight-saving shift moves everything by an hour.",
+                             "exFAT 2 saniyeye yuvarlar; yaz saati geçişi de her şeyi bir saat kaydırır."),
+        .selectAll: ("All", "Tümü"),
+        .selectNone: ("None", "Hiçbiri"),
+        .compareRecent: ("Recent pairs", "Son karşılaştırmalar"),
+        .compareNoRecent: ("No earlier comparisons yet", "Henüz eski bir karşılaştırma yok"),
         .dirMirrorRightWhy: ("The right folder ends up exactly like the left one. What only the right has goes to the Trash.",
                              "Sağdaki klasör tıpatıp soldaki gibi olur. Yalnızca sağda olanlar Çöp Kutusu'na gider."),
         .dirMirrorLeftWhy: ("The left folder ends up exactly like the right one. What only the left has goes to the Trash.",

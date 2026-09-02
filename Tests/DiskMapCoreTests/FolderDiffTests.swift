@@ -191,6 +191,89 @@ final class FolderDiffTests: XCTestCase {
         }
     }
 
+    // MARK: - What to leave out, and how exact to be about dates
+
+    /// `.DS_Store` differs in every directory macOS has ever opened. Without
+    /// this the screen is a list of them.
+    func testIgnoredNamesAreLeftOutOfBothSidesAndCounted() throws {
+        try write(left, ".DS_Store", bytes: 6000)
+        try write(right, ".DS_Store", bytes: 8000)
+        try write(left, "build/output.o", bytes: 200)
+        try write(left, "real.txt", bytes: 10)
+        try write(right, "real.txt", bytes: 10)
+
+        var options = CompareOptions()
+        options.ignore += ["build"]
+        guard case .success(let c) = FolderDiff.compare(left: left.path, right: right.path,
+                                                        options: options) else {
+            return XCTFail("refused")
+        }
+        XCTAssertTrue(c.summary.inSync, "\(c.entries.map(\.relativePath))")
+        XCTAssertGreaterThanOrEqual(c.summary.ignored, 3, "two .DS_Store and one build")
+        XCTAssertFalse(c.entries.contains { $0.relativePath.hasPrefix("build") })
+    }
+
+    func testTurningTheIgnoreListOffBringsThemBack() throws {
+        try write(left, ".DS_Store", bytes: 6000)
+        try write(right, ".DS_Store", bytes: 8000)
+        guard case .success(let c) = FolderDiff.compare(
+            left: left.path, right: right.path,
+            options: CompareOptions(ignore: [])) else { return XCTFail("refused") }
+        XCTAssertEqual(kinds(c)[".DS_Store"], .differs)
+        XCTAssertEqual(c.summary.ignored, 0)
+    }
+
+    /// A copy that went through exFAT or a network share comes back with every
+    /// timestamp a second or two out. Without a tolerance every file on the
+    /// disk reads as "newer on one side".
+    func testDatesWithinTheToleranceAreTheSameMoment() throws {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        try write(left, "a.bin", bytes: 100, modified: base)
+        try write(right, "a.bin", bytes: 100, modified: base.addingTimeInterval(2))
+        try write(left, "b.bin", bytes: 100, modified: base)
+        try write(right, "b.bin", bytes: 100, modified: base.addingTimeInterval(4000))
+
+        guard case .success(let exact) = FolderDiff.compare(left: left.path, right: right.path)
+        else { return XCTFail("refused") }
+        XCTAssertEqual(exact.entries.first { $0.relativePath == "a.bin" }?.newerSide, .right)
+
+        guard case .success(let loose) = FolderDiff.compare(
+            left: left.path, right: right.path,
+            options: CompareOptions(dateTolerance: 2)) else { return XCTFail("refused") }
+        XCTAssertNil(loose.entries.first { $0.relativePath == "a.bin" }?.newerSide,
+                     "two seconds apart is the same moment at this tolerance")
+        XCTAssertEqual(loose.entries.first { $0.relativePath == "b.bin" }?.newerSide, .right,
+                       "and an hour apart is still not")
+    }
+
+    // MARK: - Which decisions a row stands for
+
+    /// Every row on screen has to be able to say which decisions ticking it
+    /// off would remove, and a row the walk never entered belongs to the
+    /// decision made above it.
+    func testEveryRowResolvesToTheDecisionsItStandsFor() throws {
+        for i in 0..<5 { try write(left, "archive/f\(i).bin", bytes: 100 + i) }
+        try write(left, "Photos/one.jpg", bytes: 500)
+        try write(right, "Photos/two.jpg", bytes: 600)
+
+        let c = try compare()
+        let tree = c.tree
+
+        // The folder the walk stopped at is one decision, and so is everything
+        // that turns up inside it when it is opened.
+        let archive = try XCTUnwrap(tree.children(of: 0).first { tree.name($0) == "archive" })
+        XCTAssertEqual(tree.decisions(archive).count, 1)
+        let inside = try XCTUnwrap(tree.children(of: archive).first)
+        XCTAssertEqual(tree.decisions(inside), tree.decisions(archive),
+                       "a file inside a folder being copied whole is that same decision")
+
+        // The folder the walk entered stands for everything it found there.
+        let photos = try XCTUnwrap(tree.children(of: 0).first { tree.name($0) == "Photos" })
+        XCTAssertEqual(tree.decisions(photos).count, 2)
+        let ids = tree.decisions(photos).map { c.entries[$0].relativePath }
+        XCTAssertEqual(Set(ids), ["Photos/one.jpg", "Photos/two.jpg"])
+    }
+
     // MARK: - Refusals
 
     func testRefusesToCompareAFolderWithItself() throws {

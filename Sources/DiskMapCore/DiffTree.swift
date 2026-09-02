@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Which kinds appear at or below a node.
@@ -61,6 +62,11 @@ public final class DiffTree: @unchecked Sendable {
         public var firstChild: Int32 = -1
         public var childCount: Int32 = 0
         public var contains: DiffKindMask = []
+        /// Where this node's run of decisions starts in the comparison's flat
+        /// list, and how many there are. Zero for anything the comparison did
+        /// not walk into — those sit inside somebody else's decision.
+        public var firstDecision: Int32 = 0
+        public var decisionCount: Int32 = 0
     }
 
     let left: NodeStore
@@ -69,13 +75,19 @@ public final class DiffTree: @unchecked Sendable {
     let rightSig: [UInt64]
     let leftItems: [Int32]
     let rightItems: [Int32]
+    public let options: CompareOptions
+    /// Names the ignore patterns kept out. Counted rather than dropped
+    /// silently: a filter nobody can see is a filter that lies.
+    public private(set) var ignored = 0
 
     public private(set) var nodes: [Node] = []
     public var count: Int { nodes.count }
 
     init(left: NodeStore, right: NodeStore,
          leftSig: [UInt64], rightSig: [UInt64],
-         leftItems: [Int32], rightItems: [Int32]) {
+         leftItems: [Int32], rightItems: [Int32],
+         options: CompareOptions = CompareOptions()) {
+        self.options = options
         self.left = left
         self.right = right
         self.leftSig = leftSig
@@ -143,7 +155,11 @@ public final class DiffTree: @unchecked Sendable {
     /// wrong answer this screen exists to prevent.
     public func newerSide(_ id: Int32) -> Side? {
         let l = modified(id, on: .left), r = modified(id, on: .right)
-        guard l > 0, r > 0, l != r else { return nil }
+        guard l > 0, r > 0 else { return nil }
+        // Within the tolerance the two are the same moment, which is the whole
+        // reason a tolerance exists: a copy that went through exFAT or a
+        // network share comes back a second or two out on every single file.
+        guard abs(Int64(l) - Int64(r)) > Int64(options.dateTolerance) else { return nil }
         return l > r ? .left : .right
     }
 
@@ -256,6 +272,31 @@ public final class DiffTree: @unchecked Sendable {
         return left.totalLogical[Int(l)] == right.totalLogical[Int(r)] ? .identical : .differs
     }
 
+    /// The run of decisions this row stands for.
+    ///
+    /// A row the comparison never walked into owns none of its own — it sits
+    /// inside a decision made further up, like a file inside a folder that is
+    /// being copied whole — so the answer is the nearest ancestor that does.
+    public func decisions(_ id: Int32) -> Range<Int> {
+        var current = id
+        while current >= 0 {
+            let node = nodes[Int(current)]
+            if node.decisionCount > 0 {
+                return Int(node.firstDecision)..<Int(node.firstDecision + node.decisionCount)
+            }
+            current = node.parent
+        }
+        return 0..<0
+    }
+
+    func beginDecisions(_ id: Int32, at index: Int) {
+        nodes[Int(id)].firstDecision = Int32(index)
+    }
+
+    func endDecisions(_ id: Int32, at index: Int) {
+        nodes[Int(id)].decisionCount = Int32(index) - nodes[Int(id)].firstDecision
+    }
+
     /// Set while the comparison walks the folders that differ, so a folder on
     /// that spine knows what its subtree actually holds rather than having to
     /// assume.
@@ -268,10 +309,26 @@ public final class DiffTree: @unchecked Sendable {
         guard node >= 0, store.isDirectory(node) else { return [] }
         var kids: [Int32] = []
         for child in store.children(node) where !store.flagSet(child).contains(.removed) {
+            if isIgnored(store, child, bytes) { ignored += 1; continue }
             kids.append(child)
         }
         kids.sort { DiffTree.compareNames(bytes, store.nameSpan($0), bytes, store.nameSpan($1)) < 0 }
         return kids
+    }
+
+    /// Shell-glob matching on the name alone, through `fnmatch`, so the
+    /// patterns behave the way the same patterns behave in a shell rather than
+    /// in a scheme invented here.
+    private func isIgnored(_ store: NodeStore, _ node: Int32,
+                           _ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
+        guard !options.ignore.isEmpty else { return false }
+        let span = store.nameSpan(node)
+        guard span.length > 0, span.length < 255, let base = bytes.baseAddress else { return false }
+        var name = [CChar](repeating: 0, count: span.length + 1)
+        for k in 0..<span.length { name[k] = CChar(bitPattern: base[span.offset + k]) }
+        return options.ignore.contains { pattern in
+            pattern.withCString { fnmatch($0, name, FNM_CASEFOLD) == 0 }
+        }
     }
 
     @inline(__always)

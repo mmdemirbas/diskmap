@@ -1,21 +1,59 @@
 import Foundation
 
 public enum SyncDirection: String, Sendable, CaseIterable, Identifiable {
-    /// Make the right folder match the left one: copy what is missing, replace
-    /// what differs, and move what the left does not have to the Trash.
+    /// Make the right folder match the left one exactly: copy what is missing,
+    /// replace what differs, and move what the left does not have to the Trash.
     case mirrorLeftToRight
     case mirrorRightToLeft
+    /// Copy over what is missing or newer and nothing else. Never removes and
+    /// never overwrites something the target changed more recently — the safe
+    /// one, and the one most days actually want.
+    case updateLeftToRight
+    case updateRightToLeft
     /// Give each side everything the other has. Never removes anything.
     case merge
+    /// Move to the Trash everything on this side that the other side already
+    /// holds, and nothing else. What is unique to it stays exactly where it is.
+    case removeLeftDuplicates
+    case removeRightDuplicates
 
     public var id: String { rawValue }
-    public var removesThings: Bool { self != .merge }
-    /// The folder being read from, for a mirror. Nil for a merge, which reads
-    /// from both.
+
+    /// Whether anything ends up in the Trash. Gates the refusal to build a plan
+    /// from a comparison that could not read everything.
+    public var removesThings: Bool {
+        switch self {
+        case .mirrorLeftToRight, .mirrorRightToLeft,
+             .removeLeftDuplicates, .removeRightDuplicates: true
+        case .updateLeftToRight, .updateRightToLeft, .merge: false
+        }
+    }
+
+    /// Whether this frees space rather than propagating content. Worth its own
+    /// question because the screen treats the two differently.
+    public var freesSpace: Bool {
+        self == .removeLeftDuplicates || self == .removeRightDuplicates
+    }
+
+    /// The folder being read from, for anything one-directional. Nil for a
+    /// merge, which reads from both.
     public var source: Side? {
         switch self {
-        case .mirrorLeftToRight: .left
-        case .mirrorRightToLeft: .right
+        case .mirrorLeftToRight, .updateLeftToRight: .left
+        case .mirrorRightToLeft, .updateRightToLeft: .right
+        case .removeLeftDuplicates: .right
+        case .removeRightDuplicates: .left
+        case .merge: nil
+        }
+    }
+
+    /// The side this writes into, or removes from.
+    public var target: Side? {
+        switch self {
+        case .mirrorLeftToRight, .updateLeftToRight: .right
+        case .mirrorRightToLeft, .updateRightToLeft: .left
+        case .removeLeftDuplicates: .left
+        case .removeRightDuplicates: .right
         case .merge: nil
         }
     }
@@ -79,6 +117,14 @@ public struct SyncPlan: Sendable {
     /// Copies that would download a file from iCloud rather than move bytes
     /// that are already here.
     public var datalessCopies: Int
+    /// Decisions the user unticked.
+    public var skipped: Int = 0
+    /// Items that look identical and are not: the deep check read both sides
+    /// and found different bytes. Never removed, whatever the direction says.
+    public var keptBecauseContentDiffers: [String] = []
+    /// Whether the deep check has run at all. A plan that frees space by
+    /// trusting name and length alone has to say that is what it is doing.
+    public var contentWasChecked: Bool = false
 
     public var copies: Int { steps.filter { $0.action == .copy }.count }
     public var replacements: Int { steps.filter { $0.action == .replace }.count }
@@ -102,7 +148,12 @@ public struct SyncPlan: Sendable {
 
     public init(direction: SyncDirection, left: String, right: String, steps: [SyncStep],
                 bytesToWrite: Int64, bytesToTrash: Int64, unresolved: [String],
-                freeOnLeftVolume: Int64, freeOnRightVolume: Int64, datalessCopies: Int) {
+                freeOnLeftVolume: Int64, freeOnRightVolume: Int64, datalessCopies: Int,
+                skipped: Int = 0, keptBecauseContentDiffers: [String] = [],
+                contentWasChecked: Bool = false) {
+        self.skipped = skipped
+        self.keptBecauseContentDiffers = keptBecauseContentDiffers
+        self.contentWasChecked = contentWasChecked
         self.direction = direction; self.left = left; self.right = right; self.steps = steps
         self.bytesToWrite = bytesToWrite; self.bytesToTrash = bytesToTrash
         self.unresolved = unresolved
@@ -118,9 +169,17 @@ public struct SyncPlan: Sendable {
 /// because the rules that keep a mirror from destroying the only copy of
 /// something belong where a test can prove them.
 public enum SyncPlanner {
+    /// `skipping` holds the ids of decisions the user has unticked, and
+    /// `contentDiffers` the relative paths the deep check found to hold
+    /// different bytes behind a matching name and length. The second is the
+    /// more important of the two: it is the only thing standing between
+    /// "remove what the other side already has" and losing the one copy of
+    /// something whose twin was never really its twin.
     public static func plan(_ comparison: FolderComparison, direction: SyncDirection,
                             syncRoots: SyncRoots = SyncRoots(roots: []),
-                            excluded: [String] = []) -> Result<SyncPlan, CompareRefusal> {
+                            excluded: [String] = [],
+                            skipping: Set<Int> = [],
+                            contentDiffers: Set<String> = []) -> Result<SyncPlan, CompareRefusal> {
         let left = comparison.left, right = comparison.right
         if let refusal = structuralRefusal(left: left, right: right,
                                            writesTo: writeTargets(direction, left, right),
@@ -135,16 +194,33 @@ public enum SyncPlanner {
 
         var steps: [SyncStep] = []
         var unresolved: [String] = []
+        var keptBecauseContentDiffers: [String] = []
+        var skipped = 0
         var removals: [SyncStep] = [], replacements: [SyncStep] = [], copies: [SyncStep] = []
 
         for entry in comparison.entries {
+            guard !skipping.contains(entry.id) else { skipped += 1; continue }
+
+            // Freeing space is its own shape: only what the other side already
+            // holds goes, and only where nothing has said otherwise.
+            if direction.freesSpace {
+                guard entry.kind == .identical, let side = direction.target else { continue }
+                guard !contentDiffers.contains(entry.relativePath) else {
+                    keptBecauseContentDiffers.append(entry.relativePath); continue
+                }
+                removals.append(step(.remove, entry, from: side, comparison, syncRoots))
+                continue
+            }
+
             switch (direction, entry.kind) {
             case (_, .identical):
                 continue
 
-            case (.mirrorLeftToRight, .onlyLeft), (.merge, .onlyLeft):
+            case (.mirrorLeftToRight, .onlyLeft), (.updateLeftToRight, .onlyLeft),
+                 (.merge, .onlyLeft):
                 copies.append(step(.copy, entry, from: .left, comparison, syncRoots))
-            case (.mirrorRightToLeft, .onlyRight), (.merge, .onlyRight):
+            case (.mirrorRightToLeft, .onlyRight), (.updateRightToLeft, .onlyRight),
+                 (.merge, .onlyRight):
                 copies.append(step(.copy, entry, from: .right, comparison, syncRoots))
 
             case (.mirrorLeftToRight, .onlyRight):
@@ -156,6 +232,19 @@ public enum SyncPlanner {
                 replacements.append(step(.replace, entry, from: .left, comparison, syncRoots))
             case (.mirrorRightToLeft, .differs), (.mirrorRightToLeft, .typeClash):
                 replacements.append(step(.replace, entry, from: .right, comparison, syncRoots))
+
+            // An update carries the source over only where the source is the
+            // newer of the two. Where the target was touched more recently, or
+            // where the dates cannot separate them, it stops and says so rather
+            // than overwriting work it cannot account for.
+            case (.updateLeftToRight, .differs), (.updateRightToLeft, .differs),
+                 (.updateLeftToRight, .typeClash), (.updateRightToLeft, .typeClash):
+                guard let from = direction.source, entry.newerSide == from else {
+                    unresolved.append(entry.relativePath); continue
+                }
+                replacements.append(step(.replace, entry, from: from, comparison, syncRoots))
+            case (.updateLeftToRight, .onlyRight), (.updateRightToLeft, .onlyLeft):
+                continue
 
             case (.merge, .differs):
                 // Newest wins, and only when there is a newest. Two files of
@@ -169,6 +258,9 @@ public enum SyncPlanner {
                 // A folder on one side and a file on the other is not a
                 // conflict a rule should settle.
                 unresolved.append(entry.relativePath)
+
+            case (.removeLeftDuplicates, _), (.removeRightDuplicates, _):
+                continue  // handled above, before the switch
             }
         }
 
@@ -186,7 +278,10 @@ public enum SyncPlanner {
             unresolved: unresolved,
             freeOnLeftVolume: VolumeInfo.forPath(left)?.trueAvailable ?? 0,
             freeOnRightVolume: VolumeInfo.forPath(right)?.trueAvailable ?? 0,
-            datalessCopies: steps.filter { $0.dataless && $0.action != .remove }.count)
+            datalessCopies: steps.filter { $0.dataless && $0.action != .remove }.count,
+            skipped: skipped,
+            keptBecauseContentDiffers: keptBecauseContentDiffers,
+            contentWasChecked: comparison.verifiedAt != nil)
         return .success(out)
     }
 
@@ -223,12 +318,14 @@ public enum SyncPlanner {
 
     // MARK: - Refusals
 
+    /// The folders this would write into or remove from — everything the
+    /// structural refusals have to be checked against.
     private static func writeTargets(_ direction: SyncDirection,
                                      _ left: String, _ right: String) -> [String] {
-        switch direction {
-        case .mirrorLeftToRight: [right]
-        case .mirrorRightToLeft: [left]
-        case .merge: [left, right]
+        switch direction.target {
+        case .left: [left]
+        case .right: [right]
+        case nil: [left, right]
         }
     }
 

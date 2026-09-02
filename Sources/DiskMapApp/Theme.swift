@@ -234,23 +234,40 @@ extension SyncDirection {
         switch self {
         case .mirrorLeftToRight: .dirMirrorRight
         case .mirrorRightToLeft: .dirMirrorLeft
+        case .updateLeftToRight: .dirUpdateRight
+        case .updateRightToLeft: .dirUpdateLeft
         case .merge: .dirMerge
+        case .removeLeftDuplicates: .dirFreeLeft
+        case .removeRightDuplicates: .dirFreeRight
         }
     }
     var whyKey: L10n.K {
         switch self {
         case .mirrorLeftToRight: .dirMirrorRightWhy
         case .mirrorRightToLeft: .dirMirrorLeftWhy
+        case .updateLeftToRight: .dirUpdateRightWhy
+        case .updateRightToLeft: .dirUpdateLeftWhy
         case .merge: .dirMergeWhy
+        case .removeLeftDuplicates: .dirFreeLeftWhy
+        case .removeRightDuplicates: .dirFreeRightWhy
         }
     }
     var symbol: String {
         switch self {
-        case .mirrorLeftToRight: "arrow.right"
-        case .mirrorRightToLeft: "arrow.left"
+        case .mirrorLeftToRight, .updateLeftToRight: "arrow.right"
+        case .mirrorRightToLeft, .updateRightToLeft: "arrow.left"
         case .merge: "arrow.left.arrow.right"
+        case .removeLeftDuplicates, .removeRightDuplicates: "trash"
         }
     }
+
+    /// The three things this screen can be asked to do, so the picker groups
+    /// them instead of offering seven equals.
+    static let groups: [(L10n.K, [SyncDirection])] = [
+        (.dirGroupCopy, [.mirrorLeftToRight, .mirrorRightToLeft,
+                         .updateLeftToRight, .updateRightToLeft, .merge]),
+        (.dirGroupFree, [.removeLeftDuplicates, .removeRightDuplicates]),
+    ]
 }
 
 @MainActor

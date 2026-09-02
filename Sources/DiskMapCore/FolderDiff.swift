@@ -5,6 +5,33 @@ public enum Side: String, Sendable, CaseIterable {
     public var other: Side { self == .left ? .right : .left }
 }
 
+/// What to leave out, and how exact to be about dates.
+///
+/// Both are here because a comparison of two real folders is unusable without
+/// them: `.DS_Store` differs in every directory macOS has ever opened, and a
+/// copy that went through exFAT or a network share comes back with every
+/// timestamp a second or two off.
+public struct CompareOptions: Sendable, Equatable {
+    /// Names never compared, matched as shell globs against the name alone —
+    /// `*.tmp`, `node_modules`, `.git`. Case is ignored, because the volumes
+    /// this runs on mostly ignore it too.
+    public var ignore: [String]
+    /// Two dates this far apart or closer are the same moment. Zero is exact;
+    /// 2 is what FAT and exFAT round to; 3600 absorbs a daylight-saving shift.
+    public var dateTolerance: Int32
+
+    public init(ignore: [String] = CompareOptions.noise, dateTolerance: Int32 = 0) {
+        self.ignore = ignore
+        self.dateTolerance = dateTolerance
+    }
+
+    /// Files the system writes and nobody compares. On by default, and the
+    /// screen says how many were skipped so it is never a silent decision.
+    public static let noise = [".DS_Store", ".Spotlight-V100", ".fseventsd",
+                               ".TemporaryItems", ".Trashes", ".localized",
+                               "Thumbs.db", "desktop.ini", ".apDisk"]
+}
+
 public enum DiffKind: String, Sendable, CaseIterable {
     /// Same name and same length on both sides. Nothing was read, so this is
     /// "no metadata says they differ", not "these are the same bytes".
@@ -47,13 +74,14 @@ public struct DiffEntry: Sendable, Identifiable {
 
     public var name: String { (relativePath as NSString).lastPathComponent }
 
-    /// The side last written to. Nil when the dates agree or one side is
-    /// absent — "newer" has no meaning then, and guessing produces the kind of
-    /// silent wrong answer this whole screen exists to prevent.
-    public var newerSide: Side? {
-        guard leftModified > 0, rightModified > 0, leftModified != rightModified else { return nil }
-        return leftModified > rightModified ? .left : .right
-    }
+    /// The side last written to. Nil when one side is absent, or when the two
+    /// dates are within the tolerance the comparison was given — "newer" has no
+    /// meaning then, and guessing produces the kind of silent wrong answer this
+    /// whole screen exists to prevent.
+    ///
+    /// Stored rather than worked out on demand, so the tolerance is applied in
+    /// one place and every reader gets the same answer.
+    public var newerSide: Side?
 
     public func bytes(on side: Side) -> Int64 { side == .left ? leftBytes : rightBytes }
 
@@ -71,12 +99,12 @@ public struct DiffEntry: Sendable, Identifiable {
 
     public init(id: Int, relativePath: String, kind: DiffKind, isDirectory: Bool,
                 leftBytes: Int64, rightBytes: Int64, leftModified: Int32, rightModified: Int32,
-                items: Int, dataless: Bool) {
+                items: Int, dataless: Bool, newerSide: Side? = nil) {
         self.id = id; self.relativePath = relativePath; self.kind = kind
         self.isDirectory = isDirectory
         self.leftBytes = leftBytes; self.rightBytes = rightBytes
         self.leftModified = leftModified; self.rightModified = rightModified
-        self.items = items; self.dataless = dataless
+        self.items = items; self.dataless = dataless; self.newerSide = newerSide
     }
 }
 
@@ -98,6 +126,9 @@ public struct DiffSummary: Sendable, Equatable {
 
     /// Placeholders on either side. Copying one downloads it.
     public var datalessItems = 0
+    /// Names left out by the ignore patterns while the comparison ran. Reported
+    /// because a filter nobody can see is a filter that lies.
+    public var ignored = 0
 
     public var differences: Int { differing + onlyLeft + onlyRight + typeClashes }
     public var inSync: Bool { differences == 0 }
@@ -119,6 +150,9 @@ public struct FolderComparison: Sendable {
     /// them. Separate from `entries`, which is the flat list of decisions a
     /// plan is built from — the same walk, asked two different questions.
     public var tree: DiffTree
+    /// What the comparison was told to leave out, and how exact to be about
+    /// dates. Kept so the screen can say so and a rerun can repeat it.
+    public var options: CompareOptions
     public var entries: [DiffEntry]
     public var summary: DiffSummary
     public var leftTotal: Int64
@@ -141,11 +175,12 @@ public struct FolderComparison: Sendable {
 
     public func entries(_ kind: DiffKind) -> [DiffEntry] { entries.filter { $0.kind == kind } }
 
-    public init(left: String, right: String, tree: DiffTree, entries: [DiffEntry],
-                summary: DiffSummary,
+    public init(left: String, right: String, tree: DiffTree,
+                options: CompareOptions = CompareOptions(),
+                entries: [DiffEntry], summary: DiffSummary,
                 leftTotal: Int64, rightTotal: Int64, leftItems: Int, rightItems: Int,
                 unreadable: Int, cancelled: Bool, elapsed: Double, verifiedAt: Date? = nil) {
-        self.left = left; self.right = right; self.tree = tree
+        self.left = left; self.right = right; self.tree = tree; self.options = options
         self.entries = entries; self.summary = summary
         self.leftTotal = leftTotal; self.rightTotal = rightTotal
         self.leftItems = leftItems; self.rightItems = rightItems
@@ -184,6 +219,7 @@ public enum CompareRefusal: Error, Sendable, Equatable {
 /// to that, and it reads every byte, so it only runs when asked.
 public enum FolderDiff {
     public static func compare(left rawLeft: String, right rawRight: String,
+                               options: CompareOptions = CompareOptions(),
                                cancel: CancelToken? = nil) -> Result<FolderComparison, CompareRefusal> {
         let started = Date()
         let left = canonicalPath(rawLeft) ?? rawLeft
@@ -206,15 +242,18 @@ public enum FolderDiff {
         let tree = DiffTree(left: ls, right: rs,
                             leftSig: FolderMatches.signatures(ls),
                             rightSig: FolderMatches.signatures(rs),
-                            leftItems: subtreeItems(ls), rightItems: subtreeItems(rs))
+                            leftItems: subtreeItems(ls), rightItems: subtreeItems(rs),
+                            options: options)
 
         var entries: [DiffEntry] = []
         var summary = DiffSummary()
         collect(tree, 0, prefix: "", into: &entries, summary: &summary, cancel: cancel)
         for index in entries.indices { entries[index].id = index }
+        summary.ignored = tree.ignored
 
         let comparison = FolderComparison(
-            left: left, right: right, tree: tree, entries: entries, summary: summary,
+            left: left, right: right, tree: tree, options: options,
+            entries: entries, summary: summary,
             leftTotal: ls.totalPhysical.first ?? 0, rightTotal: rs.totalPhysical.first ?? 0,
             leftItems: leftScan.stats.files + leftScan.stats.directories,
             rightItems: rightScan.stats.files + rightScan.stats.directories,
@@ -264,6 +303,11 @@ public enum FolderDiff {
                                 into out: inout [DiffEntry], summary: inout DiffSummary,
                                 cancel: CancelToken?) {
         if cancel?.isCancelled == true { return }
+        // Decisions come out in tree order, so everything below a node is one
+        // contiguous run of them. Recording where it starts is what lets a row
+        // on screen say "these are mine" without a search.
+        tree.beginDecisions(id, at: out.count)
+        defer { tree.endDecisions(id, at: out.count) }
         for child in tree.children(of: id) {
             if cancel?.isCancelled == true { return }
             let kind = tree.kind(child)
@@ -301,6 +345,7 @@ public enum FolderDiff {
             }
             if tree.dataless(child) { summary.datalessItems += 1 }
 
+            tree.beginDecisions(child, at: out.count)
             out.append(DiffEntry(
                 id: 0, relativePath: relative, kind: kind, isDirectory: isDirectory,
                 leftBytes: tree.bytes(child, on: .left),
@@ -308,7 +353,9 @@ public enum FolderDiff {
                 leftModified: tree.modified(child, on: .left),
                 rightModified: tree.modified(child, on: .right),
                 items: isDirectory ? below : 0,
-                dataless: tree.dataless(child)))
+                dataless: tree.dataless(child),
+                newerSide: tree.newerSide(child)))
+            tree.endDecisions(child, at: out.count)
             tree.absorb(child, into: id)
         }
     }

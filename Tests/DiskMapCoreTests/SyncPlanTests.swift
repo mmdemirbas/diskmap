@@ -227,6 +227,142 @@ final class SyncPlanTests: XCTestCase {
         XCTAssertEqual(try refusal(.mirrorLeftToRight), .nothingToDo)
     }
 
+    // MARK: - Update: copy over, never delete
+
+    func testAnUpdateCopiesWhatIsMissingAndNeverRemoves() throws {
+        try write(left, "new.txt", bytes: 20)
+        try write(right, "theirs.txt", bytes: 30)
+        try write(left, "shared.txt", bytes: 10)
+        try write(right, "shared.txt", bytes: 10)
+
+        let plan = try plan(.updateLeftToRight)
+        XCTAssertEqual(plan.removals, 0, "an update must never remove anything")
+        XCTAssertEqual(Set(plan.steps.map(\.relativePath)), ["new.txt"],
+                       "what only the right has is none of its business")
+    }
+
+    /// The difference between an update and a mirror: where the target was
+    /// touched more recently, the update stops rather than overwriting work it
+    /// cannot account for.
+    func testAnUpdateWillNotOverwriteANewerTarget() throws {
+        let older = Date(timeIntervalSince1970: 1_600_000_000)
+        let newer = Date(timeIntervalSince1970: 1_700_000_000)
+        try write(left, "source-newer.txt", bytes: 10, modified: newer)
+        try write(right, "source-newer.txt", bytes: 20, modified: older)
+        try write(left, "target-newer.txt", bytes: 10, modified: older)
+        try write(right, "target-newer.txt", bytes: 20, modified: newer)
+
+        let plan = try plan(.updateLeftToRight)
+        XCTAssertEqual(plan.steps.map(\.relativePath), ["source-newer.txt"])
+        XCTAssertEqual(plan.unresolved, ["target-newer.txt"],
+                       "and it says which one it left alone")
+    }
+
+    // MARK: - Freeing space by removing only what the other side already holds
+
+    func testFreeingSpaceRemovesOnlyWhatTheOtherSideHas() throws {
+        try write(left, "backed-up.bin", bytes: 500, fill: 1)
+        try write(right, "backed-up.bin", bytes: 500, fill: 1)
+        try write(left, "backed-up-folder/a.bin", bytes: 300, fill: 2)
+        try write(right, "backed-up-folder/a.bin", bytes: 300, fill: 2)
+        try write(left, "nowhere-else.bin", bytes: 900, fill: 3)
+
+        let plan = try plan(.removeLeftDuplicates)
+        XCTAssertTrue(plan.steps.allSatisfy { $0.action == .remove })
+        XCTAssertEqual(Set(plan.steps.map(\.relativePath)),
+                       ["backed-up.bin", "backed-up-folder"],
+                       "the matching folder goes whole; the unique file is untouched")
+        for step in plan.steps {
+            XCTAssertTrue(step.target.hasPrefix(left.path + "/"), step.target)
+        }
+        XCTAssertEqual(plan.bytesToWrite, 0)
+        XCTAssertGreaterThan(plan.bytesToTrash, 0)
+    }
+
+    func testFreeingSpaceLeavesTheOnlyCopyOfAnythingWhereItIs() throws {
+        try write(left, "only-here.bin", bytes: 400)
+        try write(right, "only-there.bin", bytes: 400)
+        // Nothing matches, so there is nothing that can safely go.
+        XCTAssertEqual(try refusal(.removeLeftDuplicates), .nothingToDo)
+        XCTAssertEqual(try refusal(.removeRightDuplicates), .nothingToDo)
+    }
+
+    /// The rule that makes this safe to offer at all. Two files can carry the
+    /// same name and the same length and different bytes; once the deep check
+    /// has said so, no direction may treat them as copies of each other.
+    func testFreeingSpaceNeverRemovesSomethingTheContentCheckDisagreedWith() throws {
+        try write(left, "looks-the-same.bin", bytes: 64, fill: 7)
+        try write(right, "looks-the-same.bin", bytes: 64, fill: 9)
+        try write(left, "really-the-same.bin", bytes: 64, fill: 5)
+        try write(right, "really-the-same.bin", bytes: 64, fill: 5)
+
+        let comparison = try compare()
+        XCTAssertTrue(comparison.summary.inSync, "metadata cannot tell these apart")
+
+        let checked = FolderDiff.verify(comparison)
+        XCTAssertEqual(checked.differing, ["looks-the-same.bin"])
+
+        switch SyncPlanner.plan(comparison, direction: .removeLeftDuplicates,
+                                contentDiffers: Set(checked.differing)) {
+        case .success(let plan):
+            XCTAssertEqual(plan.steps.map(\.relativePath), ["really-the-same.bin"])
+            XCTAssertEqual(plan.keptBecauseContentDiffers, ["looks-the-same.bin"])
+        case .failure(let f): XCTFail("should have planned: \(f)")
+        }
+    }
+
+    func testFreeingSpaceIsRefusedWhenAFolderCouldNotBeRead() throws {
+        try write(left, "a.bin", bytes: 10)
+        try write(right, "a.bin", bytes: 10)
+        var comparison = try compare()
+        comparison.unreadable = 2
+        switch SyncPlanner.plan(comparison, direction: .removeRightDuplicates) {
+        case .success: XCTFail("an unreadable folder can make two things look alike")
+        case .failure(let f): XCTAssertEqual(f, .someFoldersUnreadable(2))
+        }
+    }
+
+    func testFreeingSpaceActuallyFreesIt() throws {
+        try write(left, "keep.bin", bytes: 400, fill: 1)
+        try write(right, "keep.bin", bytes: 400, fill: 1)
+        try write(left, "unique.bin", bytes: 700, fill: 2)
+
+        let outcome = run(try plan(.removeLeftDuplicates))
+        XCTAssertTrue(outcome.succeeded, "\(outcome.failures)")
+        XCTAssertFalse(fm.fileExists(atPath: left.path + "/keep.bin"))
+        XCTAssertTrue(fm.fileExists(atPath: left.path + "/unique.bin"),
+                      "the one copy of something must survive")
+        XCTAssertTrue(fm.fileExists(atPath: right.path + "/keep.bin"),
+                      "and so must the copy that justified the removal")
+    }
+
+    // MARK: - Leaving decisions out
+
+    func testUntickedDecisionsAreNotInThePlan() throws {
+        try write(left, "one.txt", bytes: 10)
+        try write(left, "two.txt", bytes: 20)
+        try write(left, "three.txt", bytes: 30)
+
+        let comparison = try compare()
+        let two = try XCTUnwrap(comparison.entries.first { $0.relativePath == "two.txt" })
+        switch SyncPlanner.plan(comparison, direction: .mirrorLeftToRight, skipping: [two.id]) {
+        case .success(let plan):
+            XCTAssertEqual(Set(plan.steps.map(\.relativePath)), ["one.txt", "three.txt"])
+            XCTAssertEqual(plan.skipped, 1)
+        case .failure(let f): XCTFail("should have planned: \(f)")
+        }
+    }
+
+    func testLeavingEverythingOutIsRefusedRatherThanRunAsAnEmptyPlan() throws {
+        try write(left, "one.txt", bytes: 10)
+        let comparison = try compare()
+        let all = Set(comparison.entries.map(\.id))
+        switch SyncPlanner.plan(comparison, direction: .mirrorLeftToRight, skipping: all) {
+        case .success: XCTFail("an empty plan is not a plan")
+        case .failure(let f): XCTAssertEqual(f, .nothingToDo)
+        }
+    }
+
     // MARK: - Removing a copy that has become redundant
 
     func testRemovingACopyIsRefusedWhileItHoldsSomethingUnique() throws {
