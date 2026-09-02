@@ -366,6 +366,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var reviewRefusal: TrashRefusal?
     @Published var suggestions: [CleanupSuggestion] = []
     @Published var showCompare = false
+    @Published var showCompareIgnore = false
     @Published var compareLeft = ""
     @Published var compareRight = ""
     @Published var folderComparison: FolderComparison?
@@ -387,6 +388,63 @@ final class AppModel: ObservableObject {
     @Published private(set) var compareRows: [Int32] = []
     @Published private(set) var compareRowsOmitted = 0
     @Published private(set) var compareExpanded: Set<Int32> = []
+    /// Decisions the user has unticked. Empty means everything is in, which is
+    /// what a comparison starts as — narrowing is the deliberate act, not
+    /// widening.
+    @Published private(set) var compareSkipped: Set<Int> = []
+    /// Running count of unticked decisions, so a row can say whether its own
+    /// run of them is all in, all out or mixed without counting a set every
+    /// time it draws.
+    private var skippedPrefix: [Int] = []
+
+    /// Persisted across launches: these are settings, not session state.
+    @AppStorage("compareIgnore") private var storedIgnore = CompareOptions.noise.joined(separator: "\n")
+    @AppStorage("compareDateTolerance") var compareDateTolerance = 0
+    @AppStorage("comparePairs") private var storedPairs = ""
+
+    var compareIgnore: [String] {
+        get { storedIgnore.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
+        set { objectWillChange.send(); storedIgnore = newValue.joined(separator: "\n") }
+    }
+
+    /// Adding or dropping a pattern changes what the answer on screen is, so
+    /// the answer is worked out again rather than left standing as something
+    /// the current settings would not produce.
+    func addIgnorePattern(_ pattern: String) {
+        let trimmed = pattern.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !compareIgnore.contains(trimmed) else { return }
+        compareIgnore = compareIgnore + [trimmed]
+        if folderComparison != nil { runComparison() }
+    }
+
+    func removeIgnorePattern(_ pattern: String) {
+        compareIgnore = compareIgnore.filter { $0 != pattern }
+        if folderComparison != nil { runComparison() }
+    }
+
+    func resetIgnorePatterns() {
+        compareIgnore = CompareOptions.noise
+        if folderComparison != nil { runComparison() }
+    }
+
+    var compareOptions: CompareOptions {
+        CompareOptions(ignore: compareIgnore, dateTolerance: Int32(compareDateTolerance))
+    }
+
+    /// Folder pairs compared before, newest first. A sync is a thing you do
+    /// again next week, and retyping both sides is the part nobody does.
+    var comparePairs: [(left: String, right: String)] {
+        storedPairs.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            return parts.count == 2 ? (parts[0], parts[1]) : nil
+        }
+    }
+
+    private func rememberPair(_ left: String, _ right: String) {
+        var kept = comparePairs.filter { !($0.left == left && $0.right == right) }
+        kept.insert((left, right), at: 0)
+        storedPairs = kept.prefix(8).map { "\($0.left)\t\($0.right)" }.joined(separator: "\n")
+    }
     private var compareCancel: CancelToken?
     private var compareGeneration = 0
 
@@ -1776,9 +1834,10 @@ final class AppModel: ObservableObject {
         comparing = true
         comparePage = .diff
 
+        let options = compareOptions
         Task { [weak self] in
             let outcome = await Task.detached(priority: .userInitiated) {
-                FolderDiff.compare(left: left, right: right, cancel: token)
+                FolderDiff.compare(left: left, right: right, options: options, cancel: token)
             }.value
             guard let self, self.compareGeneration == generation else { return }
             self.comparing = false
@@ -1789,7 +1848,10 @@ final class AppModel: ObservableObject {
                 self.compareLeft = comparison.left
                 self.compareRight = comparison.right
                 self.openTheDifferences(comparison.tree)
+                self.compareSkipped = []
+                self.rebuildSkippedPrefix(comparison)
                 self.rebuildCompareRows()
+                self.rememberPair(comparison.left, comparison.right)
             case .failure(let refusal):
                 self.compareRefusal = refusal
             }
@@ -1839,6 +1901,59 @@ final class AppModel: ObservableObject {
     private func showsCompareRow(_ tree: DiffTree, _ id: Int32) -> Bool {
         guard !compareFilter.mask.isDisjoint(with: tree.contains(id)) else { return false }
         return dateFilter.accepts(tree, id)
+    }
+
+    // MARK: - Which decisions are in
+
+    private func rebuildSkippedPrefix(_ comparison: FolderComparison) {
+        skippedPrefix = [Int](repeating: 0, count: comparison.entries.count + 1)
+        for index in comparison.entries.indices {
+            skippedPrefix[index + 1] = skippedPrefix[index] + (compareSkipped.contains(index) ? 1 : 0)
+        }
+    }
+
+    /// Whether a row is all in, all out, or somewhere between.
+    ///
+    /// Counted from a prefix sum rather than by walking the run, because a
+    /// folder can stand for a hundred thousand decisions and this is asked once
+    /// per visible row on every redraw.
+    enum RowInclusion { case all, none, some }
+
+    func compareInclusion(_ tree: DiffTree, _ id: Int32) -> RowInclusion {
+        let range = tree.decisions(id)
+        guard !range.isEmpty, range.upperBound < skippedPrefix.count else { return .all }
+        let out = skippedPrefix[range.upperBound] - skippedPrefix[range.lowerBound]
+        if out == 0 { return .all }
+        return out == range.count ? .none : .some
+    }
+
+    /// Ticking a folder takes everything it stands for with it, which is the
+    /// only reading that makes sense: the row is the decision.
+    func toggleCompareInclusion(_ tree: DiffTree, _ id: Int32) {
+        guard let comparison = folderComparison else { return }
+        let range = tree.decisions(id)
+        guard !range.isEmpty else { return }
+        let putBackIn = compareInclusion(tree, id) != .all
+        for decision in range {
+            if putBackIn { compareSkipped.remove(decision) } else { compareSkipped.insert(decision) }
+        }
+        rebuildSkippedPrefix(comparison)
+    }
+
+    func includeEveryDecision() {
+        guard let comparison = folderComparison else { return }
+        compareSkipped = []
+        rebuildSkippedPrefix(comparison)
+    }
+
+    func includeNoDecision() {
+        guard let comparison = folderComparison else { return }
+        compareSkipped = Set(comparison.entries.indices)
+        rebuildSkippedPrefix(comparison)
+    }
+
+    var compareIncludedCount: Int {
+        (folderComparison?.entries.count ?? 0) - compareSkipped.count
     }
 
     func toggleCompareExpanded(_ id: Int32) {
@@ -1924,7 +2039,9 @@ final class AppModel: ObservableObject {
     func previewSync() {
         guard let comparison = folderComparison else { return }
         apply(SyncPlanner.plan(comparison, direction: syncDirection,
-                               syncRoots: syncRoots, excluded: excludedPaths))
+                               syncRoots: syncRoots, excluded: excludedPaths,
+                               skipping: compareSkipped,
+                               contentDiffers: Set(compareVerification?.differing ?? [])))
     }
 
     /// The whole of one side to the Trash, once the other holds everything it

@@ -434,7 +434,28 @@ a matching folder means opening it.
 |---|---|
 | **Mirror left → right** | The right folder ends up exactly like the left one. What only the right has goes to the Trash. |
 | **Mirror right → left** | The same, the other way round. |
+| **Update right / update left** | Copies what the target is missing, and replaces a file only where the source is the newer one. Never removes, and never overwrites work the target did more recently — where it cannot tell, it stops and names what it left alone. |
 | **Give each side everything** | Each side gets what the other has, and nothing is removed. Where the two disagree the newer wins; where neither is newer, both are left alone and the plan says how many. |
+| **Free space on either side** | Moves to the Trash everything on that side the *other side already holds*, and nothing else. See below. |
+
+**Not everything has to go in.** Every row carries a tick, and a folder's tick
+takes everything it stands for with it — a row inside a folder that is being
+copied whole belongs to that one decision, so ticking it off tickes that decision
+off. The count in the footer says how many of the comparison's decisions are in,
+and the plan says how many were left out.
+
+**Two settings change what the answer is**, so they sit one click from the
+answer rather than in a preferences window. *Names to leave out* are shell
+patterns matched against the name on both sides, defaulted to the files the
+system writes and nobody compares — `.DS_Store` differs in every directory macOS
+has ever opened, and a comparison that reports it is one nobody reads to the
+end. What they skip is counted beside the key, never hidden. And a *date
+tolerance* of 2 seconds or an hour absorbs what exFAT rounds to and what a
+daylight-saving shift does to a whole drive; without it "newer" is answering a
+question about the filesystem rather than about the work.
+
+Folder pairs compared before are remembered, because a sync is a thing you do
+again next week and typing both sides in again is the part nobody does.
 
 **Nothing is written from the comparison screen.** *See what would happen* builds
 an explicit list — copy, replace, to Trash — naming the folder it all happens
@@ -466,6 +487,33 @@ them rather than in a view where they would be conventions:
 **Move this copy to the Trash** is its own offer, and it appears only while it
 is a safe sentence — when the other folder holds everything this one does. The
 moment the copy holds something unique, it is refused with that reason.
+
+## Freeing space without giving up the only copy of anything
+
+The usual way a disk tool frees space is by asking you to delete something. This
+one can free it by removing what is provably somewhere else.
+
+**Free space on the left** moves to the Trash everything on the left that the
+right already holds — and nothing else. An old backup folder that is 90%
+duplicated into the current one loses the 90% and keeps the 10% that is only
+there. Nothing that exists in one place is touched, because the only thing this
+direction can act on is an item with a counterpart.
+
+Which puts all the weight on what "counterpart" means, so three things hold it up:
+
+- **It is refused outright when any folder could not be read.** Two folders that
+  both failed to open look identical to a comparison, and that is the one way a
+  match could be invented rather than found.
+- **Anything the content check found to differ is never removed**, whatever the
+  direction says, and the plan reports how many were kept for that reason. This
+  is the link that makes the check worth running: same name and same length is
+  not the same bytes, and the one time it matters is the time you are deleting
+  on the strength of it.
+- **The plan says whether that check has been run**, in as many words, with the
+  button to run it right there in the warning. Nothing is blocked — this is your
+  disk — but nothing is implied either.
+
+Everything still goes to the Trash, still through a plan listing every path.
 
 ## What changed since last time
 
@@ -539,6 +587,15 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
 - **A chain of folders that differ by one file deep inside shows every level of
   the chain.** That is what a tree is, and collapsing single-child chains would
   hide where the file actually lives.
+- **There is no unattended sync.** Every run goes through a plan somebody read.
+  Comparing on a schedule and acting without review is a different kind of tool
+  with a different kind of failure.
+- **Two-way conflicts are settled by date or not at all.** Where neither side is
+  clearly newer the item is left alone and counted; there is no per-conflict
+  resolution beyond ticking one side's decision off.
+- **A downloaded iCloud file that is also in the cloud is not offered for
+  eviction yet.** It is the same shape of idea as the above — free the bytes,
+  keep the file — and it is not built.
 - **A sync is not undoable in one step.** What it moved to the Trash can be put
   back from Finder, and the result screen opens it there; what it copied stays.
   A single undo would be half an undo presented as a whole one.
@@ -546,7 +603,7 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
 ## Development
 
 ```sh
-swift test                                   # 247 tests, including FSEvents end-to-end
+swift test                                   # 264 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation

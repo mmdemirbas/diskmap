@@ -128,7 +128,11 @@ enum OffscreenRenderer {
             case "redundant": model.previewRemoveRedundant(.right)
             default: break
             }
-            view = AnyView(CompareView(model: model).environment(\.colorScheme, scheme))
+            if env["DISKMAP_COMPARE_PAGE"] == "ignore" {
+                view = AnyView(CompareIgnoreView(model: model).environment(\.colorScheme, scheme))
+            } else {
+                view = AnyView(CompareView(model: model).environment(\.colorScheme, scheme))
+            }
         } else if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
             model.checkExtras(match.copies)
             model.requestBulkTrash()

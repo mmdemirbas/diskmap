@@ -198,6 +198,103 @@ final class CompareFlowTests: XCTestCase {
         XCTAssertNil(m.folderComparison)
     }
 
+    // MARK: - Choosing what goes in the plan
+
+    /// Ticking a folder takes everything it stands for with it. That is the
+    /// only reading that makes sense — the row *is* the decision — and it is
+    /// what keeps a folder with a hundred thousand files inside it to one
+    /// click.
+    func testUntickingAFolderTakesEverythingItStandsFor() async throws {
+        for i in 0..<4 { try write(left, "Photos/one-\(i).jpg", bytes: 500 + i) }
+        try write(right, "Photos/theirs.jpg", bytes: 700)
+        try write(left, "loose.txt", bytes: 30)
+
+        let m = model()
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+        let tree = try XCTUnwrap(m.folderComparison?.tree)
+        let total = try XCTUnwrap(m.folderComparison?.entries.count)
+        XCTAssertEqual(m.compareIncludedCount, total, "everything starts in")
+
+        let photos = try XCTUnwrap(m.compareRows.first { tree.name($0) == "Photos" })
+        XCTAssertEqual(m.compareInclusion(tree, photos), .all)
+        m.toggleCompareInclusion(tree, photos)
+        XCTAssertEqual(m.compareInclusion(tree, photos), .none)
+        XCTAssertEqual(m.compareIncludedCount, 1, "only the loose file is left in")
+
+        // And a single file inside it comes back on its own, which leaves the
+        // folder partly in.
+        let one = try XCTUnwrap(tree.children(of: photos).first)
+        m.toggleCompareInclusion(tree, one)
+        XCTAssertEqual(m.compareInclusion(tree, photos), .some)
+        XCTAssertEqual(m.compareIncludedCount, 2)
+    }
+
+    /// A row the comparison never walked into belongs to the decision made
+    /// above it, so unticking it unticks that whole decision rather than
+    /// silently doing nothing.
+    func testARowInsideACollapsedDecisionTicksThatDecision() async throws {
+        for i in 0..<6 { try write(left, "archive/f\(i).bin", bytes: 100 + i) }
+
+        let m = model()
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+        let tree = try XCTUnwrap(m.folderComparison?.tree)
+
+        let archive = try XCTUnwrap(m.compareRows.first)
+        m.toggleCompareExpanded(archive)
+        let inside = try XCTUnwrap(m.compareRows.dropFirst().first)
+
+        m.toggleCompareInclusion(tree, inside)
+        XCTAssertEqual(m.compareIncludedCount, 0)
+        XCTAssertEqual(m.compareInclusion(tree, archive), .none,
+                       "the folder is the decision, and it is out")
+    }
+
+    func testWhatIsTickedIsWhatThePlanDoes() async throws {
+        try write(left, "one.txt", bytes: 10)
+        try write(left, "two.txt", bytes: 20)
+
+        let m = model()
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+        let tree = try XCTUnwrap(m.folderComparison?.tree)
+
+        let two = try XCTUnwrap(m.compareRows.first { tree.name($0) == "two.txt" })
+        m.toggleCompareInclusion(tree, two)
+        m.syncDirection = .mirrorLeftToRight
+        m.previewSync()
+
+        let plan = try XCTUnwrap(m.syncPlan)
+        XCTAssertEqual(plan.steps.map(\.relativePath), ["one.txt"])
+        XCTAssertEqual(plan.skipped, 1)
+
+        m.includeNoDecision()
+        m.previewSync()
+        XCTAssertNil(m.syncPlan, "nothing ticked is nothing to do")
+        XCTAssertEqual(m.compareRefusal, .nothingToDo)
+    }
+
+    /// The reason the whole space-freeing direction is safe to offer: what the
+    /// deep check found to differ is never removed, whatever the plan says.
+    func testFreeingSpaceRespectsTheContentCheck() async throws {
+        try write(left, "twin.bin", bytes: 64)
+        try write(right, "twin.bin", bytes: 64)
+
+        let m = model()
+        m.runComparison()
+        try await waitFor("the comparison") { m.folderComparison != nil }
+
+        m.verifyComparison()
+        try await waitFor("the content check") { m.compareVerification != nil }
+        m.syncDirection = .removeLeftDuplicates
+        m.previewSync()
+
+        let plan = try XCTUnwrap(m.syncPlan)
+        XCTAssertTrue(plan.contentWasChecked, "the plan must say the bytes were read")
+        XCTAssertEqual(plan.steps.map(\.relativePath), ["twin.bin"])
+    }
+
     // MARK: - The screen itself
 
     /// Every page draws at the same size — the outer frame sees to that — and

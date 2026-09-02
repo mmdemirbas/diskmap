@@ -27,6 +27,10 @@ private struct Sheets: ViewModifier {
             .sheet(isPresented: Binding(get: { model.showCompare },
                                         set: { if !$0 { model.closeCompare() } })) {
                 CompareView(model: model)
+                    .sheet(isPresented: Binding(get: { model.showCompareIgnore },
+                                                set: { model.showCompareIgnore = $0 })) {
+                        CompareIgnoreView(model: model)
+                    }
             }
             .sheet(isPresented: Binding(get: { model.reviewing != nil },
                                         set: { if !$0 { model.cancelBulkTrash() } })) {

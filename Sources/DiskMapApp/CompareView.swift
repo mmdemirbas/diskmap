@@ -55,7 +55,7 @@ struct CompareView: View {
             Divider()
             summaryBand
             Divider()
-            DiffColumnHeader()
+            DiffColumnHeader(model: model)
             Divider()
             DiffRowList(model: model)
             Divider()
@@ -68,11 +68,14 @@ struct CompareView: View {
             picker(.left, model.compareLeft,
                    bytes: model.folderComparison?.leftTotal,
                    items: model.folderComparison?.leftItems)
-            Button { model.swapCompareSides() } label: {
-                Image(systemName: "arrow.left.arrow.right")
+            VStack(spacing: 4) {
+                Button { model.swapCompareSides() } label: {
+                    Image(systemName: "arrow.left.arrow.right")
+                }
+                .buttonStyle(.borderless).help(loc[.compareSwap])
+                recents
             }
-            .buttonStyle(.borderless).help(loc[.compareSwap])
-            .frame(width: 26).padding(.top, 20)
+            .frame(width: 30).padding(.top, 16)
             picker(.right, model.compareRight,
                    bytes: model.folderComparison?.rightTotal,
                    items: model.folderComparison?.rightItems)
@@ -104,6 +107,27 @@ struct CompareView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The pairs compared before. A sync is a thing you do again next week, and
+    /// typing both sides in again is the part nobody does.
+    private var recents: some View {
+        Menu {
+            if model.comparePairs.isEmpty {
+                Text(loc[.compareNoRecent])
+            } else {
+                ForEach(model.comparePairs, id: \.left) { pair in
+                    Button("\((pair.left as NSString).lastPathComponent)  ⇄  \((pair.right as NSString).lastPathComponent)") {
+                        model.openCompare(left: pair.left, right: pair.right)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: 26)
+        .help(loc[.compareRecent])
+    }
+
     /// The picture, then the key, then the one sentence that matters most.
     /// Fixed height whatever state it is in.
     private var summaryBand: some View {
@@ -120,6 +144,15 @@ struct CompareView: View {
                     Text(loc.rowsShown(model.compareRows.count + model.compareRowsOmitted))
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                         .lineLimit(1).fixedSize()
+                }
+                // A filter nobody can see is a filter that lies, so what the
+                // ignore patterns kept out is said next to the counts they are
+                // missing from.
+                if let ignored = model.folderComparison?.summary.ignored, ignored > 0 {
+                    Text(loc.compareIgnoredCount(ignored))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .lineLimit(1).fixedSize()
+                        .help(model.compareIgnore.joined(separator: "  "))
                 }
             }
             .frame(height: 22)
@@ -249,21 +282,34 @@ struct CompareView: View {
 
     private var diffFooter: some View {
         VStack(spacing: 7) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                // A menu rather than seven segments: they are not seven equals,
+                // they are two questions — carry content across, or free space.
                 Picker("", selection: $model.syncDirection) {
-                    ForEach(SyncDirection.allCases) { d in
-                        Label(loc[d.key], systemImage: d.symbol).tag(d)
+                    ForEach(SyncDirection.groups, id: \.0) { group in
+                        Section(loc[group.0]) {
+                            ForEach(group.1) { d in
+                                Label(loc[d.key], systemImage: d.symbol).tag(d)
+                            }
+                        }
                     }
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 420)
+                .labelsHidden().frame(width: 240)
                 .disabled(model.folderComparison == nil)
                 Picker("", selection: $model.dateFilter) {
                     ForEach(DateFilter.allCases) { d in Text(loc[d.key]).tag(d) }
                 }
-                .labelsHidden().frame(width: 150)
+                .labelsHidden().frame(width: 148)
                 .onChange(of: model.dateFilter) { _, _ in model.rebuildCompareRows() }
                 .help(loc[.columnDate])
+                comparisonSettings
                 Spacer(minLength: 0)
+                Button(loc[.selectAll]) { model.includeEveryDecision() }
+                    .controlSize(.small).buttonStyle(.borderless)
+                Button(loc[.selectNone]) { model.includeNoDecision() }
+                    .controlSize(.small).buttonStyle(.borderless)
+                Text(includedLabel).font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary).lineLimit(1).fixedSize()
             }
             HStack(spacing: 8) {
                 Text(loc[model.syncDirection.whyKey])
@@ -281,6 +327,32 @@ struct CompareView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .frame(height: 84)
+    }
+
+    private var includedLabel: String {
+        guard let total = model.folderComparison?.entries.count, total > 0 else { return " " }
+        return loc.compareIncluded(model.compareIncludedCount, total)
+    }
+
+    /// What the comparison is told to leave out, and how exact to be about
+    /// dates. Both change the answer, so both sit one click from the answer
+    /// rather than in a preferences window.
+    private var comparisonSettings: some View {
+        Menu {
+            Picker(loc[.columnDate], selection: $model.compareDateTolerance) {
+                Text(loc[.dateExact]).tag(0)
+                Text(loc[.dateNearest2]).tag(2)
+                Text(loc[.dateNearestHour]).tag(3600)
+            }
+            .onChange(of: model.compareDateTolerance) { _, _ in model.runComparison() }
+            Divider()
+            Button(loc[.compareIgnoreButton]) { model.showCompareIgnore = true }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: 30)
+        .help(loc[.dateToleranceHelp])
     }
 
     /// The escalation from "nothing says they differ" to "the bytes agree".
@@ -365,6 +437,39 @@ struct CompareView: View {
                     if !plan.unresolved.isEmpty {
                         caution(.secondary, "questionmark.circle",
                                 "\(loc.compareUnresolvedCount(plan.unresolved.count)) — \(loc[.compareUnresolved])")
+                    }
+                    // The line this whole direction stands or falls on: what is
+                    // being removed is being removed because something else is
+                    // believed to hold the same bytes.
+                    if plan.direction.freesSpace {
+                        if plan.contentWasChecked {
+                            caution(.green, "checkmark.seal.fill", loc[.compareContentChecked])
+                        } else {
+                            // The warning carries the way out of it. Telling
+                            // somebody to check the contents and leaving them
+                            // to find the button is how a warning gets ignored.
+                            HStack(spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(Palette.warning(scheme)).frame(width: 12)
+                                Text(loc[.compareContentNotChecked])
+                                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                                    .lineLimit(1).truncationMode(.tail)
+                                Button(loc[.compareCheckFirst]) {
+                                    model.backToComparison()
+                                    model.verifyComparison()
+                                }
+                                .controlSize(.small).buttonStyle(.borderless)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    if !plan.keptBecauseContentDiffers.isEmpty {
+                        caution(.green, "shield.lefthalf.filled",
+                                loc.compareKeptDiffering(plan.keptBecauseContentDiffers.count))
+                    }
+                    if plan.skipped > 0 {
+                        caution(.secondary, "minus.square", loc.compareSkipped(plan.skipped))
                     }
                     caution(.secondary, "arrow.uturn.backward", loc[.trashIsRecoverable])
                 }
@@ -601,10 +706,38 @@ struct DiffBar: View {
     }
 }
 
+/// In, out, or partly in.
+///
+/// Three states rather than two because a folder row stands for everything
+/// under it: a checkbox that could only say yes or no would have to lie about
+/// the folder where you unticked one file.
+struct TickBox: View {
+    let state: AppModel.RowInclusion
+    var onTap: () -> Void
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 11))
+            .foregroundStyle(state == .none ? AnyShapeStyle(.secondary)
+                                            : AnyShapeStyle(Color.accentColor))
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+    }
+
+    private var symbol: String {
+        switch state {
+        case .all: "checkmark.square.fill"
+        case .none: "square"
+        case .some: "minus.square.fill"
+        }
+    }
+}
+
 /// One geometry, shared by the column header and every row, so the two cannot
 /// drift apart. A header whose columns do not sit over the values under them is
 /// worse than no header at all.
 enum DiffColumns {
+    static let tick: CGFloat = 20
     static let gutter: CGFloat = 28
     static let size: CGFloat = 76
     static let date: CGFloat = 74
@@ -616,8 +749,14 @@ enum DiffColumns {
 struct DiffColumnHeader: View {
     @ObservedObject private var loc = L10n.shared
 
+    @ObservedObject var model: AppModel
+
     var body: some View {
         HStack(spacing: 0) {
+            // The master tick, at the same x as every row's, so the column
+            // reads as one thing rather than as a control and a list.
+            TickBox(state: masterState) { toggleEverything() }
+                .frame(width: DiffColumns.tick)
             pane()
             Spacer().frame(width: DiffColumns.gutter)
             pane()
@@ -626,6 +765,17 @@ struct DiffColumnHeader: View {
         .foregroundStyle(.tertiary)
         .padding(.horizontal, 16)
         .frame(height: 20)
+    }
+
+    private var masterState: AppModel.RowInclusion {
+        guard let total = model.folderComparison?.entries.count, total > 0 else { return .all }
+        let out = model.compareSkipped.count
+        if out == 0 { return .all }
+        return out == total ? .none : .some
+    }
+
+    private func toggleEverything() {
+        if masterState == .all { model.includeNoDecision() } else { model.includeEveryDecision() }
     }
 
     /// No Left/Right label here. It would have to sit over the icon column,
@@ -701,6 +851,10 @@ struct DiffRowList: View {
 
     func row(_ tree: DiffTree, _ id: Int32) -> some View {
         HStack(spacing: 0) {
+            TickBox(state: model.compareInclusion(tree, id)) {
+                model.toggleCompareInclusion(tree, id)
+            }
+            .frame(width: DiffColumns.tick)
             pane(tree, id, .left)
             Text(tree.kind(id).relation)
                 .font(.system(size: 12, weight: .medium))
