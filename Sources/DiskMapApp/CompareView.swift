@@ -475,6 +475,10 @@ struct CompareView: View {
                         caution(.green, "shield.lefthalf.filled",
                                 loc.compareKeptDiffering(plan.keptBecauseContentDiffers.count))
                     }
+                    if !plan.keptBecauseUnreadable.isEmpty {
+                        caution(Palette.warning(scheme), "lock.slash",
+                                loc.compareKeptUnreadable(plan.keptBecauseUnreadable.count))
+                    }
                     if plan.skipped > 0 {
                         caution(.secondary, "minus.square", loc.compareSkipped(plan.skipped))
                     }

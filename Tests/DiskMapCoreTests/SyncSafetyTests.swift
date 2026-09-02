@@ -256,4 +256,132 @@ final class SyncSafetyTests: XCTestCase {
                       + "place: the replacement was not written, and the original was already "
                       + "in the Trash")
     }
+
+    // MARK: - What the plan says it will write
+
+    /// Two names for one file on the left, nothing on the right.
+    ///
+    /// The scanner counts the bytes once, which is the honest answer for "how
+    /// much room is this taking". A copy makes two independent files, so the
+    /// same tree needs twice that at the far end.
+    func testACopyOfTwoNamesForOneFileNeedsRoomForBoth() throws {
+        try write(left, "video.mov", bytes: 120_000, fill: 3)
+        try fm.linkItem(atPath: left.path + "/video.mov", toPath: left.path + "/video-copy.mov")
+
+        let c = try compare()
+        let plan = try SyncPlanner.plan(c, direction: .mirrorLeftToRight,
+                                        syncRoots: SyncRoots(roots: []), excluded: []).get()
+        XCTAssertEqual(plan.copies, 2)
+
+        let outcome = SyncRunner.run(plan)
+        for item in outcome.trashed { if let url = item.trashURL { trashed.append(url) } }
+        XCTAssertEqual(outcome.failures.count, 0)
+
+        var written: Int64 = 0
+        for name in try fm.contentsOfDirectory(atPath: right.path) {
+            written += Int64((try fm.attributesOfItem(atPath: right.path + "/" + name)[.size]
+                              as? Int) ?? 0)
+        }
+        XCTAssertEqual(plan.bytesToWrite, written,
+                       "the plan promises \(plan.bytesToWrite) bytes and writes \(written): "
+                       + "two names for one file are counted once, but copying them makes two")
+    }
+
+    // MARK: - Folders that could not be read
+
+    /// A folder the scan could not open holds an unknown number of files, so
+    /// "the other side has everything this one does" is not a claim anybody
+    /// can make about it.
+    func testAFolderThatCouldNotBeReadStopsAnythingBeingRemoved() throws {
+        try write(left, "shared/a.txt", bytes: 100, fill: 1)
+        try write(right, "shared/a.txt", bytes: 100, fill: 1)
+        try write(left, "locked/secret.txt", bytes: 50, fill: 2)
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: left.path + "/locked")
+        defer { try? fm.setAttributes([.posixPermissions: 0o755],
+                                      ofItemAtPath: left.path + "/locked") }
+
+        let c = try compare()
+        try XCTSkipUnless(c.unreadable > 0, "running as a user that can read anything")
+
+        for direction in SyncDirection.allCases where direction.removesThings {
+            let result = SyncPlanner.plan(c, direction: direction,
+                                          syncRoots: SyncRoots(roots: []), excluded: [])
+            switch result {
+            case .failure: continue
+            case .success(let plan):
+                XCTAssertTrue(plan.removals == 0,
+                              "\(direction) moves \(plan.removals) things to the Trash from a "
+                              + "comparison that could not read \(c.unreadable) folders")
+            }
+        }
+    }
+
+    // MARK: - The two sides being the same folder
+
+    /// The same folder reached by two spellings.
+    func testAFolderIsNotComparedWithItself() throws {
+        try write(left, "a.txt", bytes: 100, fill: 1)
+        let alias = root.appendingPathComponent("alias")
+        try fm.createSymbolicLink(atPath: alias.path, withDestinationPath: left.path)
+
+        switch FolderDiff.compare(left: left.path, right: alias.path) {
+        case .failure: return                       // refused, which is the answer
+        case .success(let c):
+            let result = SyncPlanner.plan(c, direction: .mirrorLeftToRight,
+                                          syncRoots: SyncRoots(roots: []), excluded: [])
+            if case .success(let plan) = result {
+                XCTAssertTrue(plan.isEmpty,
+                              "a folder is being synced against itself: \(plan.steps.count) steps")
+            }
+        }
+    }
+
+    // MARK: - What the content check did not settle
+
+    /// A file the check could not open settles nothing about that file, and a
+    /// check that was stopped settles nothing about the files it never reached.
+    /// Both leave the plan free to say the contents were read and agree.
+    func testAFileTheCheckCouldNotOpenIsNotTreatedAsAgreeing() throws {
+        try write(left, "readable.bin", bytes: 400, fill: 1)
+        try write(right, "readable.bin", bytes: 400, fill: 1)
+        try write(left, "sealed.bin", bytes: 400, fill: 2)
+        try write(right, "sealed.bin", bytes: 400, fill: 9)      // same length, other bytes
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: left.path + "/sealed.bin")
+        defer { try? fm.setAttributes([.posixPermissions: 0o644],
+                                      ofItemAtPath: left.path + "/sealed.bin") }
+
+        var c = try compare()
+        let check = FolderDiff.verify(c)
+        try XCTSkipUnless(check.unreadable.contains("sealed.bin"),
+                          "running as a user that can read anything")
+        c.verifiedAt = Date()
+
+        let result = SyncPlanner.removeRedundant(
+            c, side: .left, contentDiffers: Set(check.differing),
+            contentUnreadable: Set(check.unreadable))
+        if case .success(let plan) = result {
+            XCTFail("the whole left side is being moved to the Trash on a check that could not "
+                    + "read \(check.unreadable) - \(plan.removals) removals")
+        }
+    }
+
+    func testACheckThatWasStoppedIsNotAFinishedCheck() throws {
+        try write(left, "a.bin", bytes: 400, fill: 1)
+        try write(right, "a.bin", bytes: 400, fill: 1)
+
+        var c = try compare()
+        let cancel = CancelToken()
+        cancel.cancel()
+        let check = FolderDiff.verify(c, cancel: cancel)
+        XCTAssertTrue(check.cancelled)
+        c.verifiedAt = Date()
+
+        let plan = try SyncPlanner.plan(c, direction: .removeLeftDuplicates,
+                                        syncRoots: SyncRoots(roots: []), excluded: [],
+                                        contentDiffers: Set(check.differing),
+                                        contentCheckWasComplete: !check.cancelled).get()
+        XCTAssertFalse(plan.contentWasChecked,
+                       "the plan says the contents were read and agree, and the check was "
+                       + "stopped after \(check.pairsChecked > 0 ? "some" : "none") of them")
+    }
 }

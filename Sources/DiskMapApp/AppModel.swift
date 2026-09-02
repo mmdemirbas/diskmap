@@ -2041,7 +2041,9 @@ final class AppModel: ObservableObject {
         apply(SyncPlanner.plan(comparison, direction: syncDirection,
                                syncRoots: syncRoots, excluded: excludedPaths,
                                skipping: compareSkipped,
-                               contentDiffers: Set(compareVerification?.differing ?? [])))
+                               contentDiffers: Set(compareVerification?.differing ?? []),
+                               contentUnreadable: Set(compareVerification?.unreadable ?? []),
+                               contentCheckWasComplete: compareVerification?.cancelled != true))
     }
 
     /// The whole of one side to the Trash, once the other holds everything it
@@ -2050,7 +2052,9 @@ final class AppModel: ObservableObject {
         guard let comparison = folderComparison else { return }
         apply(SyncPlanner.removeRedundant(
             comparison, side: side, syncRoots: syncRoots, excluded: excludedPaths,
-            contentDiffers: Set(compareVerification?.differing ?? [])))
+            contentDiffers: Set(compareVerification?.differing ?? []),
+            contentUnreadable: Set(compareVerification?.unreadable ?? []),
+            contentCheckWasComplete: compareVerification?.cancelled != true))
     }
 
     private func apply(_ result: Result<SyncPlan, CompareRefusal>) {

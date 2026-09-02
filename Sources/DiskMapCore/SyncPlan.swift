@@ -136,6 +136,9 @@ public struct SyncPlan: Sendable {
     /// Items that look identical and are not: the deep check read both sides
     /// and found different bytes. Never removed, whatever the direction says.
     public var keptBecauseContentDiffers: [String] = []
+    /// Items the deep check could not open on one side or the other. Never
+    /// removed either: nothing was settled about them.
+    public var keptBecauseUnreadable: [String] = []
     /// Whether the deep check has run at all. A plan that frees space by
     /// trusting name and length alone has to say that is what it is doing.
     public var contentWasChecked: Bool = false
@@ -171,9 +174,11 @@ public struct SyncPlan: Sendable {
                 bytesToWrite: Int64, bytesToTrash: Int64, unresolved: [String],
                 freeOnLeftVolume: Int64, freeOnRightVolume: Int64, datalessCopies: Int,
                 skipped: Int = 0, keptBecauseContentDiffers: [String] = [],
+                keptBecauseUnreadable: [String] = [],
                 contentWasChecked: Bool = false) {
         self.skipped = skipped
         self.keptBecauseContentDiffers = keptBecauseContentDiffers
+        self.keptBecauseUnreadable = keptBecauseUnreadable
         self.contentWasChecked = contentWasChecked
         self.direction = direction; self.left = left; self.right = right; self.steps = steps
         self.bytesToWrite = bytesToWrite; self.bytesToTrash = bytesToTrash
@@ -200,7 +205,9 @@ public enum SyncPlanner {
                             syncRoots: SyncRoots = SyncRoots(roots: []),
                             excluded: [String] = [],
                             skipping: Set<Int> = [],
-                            contentDiffers: Set<String> = []) -> Result<SyncPlan, CompareRefusal> {
+                            contentDiffers: Set<String> = [],
+                            contentUnreadable: Set<String> = [],
+                            contentCheckWasComplete: Bool = true) -> Result<SyncPlan, CompareRefusal> {
         let left = comparison.left, right = comparison.right
         if let refusal = structuralRefusal(left: left, right: right,
                                            writesTo: writeTargets(direction, left, right),
@@ -216,6 +223,7 @@ public enum SyncPlanner {
         var steps: [SyncStep] = []
         var unresolved: [String] = []
         var keptBecauseContentDiffers: [String] = []
+        var keptBecauseUnreadable: [String] = []
         var skipped = 0
         var removals: [SyncStep] = [], replacements: [SyncStep] = [], copies: [SyncStep] = []
 
@@ -228,6 +236,12 @@ public enum SyncPlanner {
                 guard entry.kind == .identical, let side = direction.target else { continue }
                 guard !contentDiffers.contains(entry.relativePath) else {
                     keptBecauseContentDiffers.append(entry.relativePath); continue
+                }
+                // Not opened is not the same as opened and found to agree. A
+                // file nobody could read is a file nobody can say is held
+                // somewhere else.
+                guard !contentUnreadable.contains(entry.relativePath) else {
+                    keptBecauseUnreadable.append(entry.relativePath); continue
                 }
                 removals.append(step(.remove, entry, from: side, comparison, syncRoots))
                 continue
@@ -302,7 +316,11 @@ public enum SyncPlanner {
             datalessCopies: steps.filter { $0.dataless && $0.action != .remove }.count,
             skipped: skipped,
             keptBecauseContentDiffers: keptBecauseContentDiffers,
-            contentWasChecked: comparison.verifiedAt != nil)
+            keptBecauseUnreadable: keptBecauseUnreadable,
+            // A check that was stopped part-way read some of the files and
+            // none of the rest, which is not the sentence this flag stands
+            // for on the screen.
+            contentWasChecked: comparison.verifiedAt != nil && contentCheckWasComplete)
         return .success(out)
     }
 
@@ -314,7 +332,9 @@ public enum SyncPlanner {
     public static func removeRedundant(_ comparison: FolderComparison, side: Side,
                                        syncRoots: SyncRoots = SyncRoots(roots: []),
                                        excluded: [String] = [],
-                                       contentDiffers: Set<String> = []) -> Result<SyncPlan, CompareRefusal> {
+                                       contentDiffers: Set<String> = [],
+                                       contentUnreadable: Set<String> = [],
+                                       contentCheckWasComplete: Bool = true) -> Result<SyncPlan, CompareRefusal> {
         let target = side == .left ? comparison.left : comparison.right
         if let refusal = structuralRefusal(left: comparison.left, right: comparison.right,
                                            writesTo: [target], excluded: excluded) {
@@ -328,19 +348,33 @@ public enum SyncPlanner {
         // them, this side holds something the other one does not, and taking
         // the whole of it is exactly the mistake the check exists to stop.
         guard contentDiffers.isEmpty else { return .failure(.notRedundant) }
+        // Same reasoning one step further out: a file the check could not
+        // open, or a check that was stopped before it reached the end, leaves
+        // the claim unproven rather than proven.
+        guard contentUnreadable.isEmpty, contentCheckWasComplete else {
+            return .failure(.notRedundant)
+        }
 
         let bytes = side == .left ? comparison.leftTotal : comparison.rightTotal
+        // The folder as it stands right now, so the runner can tell whether
+        // anything was put into it between here and the button.
+        var info = stat()
+        guard lstat(target, &info) == 0 else { return .failure(.notRedundant) }
         let step = SyncStep(id: 0, action: .remove, relativePath: "", source: nil,
                             target: target, isDirectory: true, bytes: bytes,
                             replacedBytes: 0, syncProvider: syncRoots.provider(for: target),
-                            dataless: false)
+                            dataless: false,
+                            targetIsFolder: true, targetBytes: -1,
+                            targetModified: Int32(truncatingIfNeeded: info.st_mtimespec.tv_sec),
+                            coversIgnored: comparison.tree.coversIgnored(0, on: side))
         return .success(SyncPlan(
             direction: side == .left ? .mirrorRightToLeft : .mirrorLeftToRight,
             left: comparison.left, right: comparison.right, steps: [step],
             bytesToWrite: 0, bytesToTrash: bytes, unresolved: [],
             freeOnLeftVolume: VolumeInfo.forPath(comparison.left)?.trueAvailable ?? 0,
             freeOnRightVolume: VolumeInfo.forPath(comparison.right)?.trueAvailable ?? 0,
-            datalessCopies: 0))
+            datalessCopies: 0,
+            contentWasChecked: comparison.verifiedAt != nil && contentCheckWasComplete))
     }
 
     // MARK: - Refusals
@@ -401,7 +435,11 @@ public enum SyncPlanner {
             source: action == .remove ? nil : here,
             target: target,
             isDirectory: entry.isDirectory,
-            bytes: entry.bytes(on: source),
+            // Two different questions. What a removal frees is the space the
+            // item occupies, where a second name for one file occupies
+            // nothing. What a copy writes is the size of the file, and copying
+            // two names for one file makes two files, each the full size.
+            bytes: action == .remove ? entry.bytes(on: source) : entry.logical(on: source),
             replacedBytes: action == .replace ? entry.bytes(on: source.other) : 0,
             syncProvider: syncRoots.provider(for: target),
             dataless: entry.dataless,
