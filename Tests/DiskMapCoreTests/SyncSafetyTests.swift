@@ -438,4 +438,30 @@ final class SyncSafetyTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: right.path + "/album/one.jpg"),
                       "the side that was being kept is gone")
     }
+
+    /// A comparison that was stopped describes part of two folders, and the
+    /// part it never reached reads as absent from that side.
+    func testAComparisonThatWasStoppedCannotBeMirrored() throws {
+        try write(left, "a.txt", bytes: 400, fill: 1)
+        try write(right, "a.txt", bytes: 400, fill: 1)
+        try write(right, "b.txt", bytes: 400, fill: 2)
+
+        let cancel = CancelToken()
+        cancel.cancel()
+        guard case .success(let c) = FolderDiff.compare(left: left.path, right: right.path,
+                                                        cancel: cancel) else { return }
+        try XCTSkipUnless(c.cancelled, "the comparison finished before the token was read")
+
+        for direction in SyncDirection.allCases where direction.removesThings {
+            guard case .failure = SyncPlanner.plan(c, direction: direction,
+                                                   syncRoots: SyncRoots(roots: []),
+                                                   excluded: []) else {
+                XCTFail("\(direction) was planned from a comparison that never finished")
+                continue
+            }
+        }
+        if case .success = SyncPlanner.removeRedundant(c, side: .left) {
+            XCTFail("a whole side was offered for the Trash on a comparison that never finished")
+        }
+    }
 }

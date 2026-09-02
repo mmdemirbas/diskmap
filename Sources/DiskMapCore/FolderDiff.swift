@@ -223,6 +223,10 @@ public enum CompareRefusal: Error, Sendable, Equatable {
     /// A mirror cannot be built from a comparison that could not read
     /// everything: what it did not see, it would propose deleting.
     case someFoldersUnreadable(Int)
+    /// The comparison was stopped part-way, so it describes part of two
+    /// folders. Same reasoning: what it never reached, it would read as absent
+    /// from that side.
+    case comparisonIncomplete
 }
 
 /// What two folders each hold, and where they disagree.

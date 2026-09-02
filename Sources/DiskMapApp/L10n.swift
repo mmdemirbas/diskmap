@@ -425,6 +425,7 @@ final class L10n: ObservableObject {
         case columnDate, nothingMatchesFilter
         case compareAgain, refuseNotAFolder, refuseSameFolder, refuseNested
         case refuseVolumeRoot, refuseExcluded, refuseNothingToDo, refuseNotRedundant
+        case refuseComparisonIncomplete
         case refuseUnreadable, compareUnreadableWarning
         case folderLabel, videoLabel, imageLabel, audioLabel, archiveLabel, documentLabel
         case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, databaseLabel, cacheLabel, otherLabel
@@ -760,6 +761,9 @@ final class L10n: ObservableObject {
         .refuseExcluded: ("That folder is on the never-touch list",
                           "O klasör dokunulmayacaklar listesinde"),
         .refuseNothingToDo: ("Nothing to do — they already match", "Yapacak bir şey yok, zaten eşleşiyorlar"),
+        .refuseComparisonIncomplete: (
+            "The comparison was stopped before it finished, so compare again first",
+            "Karşılaştırma tamamlanmadan durduruldu, önce yeniden karşılaştırın"),
         .refuseNotRedundant: ("This copy holds something the other one does not",
                               "Bu kopyada ötekinde olmayan bir şey var"),
         .refuseUnreadable: ("Some folders could not be read, so a mirror would propose deleting what it never saw. Grant Full Disk Access and compare again.",

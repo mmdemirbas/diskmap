@@ -280,6 +280,7 @@ func localizedRefusal(_ refusal: CompareRefusal) -> String {
     case .onTheNeverTouchList(let path): "\(t(.refuseExcluded)): \((path as NSString).lastPathComponent)"
     case .nothingToDo: t(.refuseNothingToDo)
     case .notRedundant: t(.refuseNotRedundant)
+    case .comparisonIncomplete: t(.refuseComparisonIncomplete)
     case .someFoldersUnreadable: t(.refuseUnreadable)
     }
 }

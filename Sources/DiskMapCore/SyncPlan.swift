@@ -217,6 +217,12 @@ public enum SyncPlanner {
                             contentUnreadable: Set<String> = [],
                             contentCheckWasComplete: Bool = true) -> Result<SyncPlan, CompareRefusal> {
         let left = comparison.left, right = comparison.right
+        // Stopped part-way is not a smaller comparison, it is a partial one:
+        // the folders it never reached look empty, and a direction that
+        // removes things would act on that.
+        if comparison.cancelled, direction.removesThings {
+            return .failure(.comparisonIncomplete)
+        }
         if let refusal = structuralRefusal(left: left, right: right,
                                            writesTo: writeTargets(direction, left, right),
                                            excluded: excluded) {
@@ -344,6 +350,7 @@ public enum SyncPlanner {
                                        contentDiffers: Set<String> = [],
                                        contentUnreadable: Set<String> = [],
                                        contentCheckWasComplete: Bool = true) -> Result<SyncPlan, CompareRefusal> {
+        if comparison.cancelled { return .failure(.comparisonIncomplete) }
         let target = side == .left ? comparison.left : comparison.right
         if let refusal = structuralRefusal(left: comparison.left, right: comparison.right,
                                            writesTo: [target], excluded: excluded) {
