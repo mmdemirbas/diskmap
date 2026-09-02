@@ -384,4 +384,58 @@ final class SyncSafetyTests: XCTestCase {
                        "the plan says the contents were read and agree, and the check was "
                        + "stopped after \(check.pairsChecked > 0 ? "some" : "none") of them")
     }
+
+    // MARK: - A folder that is no longer there
+
+    /// An ejected disk leaves its mount point behind as an ordinary empty
+    /// folder on the boot disk, and a mirror pointed at one would rebuild the
+    /// whole tree there without a word.
+    func testAMirrorRefusesWhenTheFolderItWritesIntoHasGone() throws {
+        try write(left, "a/one.txt", bytes: 400, fill: 1)
+        try write(left, "a/two.txt", bytes: 400, fill: 2)
+
+        let c = try compare()
+        let plan = try SyncPlanner.plan(c, direction: .mirrorLeftToRight,
+                                        syncRoots: SyncRoots(roots: []), excluded: []).get()
+        XCTAssertEqual(plan.copies, 1)
+
+        try fm.removeItem(at: right)                 // the disk goes away
+
+        let outcome = SyncRunner.run(plan)
+        for item in outcome.trashed { if let url = item.trashURL { trashed.append(url) } }
+        XCTAssertNotNil(outcome.refused, "the destination is gone and the run went ahead anyway")
+        XCTAssertEqual(outcome.completed, 0)
+        XCTAssertFalse(fm.fileExists(atPath: right.path),
+                       "the destination was recreated where the disk used to be mounted")
+    }
+
+    /// The most destructive thing the app offers, end to end: the whole of one
+    /// side to the Trash. It goes through the same re-check as every other
+    /// step, so this is also the test that the re-check does not refuse the
+    /// plan it was handed.
+    func testRemovingAWholeCopyRunsAndTheFolderEndsUpInTheTrash() throws {
+        try write(left, "album/one.jpg", bytes: 4_000, fill: 1)
+        try write(left, "album/two.jpg", bytes: 4_000, fill: 2)
+        try write(right, "album/one.jpg", bytes: 4_000, fill: 1)
+        try write(right, "album/two.jpg", bytes: 4_000, fill: 2)
+
+        var c = try compare()
+        let check = FolderDiff.verify(c)
+        XCTAssertTrue(check.agreed, "the two sides hold the same bytes")
+        c.verifiedAt = Date()
+
+        let plan = try SyncPlanner.removeRedundant(c, side: .left,
+                                                   contentDiffers: Set(check.differing),
+                                                   contentUnreadable: Set(check.unreadable)).get()
+        XCTAssertTrue(plan.contentWasChecked)
+
+        let outcome = SyncRunner.run(plan)
+        for item in outcome.trashed { if let url = item.trashURL { trashed.append(url) } }
+        XCTAssertNil(outcome.refused)
+        XCTAssertEqual(outcome.failures.count, 0,
+                       "\(outcome.failures.map(\.message))")
+        XCTAssertFalse(fm.fileExists(atPath: left.path), "the left side is still there")
+        XCTAssertTrue(fm.fileExists(atPath: right.path + "/album/one.jpg"),
+                      "the side that was being kept is gone")
+    }
 }

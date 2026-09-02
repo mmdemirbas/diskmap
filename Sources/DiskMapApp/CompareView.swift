@@ -602,7 +602,8 @@ struct CompareView: View {
                                                         : "exclamationmark.triangle.fill")
                         .font(.system(size: 15))
                         .foregroundStyle(outcome.succeeded ? Color.green : Palette.warning(scheme))
-                    Text(outcome.cancelled ? loc[.syncStopped] : loc[.done])
+                    Text(outcome.refused != nil ? loc[.syncRefused]
+                         : outcome.cancelled ? loc[.syncStopped] : loc[.done])
                         .font(.system(size: 14, weight: .semibold))
                     Spacer(minLength: 0)
                     Text(loc.syncWrote(shortBytes(outcome.bytesWritten),
@@ -610,10 +611,11 @@ struct CompareView: View {
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 }
                 .frame(height: 20)
-                Text(outcome.failures.isEmpty
-                     ? loc[.trashIsRecoverable]
-                     : loc.syncFailedSteps(outcome.failures.count))
+                Text(outcome.refused
+                     ?? (outcome.failures.isEmpty ? loc[.trashIsRecoverable]
+                                                  : loc.syncFailedSteps(outcome.failures.count)))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text(loc[.compareWorking]).font(.system(size: 11)).foregroundStyle(.secondary)

@@ -300,6 +300,7 @@ final class L10n: ObservableObject {
                       : (n == 1 ? "1 item turned out to differ and was left alone"
                                 : "\(fmt(n)) items turned out to differ and were left alone")
     }
+    // placed with the other sync result strings
     func compareKeptUnreadable(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) öğe okunamadı ve yerinde bırakıldı"
                       : (n == 1 ? "1 item could not be read and was left alone"
@@ -419,7 +420,7 @@ final class L10n: ObservableObject {
         case comparePreview, compareApply, compareWhatWillHappen, compareNothingWritten
         case stepCopy, stepReplace, stepRemove, compareTargetFolder
         case compareUnresolved, compareNotEnoughRoom, compareDownloadsFromCloud
-        case compareRedundantHint, syncStopped, syncShowInTrash
+        case compareRedundantHint, syncStopped, syncRefused, syncShowInTrash
         case filterDifferences, filterAll, dateAny, dateLeftNewer, dateRightNewer, dateSame
         case columnDate, nothingMatchesFilter
         case compareAgain, refuseNotAFolder, refuseSameFolder, refuseNested
@@ -748,6 +749,7 @@ final class L10n: ObservableObject {
         .nothingMatchesFilter: ("Nothing here matches that filter",
                                 "Bu süzgece uyan bir şey yok"),
         .syncStopped: ("Stopped part-way", "Yarıda durduruldu"),
+        .syncRefused: ("Nothing was done", "Hiçbir şey yapılmadı"),
         .syncShowInTrash: ("Show what went to the Trash", "Çöpe gidenleri göster"),
         .compareAgain: ("Compare again", "Yeniden karşılaştır"),
         .refuseNotAFolder: ("That is not a folder", "Bu bir klasör değil"),

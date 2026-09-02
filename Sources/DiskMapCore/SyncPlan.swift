@@ -128,6 +128,12 @@ public struct SyncPlan: Sendable {
     /// Free space on the volume each side lives on, at the moment of planning.
     public var freeOnLeftVolume: Int64
     public var freeOnRightVolume: Int64
+    /// Which volume each folder was on when the plan was made. Checked again
+    /// before anything runs: a disk that has been ejected leaves its mount
+    /// point behind as an ordinary empty folder on the boot disk, and a mirror
+    /// pointed at one would quietly rebuild the whole tree there.
+    public var leftDevice: Int32 = 0
+    public var rightDevice: Int32 = 0
     /// Copies that would download a file from iCloud rather than move bytes
     /// that are already here.
     public var datalessCopies: Int
@@ -173,6 +179,7 @@ public struct SyncPlan: Sendable {
     public init(direction: SyncDirection, left: String, right: String, steps: [SyncStep],
                 bytesToWrite: Int64, bytesToTrash: Int64, unresolved: [String],
                 freeOnLeftVolume: Int64, freeOnRightVolume: Int64, datalessCopies: Int,
+                leftDevice: Int32 = 0, rightDevice: Int32 = 0,
                 skipped: Int = 0, keptBecauseContentDiffers: [String] = [],
                 keptBecauseUnreadable: [String] = [],
                 contentWasChecked: Bool = false) {
@@ -184,6 +191,7 @@ public struct SyncPlan: Sendable {
         self.bytesToWrite = bytesToWrite; self.bytesToTrash = bytesToTrash
         self.unresolved = unresolved
         self.freeOnLeftVolume = freeOnLeftVolume; self.freeOnRightVolume = freeOnRightVolume
+        self.leftDevice = leftDevice; self.rightDevice = rightDevice
         self.datalessCopies = datalessCopies
     }
 }
@@ -314,6 +322,7 @@ public enum SyncPlanner {
             freeOnLeftVolume: VolumeInfo.forPath(left)?.trueAvailable ?? 0,
             freeOnRightVolume: VolumeInfo.forPath(right)?.trueAvailable ?? 0,
             datalessCopies: steps.filter { $0.dataless && $0.action != .remove }.count,
+            leftDevice: deviceOf(left), rightDevice: deviceOf(right),
             skipped: skipped,
             keptBecauseContentDiffers: keptBecauseContentDiffers,
             keptBecauseUnreadable: keptBecauseUnreadable,
@@ -374,6 +383,7 @@ public enum SyncPlanner {
             freeOnLeftVolume: VolumeInfo.forPath(comparison.left)?.trueAvailable ?? 0,
             freeOnRightVolume: VolumeInfo.forPath(comparison.right)?.trueAvailable ?? 0,
             datalessCopies: 0,
+            leftDevice: deviceOf(comparison.left), rightDevice: deviceOf(comparison.right),
             contentWasChecked: comparison.verifiedAt != nil && contentCheckWasComplete))
     }
 
@@ -425,6 +435,12 @@ public enum SyncPlanner {
     /// `source` names the side the item is read from. A removal has no source
     /// to read: it names the side the item is removed *from*, and that is where
     /// the step points.
+    static func deviceOf(_ path: String) -> Int32 {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return 0 }
+        return Int32(truncatingIfNeeded: info.st_dev)
+    }
+
     private static func step(_ action: SyncAction, _ entry: DiffEntry, from source: Side,
                              _ comparison: FolderComparison, _ syncRoots: SyncRoots) -> SyncStep {
         let here = comparison.path(entry.relativePath, on: source)
@@ -479,7 +495,10 @@ public struct SyncOutcome: Sendable {
     /// Everything that went to the Trash, so the result screen can point at it.
     public var trashed: [TrashedItem] = []
     public var cancelled = false
-    public var succeeded: Bool { failures.isEmpty && !cancelled }
+    /// Why nothing was attempted at all. Set instead of `failures` when the
+    /// run was stopped before its first step.
+    public var refused: String?
+    public var succeeded: Bool { failures.isEmpty && !cancelled && refused == nil }
 }
 
 /// Carries out a plan.
@@ -496,6 +515,12 @@ public enum SyncRunner {
         let span = Telemetry.begin("sync.run")
         var outcome = SyncOutcome()
         let fm = FileManager.default
+
+        if let moved = rootsMoved(plan) {
+            outcome.refused = moved
+            span.end(["direction": .text(plan.direction.rawValue), "refused": .flag(true)])
+            return outcome
+        }
 
         for step in plan.steps {
             if cancel?.isCancelled == true { outcome.cancelled = true; break }
@@ -553,6 +578,22 @@ public enum SyncRunner {
 
     /// Nil when there was nothing there, which is not a failure: a mirror run
     /// twice, or a folder someone tidied in between, both land here.
+    /// Why nothing should be attempted, or nil when both folders are where the
+    /// plan left them.
+    private static func rootsMoved(_ plan: SyncPlan) -> String? {
+        for (path, device) in [(plan.left, plan.leftDevice), (plan.right, plan.rightDevice)] {
+            var info = stat()
+            guard lstat(path, &info) == 0 else { return "\(path) is no longer there" }
+            guard (info.st_mode & S_IFMT) == S_IFDIR else { return "\(path) is no longer a folder" }
+            // A device of zero means the plan predates this check rather than
+            // that the folder was on device zero.
+            if device != 0, Int32(truncatingIfNeeded: info.st_dev) != device {
+                return "\(path) is on a different disk than when the plan was made"
+            }
+        }
+        return nil
+    }
+
     /// Why this step must not go ahead, or nil when the target is still the
     /// item the plan described.
     ///
