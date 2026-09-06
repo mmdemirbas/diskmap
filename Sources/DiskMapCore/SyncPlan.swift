@@ -637,21 +637,8 @@ public enum SyncRunner {
     /// A missing target is not drift: nothing is there to lose, and `trash`
     /// treats it as a step with nothing to do.
     private static func drift(_ step: SyncStep) -> String? {
-        var info = stat()
-        guard lstat(step.target, &info) == 0 else { return nil }
-        let isFolder = (info.st_mode & S_IFMT) == S_IFDIR
-        if isFolder != step.targetIsFolder {
-            return isFolder
-                ? "a folder is there now, not the file the plan described"
-                : "a file is there now, not the folder the plan described"
-        }
-        if !isFolder, step.targetBytes >= 0, info.st_size != step.targetBytes {
-            return "its size changed after the plan was made, so compare again"
-        }
-        if Int32(truncatingIfNeeded: info.st_mtimespec.tv_sec) != step.targetModified {
-            return "it changed after the plan was made, so compare again"
-        }
-        return nil
+        FileActions.changedSincePlanning(step.target, isFolder: step.targetIsFolder,
+                                         bytes: step.targetBytes, modified: step.targetModified)
     }
 
     private static func trash(_ path: String, bytes: Int64) throws -> TrashedItem? {

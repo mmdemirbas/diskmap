@@ -129,8 +129,12 @@ final class IntegrationTests: XCTestCase {
         let victim = dir.appendingPathComponent("victim.bin")
         try Data(count: 12_345).write(to: victim)
 
+        var seen = stat()
+        XCTAssertEqual(lstat(victim.path, &seen), 0)
         let (trashed, failures) = try FileActions.moveToTrash(
-            [(url: victim, node: 1, bytes: 12_345)])
+            [FileActions.Target(url: victim, node: 1, bytes: 12_345, isFolder: false,
+                                length: 12_345,
+                                modified: Int32(truncatingIfNeeded: seen.st_mtimespec.tv_sec))])
         XCTAssertTrue(failures.isEmpty, "trash failed: \(failures)")
         XCTAssertEqual(trashed.count, 1)
         XCTAssertFalse(fm.fileExists(atPath: victim.path), "original should be gone")

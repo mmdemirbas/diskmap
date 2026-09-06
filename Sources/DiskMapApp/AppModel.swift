@@ -2179,8 +2179,22 @@ final class AppModel: ObservableObject {
     /// decides *what*; this decides nothing.
     private func performTrash(_ targets: [(url: URL, node: Int32, bytes: Int64)], label: String) {
         guard let tree, !targets.isEmpty else { return }
+        // Each target carries what the tree last saw of it, so the one place
+        // anything is moved to the Trash can check that it is still that thing.
+        let described: [FileActions.Target] = tree.withStore { store in
+            // A node the tree does not have is a node nothing can vouch for,
+            // so it is dropped rather than trashed on no description at all.
+            targets.compactMap { t -> FileActions.Target? in
+                guard t.node > 0, t.node < Int32(store.count) else { return nil }
+                let folder = store.isDirectory(t.node)
+                return FileActions.Target(
+                    url: t.url, node: t.node, bytes: t.bytes, isFolder: folder,
+                    length: folder ? -1 : store.totalLogical[Int(t.node)],
+                    modified: store.mtime[Int(t.node)])
+            }
+        }
         do {
-            let (trashed, failures) = try FileActions.moveToTrash(targets)
+            let (trashed, failures) = try FileActions.moveToTrash(described)
             for item in trashed {
                 // Reflect it now; the FSEvents relist that follows is a no-op.
                 tree.markRemoved(item.node)

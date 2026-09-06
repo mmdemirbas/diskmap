@@ -1,0 +1,87 @@
+import DiskMapCore
+import XCTest
+
+/// What happens between the review screen appearing and the button being
+/// pressed. Everything here goes to the Trash, so nothing is unrecoverable —
+/// but a plan is a description of the files that were there.
+final class TrashDriftTests: XCTestCase {
+    private let fm = FileManager.default
+    private var root: URL!
+    private var trashed: [URL] = []
+
+    override func setUpWithError() throws {
+        root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmdrift-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        for url in trashed { try? fm.removeItem(at: url) }
+        trashed = []
+        if let root { try? fm.removeItem(at: root) }
+    }
+
+    func testAnItemThatChangedSincePlanningIsNotTrashed() throws {
+        let doomed = root.appendingPathComponent("doomed.bin")
+        try Data(repeating: 1, count: 400).write(to: doomed)
+
+        // What the plan saw.
+        var seen = stat()
+        XCTAssertEqual(lstat(doomed.path, &seen), 0)
+        let target = FileActions.Target(
+            url: doomed, node: 7, bytes: 400, isFolder: false, length: 400,
+            modified: Int32(truncatingIfNeeded: seen.st_mtimespec.tv_sec))
+
+        // Something else takes its place while the screen is up.
+        try fm.removeItem(at: doomed)
+        try Data(repeating: 9, count: 90_000).write(to: doomed)
+
+        let (done, failures) = try FileActions.moveToTrash([target])
+        for item in done { if let url = item.trashURL { trashed.append(url) } }
+        XCTAssertTrue(fm.fileExists(atPath: doomed.path),
+                      "the file at that path is not the one the plan described, and it has "
+                      + "been moved to the Trash anyway")
+        XCTAssertEqual(failures.count, 1)
+    }
+
+    /// The ordinary case still has to work: an item that is what it was still
+    /// goes to the Trash.
+    func testAnItemThatIsStillItselfGoes() throws {
+        let doomed = root.appendingPathComponent("doomed.bin")
+        try Data(repeating: 1, count: 400).write(to: doomed)
+        var seen = stat()
+        XCTAssertEqual(lstat(doomed.path, &seen), 0)
+
+        let (done, failures) = try FileActions.moveToTrash([
+            FileActions.Target(url: doomed, node: 7, bytes: 400, isFolder: false, length: 400,
+                               modified: Int32(truncatingIfNeeded: seen.st_mtimespec.tv_sec))])
+        for item in done { if let url = item.trashURL { trashed.append(url) } }
+        XCTAssertEqual(failures.count, 0, "\(failures)")
+        XCTAssertEqual(done.count, 1)
+        XCTAssertFalse(fm.fileExists(atPath: doomed.path))
+    }
+
+    /// A folder is checked on its kind and its date; its size is a subtree
+    /// total that cannot be re-read for the price of one `lstat`.
+    func testAFolderThatGainedAFileSincePlanningIsNotTrashed() throws {
+        let album = root.appendingPathComponent("album")
+        try fm.createDirectory(at: album, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 100).write(to: album.appendingPathComponent("one.bin"))
+        var seen = stat()
+        XCTAssertEqual(lstat(album.path, &seen), 0)
+        let target = FileActions.Target(
+            url: album, node: 3, bytes: 100, isFolder: true, length: -1,
+            modified: Int32(truncatingIfNeeded: seen.st_mtimespec.tv_sec))
+
+        // Anything landing in the folder moves its date.
+        Thread.sleep(forTimeInterval: 1.1)
+        try Data(repeating: 2, count: 100).write(to: album.appendingPathComponent("two.bin"))
+
+        let (done, failures) = try FileActions.moveToTrash([target])
+        for item in done { if let url = item.trashURL { trashed.append(url) } }
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(fm.fileExists(atPath: album.path),
+                      "a folder that gained a file since the plan was made went to the Trash "
+                      + "with the new file inside it")
+    }
+}
