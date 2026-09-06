@@ -227,18 +227,43 @@ public final class DiffTree: @unchecked Sendable {
 
         left.withNameBytes { lb in
             right.withNameBytes { rb in
-                var lk = sortedChildren(left, parentNode.leftNode, lb)
-                var rk = sortedChildren(right, parentNode.rightNode, rb)
+                var lk = childList(left, parentNode.leftNode, lb)
+                var rk = childList(right, parentNode.rightNode, rb)
 
-                // Merged on the folded name where that is safe, and on the raw
-                // bytes where it is not. See `foldedKeys`.
-                var lKeys = DiffTree.foldedKeys(left, lk, lb)
-                var rKeys = DiffTree.foldedKeys(right, rk, rb)
-                if DiffTree.sortByKey(&lk, &lKeys), DiffTree.sortByKey(&rk, &rKeys) {
-                    merge(id, depth, lk, lKeys, rk, rKeys)
+                // Three ways to pair up a folder's names, cheapest first. See
+                // `foldedKeys` for why folding is needed at all, and
+                // `sortByKey` for when it has to be given up.
+                if DiffTree.anyHighByte(left, lk, lb) || DiffTree.anyHighByte(right, rk, rb) {
+                    // A byte over 0x7f means the name can be spelled two ways,
+                    // and telling those apart needs the composed form, which
+                    // needs somewhere to put it.
+                    var lKeys = DiffTree.foldedKeys(left, lk, lb)
+                    var rKeys = DiffTree.foldedKeys(right, rk, rb)
+                    if DiffTree.sortByKey(&lk, &lKeys), DiffTree.sortByKey(&rk, &rKeys) {
+                        return merge(id, depth, lk, lKeys, rk, rKeys)
+                    }
                 } else {
-                    merge(id, depth, lk, lb, rk, rb)
+                    // Plain ASCII: case folds a byte at a time, in place. This
+                    // is the overwhelming majority of folders, and it is the
+                    // reason the keys above are not built for every one of
+                    // them — this tree is built to hold 39 bytes a node, and
+                    // two arrays a node is not that.
+                    lk.sort { DiffTree.compareFolded(lb, self.left.nameSpan($0),
+                                                     lb, self.left.nameSpan($1)) < 0 }
+                    rk.sort { DiffTree.compareFolded(rb, self.right.nameSpan($0),
+                                                     rb, self.right.nameSpan($1)) < 0 }
+                    if !DiffTree.hasTie(left, lk, lb), !DiffTree.hasTie(right, rk, rb) {
+                        return merge(id, depth, lk, lb, rk, rb, folding: true)
+                    }
                 }
+
+                // Two names in this folder fold together, so it is on a volume
+                // that tells them apart. The raw bytes are the only honest key.
+                lk.sort { DiffTree.compareNames(lb, self.left.nameSpan($0),
+                                                lb, self.left.nameSpan($1)) < 0 }
+                rk.sort { DiffTree.compareNames(rb, self.right.nameSpan($0),
+                                                rb, self.right.nameSpan($1)) < 0 }
+                merge(id, depth, lk, lb, rk, rb, folding: false)
             }
         }
 
@@ -275,13 +300,15 @@ public final class DiffTree: @unchecked Sendable {
 
     private func merge(_ id: Int32, _ depth: Int32,
                        _ lk: [Int32], _ lb: UnsafeBufferPointer<UInt8>,
-                       _ rk: [Int32], _ rb: UnsafeBufferPointer<UInt8>) {
+                       _ rk: [Int32], _ rb: UnsafeBufferPointer<UInt8>,
+                       folding: Bool) {
         var i = 0, j = 0
         while i < lk.count || j < rk.count {
             if j == rk.count { append(id, depth, lk[i], -1); i += 1; continue }
             if i == lk.count { append(id, depth, -1, rk[j]); j += 1; continue }
-            let order = DiffTree.compareNames(lb, left.nameSpan(lk[i]),
-                                              rb, right.nameSpan(rk[j]))
+            let order = folding
+                ? DiffTree.compareFolded(lb, left.nameSpan(lk[i]), rb, right.nameSpan(rk[j]))
+                : DiffTree.compareNames(lb, left.nameSpan(lk[i]), rb, right.nameSpan(rk[j]))
             if order < 0 { append(id, depth, lk[i], -1); i += 1 }
             else if order > 0 { append(id, depth, -1, rk[j]); j += 1 }
             else { append(id, depth, lk[i], rk[j]); i += 1; j += 1 }
@@ -321,12 +348,60 @@ public final class DiffTree: @unchecked Sendable {
     /// names could never hold both, so this folder is on one that does not —
     /// there the two really are different files, and the raw bytes are the
     /// only honest way to tell them apart.
+    ///
+    /// There is no test for the false case, and there cannot be one that runs
+    /// here: producing it needs a folder holding both names, which needs a
+    /// volume that tells them apart, and creating one is refused on this
+    /// machine. It is a guard against a volume the suite cannot make, not a
+    /// behaviour anybody can reach on the one it runs on.
     static func sortByKey(_ kids: inout [Int32], _ keys: inout [[UInt8]]) -> Bool {
         let order = (0..<kids.count).sorted { compareKeys(keys[$0], keys[$1]) < 0 }
         kids = order.map { kids[$0] }
         keys = order.map { keys[$0] }
         for k in 1..<max(keys.count, 1) where keys[k] == keys[k - 1] { return false }
         return true
+    }
+
+    /// True when any of these names holds a byte that is not plain ASCII, and
+    /// so could be the composed or the decomposed spelling of the other side's.
+    static func anyHighByte(_ store: NodeStore, _ kids: [Int32],
+                            _ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
+        guard let base = bytes.baseAddress else { return false }
+        for node in kids {
+            let span = store.nameSpan(node)
+            for k in 0..<span.length where base[span.offset + k] >= 0x80 { return true }
+        }
+        return false
+    }
+
+    /// Two names in one folder that fold to the same thing. See `sortByKey`.
+    static func hasTie(_ store: NodeStore, _ kids: [Int32],
+                       _ bytes: UnsafeBufferPointer<UInt8>) -> Bool {
+        guard kids.count > 1 else { return false }
+        for k in 1..<kids.count
+        where compareFolded(bytes, store.nameSpan(kids[k]),
+                            bytes, store.nameSpan(kids[k - 1])) == 0 {
+            return true
+        }
+        return false
+    }
+
+    @inline(__always)
+    static func lowerASCII(_ b: UInt8) -> UInt8 { (b >= 65 && b <= 90) ? b + 32 : b }
+
+    /// Byte order, with ASCII case folded on the way past. No allocation: this
+    /// runs on every name in every folder that is opened.
+    @inline(__always)
+    static func compareFolded(_ a: UnsafeBufferPointer<UInt8>, _ sa: (offset: Int, length: Int),
+                              _ b: UnsafeBufferPointer<UInt8>,
+                              _ sb: (offset: Int, length: Int)) -> Int {
+        guard let pa = a.baseAddress, let pb = b.baseAddress else { return 0 }
+        for k in 0..<min(sa.length, sb.length) {
+            let x = lowerASCII(pa[sa.offset + k]), y = lowerASCII(pb[sb.offset + k])
+            if x != y { return x < y ? -1 : 1 }
+        }
+        if sa.length == sb.length { return 0 }
+        return sa.length < sb.length ? -1 : 1
     }
 
     @inline(__always)
@@ -527,15 +602,16 @@ public final class DiffTree: @unchecked Sendable {
         nodes[Int(parent)].contains.formUnion(nodes[Int(child)].contains)
     }
 
-    private func sortedChildren(_ store: NodeStore, _ node: Int32,
-                                _ bytes: UnsafeBufferPointer<UInt8>) -> [Int32] {
+    /// A folder's children, minus the names the patterns leave out. Unsorted:
+    /// which order they go in depends on how they will be paired up.
+    private func childList(_ store: NodeStore, _ node: Int32,
+                           _ bytes: UnsafeBufferPointer<UInt8>) -> [Int32] {
         guard node >= 0, store.isDirectory(node) else { return [] }
         var kids: [Int32] = []
         for child in store.children(node) where !store.flagSet(child).contains(.removed) {
             if isIgnored(store, child, bytes) { ignored += 1; continue }
             kids.append(child)
         }
-        kids.sort { DiffTree.compareNames(bytes, store.nameSpan($0), bytes, store.nameSpan($1)) < 0 }
         return kids
     }
 

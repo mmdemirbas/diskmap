@@ -502,15 +502,21 @@ final class SyncSafetyTests: XCTestCase {
 
     // MARK: - Another disk mounted inside
 
+    /// Nil stdin and a deadline, both learned the hard way: `hdiutil` can sit
+    /// waiting forever on a machine whose policy will not let it do what it
+    /// was asked, and a test that waits with it takes the suite with it.
     @discardableResult
-    private func hdiutil(_ arguments: [String]) -> Int32 {
+    private func hdiutil(_ arguments: [String], seconds: Double = 30) -> Int32 {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
         task.arguments = arguments
+        task.standardInput = FileHandle.nullDevice
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         guard (try? task.run()) != nil else { return -1 }
-        task.waitUntilExit()
+        let deadline = Date().addingTimeInterval(seconds)
+        while task.isRunning, Date() < deadline { usleep(50_000) }
+        guard !task.isRunning else { task.terminate(); return -1 }
         return task.terminationStatus
     }
 
@@ -562,5 +568,21 @@ final class SyncSafetyTests: XCTestCase {
             XCTAssertTrue(plan.steps.allSatisfy { !$0.relativePath.hasPrefix("vault") },
                           "\(direction) has a step for the folder another disk is mounted on")
         }
+    }
+
+    // MARK: - Case
+
+    /// One file, named with a capital on one side. A Mac volume folds case
+    /// when it looks a name up, so these are the same file to everything that
+    /// opens them — and two different files to `memcmp`.
+    func testTheSameNameWithADifferentCapitalIsOneFile() throws {
+        try write(left, "Photo.jpg", bytes: 900, fill: 4)
+        try write(right, "photo.jpg", bytes: 900, fill: 4)
+
+        let c = try compare()
+        XCTAssertEqual(c.summary.onlyLeft, 0,
+                       "one file is being counted as two because of a capital: "
+                       + c.entries.map { "\($0.kind) \($0.relativePath)" }.joined(separator: ", "))
+        XCTAssertEqual(c.summary.onlyRight, 0)
     }
 }
