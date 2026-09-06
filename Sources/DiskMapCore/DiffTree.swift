@@ -444,7 +444,7 @@ public final class DiffTree: @unchecked Sendable {
         if r < 0 { return .onlyLeft }
         // Nothing on either side of this was compared, so nothing about it can
         // be called the same. It shows as a difference and is never acted on.
-        if left.flagSet(l).contains(.mountPoint) || right.flagSet(r).contains(.mountPoint) {
+        if DiffTree.wasSkipped(left, l) || DiffTree.wasSkipped(right, r) {
             return .differs
         }
         let leftIsDir = left.isDirectory(l), rightIsDir = right.isDirectory(r)
@@ -478,9 +478,17 @@ public final class DiffTree: @unchecked Sendable {
     /// Either side is a doorway to another disk, so the walk never went in.
     public func notCompared(_ id: Int32) -> Bool {
         let l = node(id, on: .left), r = node(id, on: .right)
-        if l >= 0, left.flagSet(l).contains(.mountPoint) { return true }
-        if r >= 0, right.flagSet(r).contains(.mountPoint) { return true }
-        return false
+        return (l >= 0 && DiffTree.wasSkipped(left, l))
+            || (r >= 0 && DiffTree.wasSkipped(right, r))
+    }
+
+    /// A folder the walk stopped at rather than failed on: another disk is
+    /// mounted there, or it is on the never-touch list. Either way nothing
+    /// inside it was looked at, so nothing about it can be called a match.
+    @inline(__always)
+    static func wasSkipped(_ store: NodeStore, _ node: Int32) -> Bool {
+        let flags = store.flagSet(node)
+        return flags.contains(.mountPoint) || flags.contains(.excluded)
     }
 
     public func coversIgnored(_ id: Int32, on side: Side) -> Bool {
@@ -510,12 +518,15 @@ public final class DiffTree: @unchecked Sendable {
             for index in stride(from: order.count - 1, through: 0, by: -1) {
                 let id = order[index]
                 let i = Int(id)
-                // Another disk is mounted here. The walk stopped at the door,
+                // The walk stopped at this door rather than failing at it:
+                // another disk is mounted here, or it is on the never-touch
+                // list.
                 // so this folder is empty as far as anything downstream can
                 // tell — and an empty folder matches every other empty folder.
                 // Salted per side, so it can never match its opposite number
                 // and the folders above it cannot collapse over it either.
-                if store.flagSet(id).contains(.mountPoint) {
+                if store.flagSet(id).contains(.mountPoint)
+                    || store.flagSet(id).contains(.excluded) {
                     volumes.append(id)
                     dirty[i] = true
                     sig[i] = FolderMatches.mix(salt &* 0x9E37_79B9_7F4A_7C15)

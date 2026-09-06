@@ -231,4 +231,51 @@ final class NameInterningTests: XCTestCase {
         XCTAssertEqual(scanned, onDisk)
         XCTAssertTrue(scanned.contains(String(repeating: "a", count: 200)))
     }
+
+    /// A folder whose absolute path is longer than the system will accept in
+    /// one `open`.
+    ///
+    /// Built the way npm, git and rsync build one - each level created relative
+    /// to the one above, which has no length limit - and then walked from the
+    /// top, which does.
+    func testATreeDeeperThanPathMaxIsStillWalked() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dmdeep-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let name = String(repeating: "d", count: 200)
+        var fd = open(root.path, O_RDONLY | O_DIRECTORY)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        var depth = 0
+        while depth < 12 {
+            let made = name.withCString { mkdirat(fd, $0, 0o755) }
+            XCTAssertEqual(made, 0, "could not create level \(depth)")
+            let next = name.withCString { openat(fd, $0, O_RDONLY | O_DIRECTORY) }
+            close(fd)
+            XCTAssertGreaterThanOrEqual(next, 0, "could not open level \(depth)")
+            fd = next
+            depth += 1
+        }
+        let file = "buried.bin".withCString { openat(fd, $0, O_CREAT | O_WRONLY | O_TRUNC, 0o644) }
+        XCTAssertGreaterThanOrEqual(file, 0)
+        var bytes = [UInt8](repeating: 7, count: 9_999)
+        _ = bytes.withUnsafeMutableBytes { Darwin.write(file, $0.baseAddress, 9_999) }
+        close(file)
+        close(fd)
+
+        // The case only exists if the path really is past the limit.
+        let deepest = root.path + String(repeating: "/" + name, count: depth)
+        XCTAssertGreaterThan(deepest.utf8.count, Int(PATH_MAX),
+                             "the tree is not deep enough to reach the case")
+
+        let result = DiskScanner().scan(ScanOptions(rootPath: root.path))
+        XCTAssertEqual(result.stats.unreadableDirectories, 0,
+                       "folders that can be opened are reported unreadable: "
+                       + result.stats.unreadableSamples.joined(separator: ", "))
+        XCTAssertEqual(result.stats.directories, depth)
+        XCTAssertEqual(result.stats.files, 1, "the file at the bottom was never counted")
+        XCTAssertEqual(result.store.totalLogical[0], 9_999)
+    }
 }

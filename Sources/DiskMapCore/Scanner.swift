@@ -174,6 +174,40 @@ public final class DiskScanner {
 
     /// True when the path is the mount point of its filesystem: its device
     /// differs from its parent's, so the inode estimate describes this tree.
+    /// Opens a directory whose absolute path may be longer than the system
+    /// will accept in one call.
+    ///
+    /// `open(2)` takes the whole path and refuses at `PATH_MAX`, but nothing
+    /// stops a tree from being *built* past it: npm, git and rsync all create
+    /// directories with relative steps or `openat`, which have no such limit.
+    /// A folder can therefore exist that cannot be named in a single call - and
+    /// the walk would report it, and everything under it, as unreadable. Seen
+    /// at 2453 bytes: five directories, no files, zero bytes.
+    ///
+    /// Walking down one component at a time has no limit, and costs a syscall
+    /// per level only where the ordinary open has already failed.
+    static func openDirectory(_ path: String) -> Int32 {
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        if fd >= 0 || errno != ENAMETOOLONG { return fd }
+
+        var current = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard current >= 0 else { return -1 }
+        let parts = path.split(separator: "/")
+        for (index, component) in parts.enumerated() {
+            // `open` only refuses to follow the *last* component, so the walk
+            // has to match that or it would reject paths the old call accepted.
+            let last = index == parts.count - 1
+            let next = String(component).withCString {
+                openat(current, $0, O_RDONLY | O_DIRECTORY | O_CLOEXEC
+                                    | (last ? O_NOFOLLOW : 0))
+            }
+            close(current)
+            guard next >= 0 else { return -1 }
+            current = next
+        }
+        return current
+    }
+
     static func isVolumeRoot(_ path: String) -> Bool {
         if path == "/" || path == "/System/Volumes/Data" { return true }
         var here = stat(), up = stat()
@@ -349,7 +383,7 @@ public final class DiskScanner {
                     defer { queue.complete() }
                     if self.cancelToken.isCancelled { continue }
 
-                    let fd = open(task.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    let fd = DiskScanner.openDirectory(task.path)
                     if fd < 0 {
                         lock.lock()
                         store.flags[Int(task.node)] |= NodeFlags.unreadable.rawValue
@@ -436,6 +470,12 @@ public final class DiskScanner {
                     currentPath = task.path
                     lock.unlock()
 
+                    // Rebuilding the child path as a String would mangle a name
+                    // that is not valid UTF-8, and the open would then fail on a
+                    // folder that is perfectly readable. It cannot happen: APFS
+                    // refuses such a name at creation with EILSEQ, checked by
+                    // trying it. A network share serving one is the case this
+                    // does not cover.
                     let prefix = task.path == "/" ? "" : task.path
                     for (i, p) in pending.enumerated()
                     where p.flags.contains(.directory) && !p.flags.contains(.symlink) {
