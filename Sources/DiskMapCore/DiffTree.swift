@@ -467,7 +467,7 @@ public final class DiffTree: @unchecked Sendable {
     }
 
     static func linkTarget(_ store: NodeStore, _ node: Int32) -> String {
-        (try? FileManager.default.destinationOfSymbolicLink(atPath: store.path(node))) ?? ""
+        FolderMatches.linkTarget(store, node)
     }
 
     /// True when the ignore patterns kept something out of this item's subtree.
@@ -562,17 +562,7 @@ public final class DiffTree: @unchecked Sendable {
                             hash = (hash ^ UInt64(b)) &* 0x100_0000_01b3
                         }
                     }
-                    if store.flagSet(id).contains(.symlink) {
-                        for byte in linkTarget(store, id).utf8 {
-                            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-                        }
-                        // Salted, so a link can never hash equal to a file that
-                        // happens to be the length of its target path.
-                        sig[i] = FolderMatches.mix(hash ^ 0x5EED_C0DE_5EED_C0DE)
-                    } else {
-                        sig[i] = FolderMatches.mix(
-                            hash ^ FolderMatches.mix(UInt64(bitPattern: store.totalLogical[i])))
-                    }
+                    sig[i] = FolderMatches.mix(hash ^ FolderMatches.leafContent(store, id))
                 }
             }
         }

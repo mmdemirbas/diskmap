@@ -136,12 +136,22 @@ enum OffscreenRenderer {
                 view = AnyView(CompareView(model: model).environment(\.colorScheme, scheme)
                     .frame(width: width, height: height))
             }
-        } else if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
+        } else if env["DISKMAP_SHEET"] == "trash" {
+            // The report is what finds the copies, and nothing had run it - so
+            // this branch fell through to the main window and the most
+            // destructive screen in the app had no render at all.
+            model.panel = .duplicates
+            model.refreshSummarySync()
+            guard let match = model.folderMatches.first else {
+                FileHandle.standardError.write(Data("no folder matches under that root\n".utf8))
+                exit(1)
+            }
             model.checkExtras(match.copies)
             model.requestBulkTrash()
             if let groups = model.reviewing {
                 view = AnyView(TrashConfirmView(model: model, groups: groups)
-                    .environment(\.colorScheme, scheme))
+                    .environment(\.colorScheme, scheme)
+                    .frame(width: width, height: height))
             } else {
                 view = AnyView(Text(model.toast ?? "no plan").padding()
                     .frame(width: width, height: height))

@@ -435,7 +435,7 @@ final class L10n: ObservableObject {
         case columnDate, nothingMatchesFilter
         case compareAgain, refuseNotAFolder, refuseSameFolder, refuseNested
         case refuseVolumeRoot, refuseExcluded, refuseNothingToDo, refuseNotRedundant
-        case refuseComparisonIncomplete, refuseVolumeInside
+        case refuseComparisonIncomplete, refuseVolumeInside, reviewNotRead
         case refuseUnreadable, compareUnreadableWarning
         case folderLabel, videoLabel, imageLabel, audioLabel, archiveLabel, documentLabel
         case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, databaseLabel, cacheLabel, otherLabel
@@ -707,6 +707,7 @@ final class L10n: ObservableObject {
                            "Solda zaten bulunan her şeyi sağdan Çöp Kutusu'na taşır. Yalnızca sağda olanlar yerinde kalır."),
         .dirGroupCopy: ("Copy and mirror", "Kopyala ve yansıt"),
         .dirGroupFree: ("Free up space", "Yer aç"),
+        .reviewNotRead: ("Not read", "Okunmadı"),
         .compareContentNotChecked: ("Nothing has been read. Same name and same size is not the same bytes — check the contents before removing anything on this basis.",
                                     "Hiçbir dosya okunmadı. Aynı ad ve aynı boyut, aynı bayt demek değildir; buna dayanarak bir şey kaldırmadan önce içerikleri denetleyin."),
         .compareContentChecked: ("The contents were read and agree", "İçerikler okundu ve eşleşti"),

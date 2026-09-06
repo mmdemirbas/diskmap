@@ -180,6 +180,35 @@ final class FolderMatchTests: XCTestCase {
         XCTAssertEqual(partial[0].sharedItems, 3)   // keep, one.bin, two.bin
         XCTAssertEqual(partial[0].comparedItems, 4)
     }
+
+    /// Two deploy trees whose `current` link points at different releases.
+    ///
+    /// A symlink is hashed by the length of the path it holds, and release
+    /// names are usually the same length, so the two folders hash identically
+    /// and are offered as copies of each other. The deep check cannot
+    /// contradict it either: it reads regular files, so it never opens a link.
+    func testAFolderIsNotACopyWhenItsLinkPointsSomewhereElse() throws {
+        let a = root.appendingPathComponent("backup-a/app")
+        let b = root.appendingPathComponent("backup-b/app")
+        for base in [a, b] {
+            try fm.createDirectory(at: base.appendingPathComponent("releases"),
+                                   withIntermediateDirectories: true)
+            try Data(repeating: 1, count: 400_000).write(to: base.appendingPathComponent("bundle.bin"))
+        }
+        try fm.createSymbolicLink(atPath: a.appendingPathComponent("current").path,
+                                  withDestinationPath: "releases/2026-01")
+        try fm.createSymbolicLink(atPath: b.appendingPathComponent("current").path,
+                                  withDestinationPath: "releases/2026-02")
+        defer { try? fm.removeItem(at: root) }
+
+        let result = DiskScanner().scan(ScanOptions(rootPath: root.path))
+        let matches = FolderMatches.find(store: result.store, root: 0, minimumSize: 100_000)
+        let exact = matches.filter { $0.exact && $0.nodes.count == 2 }
+        XCTAssertTrue(exact.isEmpty,
+                      "two folders whose link points somewhere different are being offered as "
+                      + "copies of each other, with \(exact.first?.reclaimable ?? 0) bytes to "
+                      + "reclaim")
+    }
 }
 
 final class DeepVerifyTests: XCTestCase {

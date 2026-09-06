@@ -110,6 +110,7 @@ struct TrashConfirmView: View {
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
+                wasItRead(group.id)
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -194,6 +195,40 @@ struct TrashConfirmView: View {
     }
 
     // MARK: - Acting
+
+    /// Whether the bytes behind this group were actually read.
+    ///
+    /// The group is a claim made from names and sizes. The screen it came from
+    /// says whether that claim was checked; this is the screen where things go
+    /// to the Trash, and it was not repeating it. The same sentence belongs at
+    /// the moment of the decision, not one screen before it.
+    @ViewBuilder private func wasItRead(_ id: Int64) -> some View {
+        // `.orange` rather than the palette's warning, matching the screen this
+        // verdict is repeated from — the two must read as the same statement.
+        let outcome = model.verifications[id]?.outcome
+        if let outcome {
+            if outcome.cancelled {
+                mark("pause.circle", .secondary, loc[.verifyStopped])
+            } else if outcome.identical {
+                mark("checkmark.seal.fill", .green, loc[.verifyIdentical])
+            } else if outcome.distinct > 1 {
+                mark("xmark.circle.fill", .orange, loc.verifyDiffer(outcome.distinct))
+            } else {
+                mark("questionmark.circle", .orange,
+                     loc.verifyPartial(outcome.unread + outcome.skipped))
+            }
+        } else {
+            mark("questionmark.circle", .secondary, loc[.reviewNotRead])
+        }
+    }
+
+    private func mark(_ symbol: String, _ tint: Color, _ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 9)).foregroundStyle(tint)
+            Text(text).font(.system(size: 10)).foregroundStyle(.secondary)
+        }
+        .lineLimit(1).fixedSize()
+    }
 
     private var footer: some View {
         HStack(spacing: 10) {

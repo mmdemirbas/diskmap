@@ -70,6 +70,37 @@ public enum FolderMatches {
         return order
     }
 
+    /// What a leaf holds, for hashing: its length, or for a symlink the path
+    /// it points at.
+    ///
+    /// A link holds a path, not bytes, so hashing its length says only how
+    /// long that path is. `current -> releases/2026-01` and
+    /// `current -> releases/2026-02` are the same length, which is the
+    /// ordinary shape of a deploy tree rather than a corner case — and two
+    /// backups differing only in which release is live were offered as copies
+    /// of each other. The deep check could not contradict it: it reads regular
+    /// files, so it never opens a link.
+    ///
+    /// Shared with the folder comparison's own signatures, which differ from
+    /// these in how they treat names, so that the two cannot drift apart on
+    /// the one point where being wrong costs a file.
+    static func leafContent(_ store: NodeStore, _ id: Int32) -> UInt64 {
+        guard store.flagSet(id).contains(.symlink) else {
+            return mix(UInt64(bitPattern: store.totalLogical[Int(id)]))
+        }
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in linkTarget(store, id).utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
+        }
+        // Salted, so a link can never hash equal to a file that happens to be
+        // the length of the path it holds.
+        return mix(hash ^ 0x5EED_C0DE_5EED_C0DE)
+    }
+
+    static func linkTarget(_ store: NodeStore, _ node: Int32) -> String {
+        (try? FileManager.default.destinationOfSymbolicLink(atPath: store.path(node))) ?? ""
+    }
+
     public static func signatures(_ store: NodeStore) -> [UInt64] {
         let span = Telemetry.begin("match.hash")
         defer { span.end(["nodes": .int(Int64(store.count))]) }
@@ -95,7 +126,7 @@ public enum FolderMatches {
                         for k in start..<(start + Int(store.nameLen[i])) {
                             hash = (hash ^ UInt64(names[k])) &* 0x100_0000_01b3
                         }
-                        out[i] = mix(hash ^ mix(UInt64(bitPattern: store.totalLogical[i])))
+                        out[i] = mix(hash ^ leafContent(store, id))
                     }
                 }
             }
