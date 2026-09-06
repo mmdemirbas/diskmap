@@ -161,6 +161,19 @@ final class L10n: ObservableObject {
             ? "\(fmt(n)) öğe zaten seçili bir klasörün içinde, ayrıca taşınmayacak"
             : "\(count(n, "more is", "more are")) inside a folder already listed, so not shown separately"
     }
+    /// Ticked, then gone before the review screen opened — a download that
+    /// finished elsewhere, a folder emptied in Finder. Counting it silently
+    /// leaves the reviewer to notice the list is shorter than their selection.
+    func alreadyGone(_ n: Int) -> String {
+        active == .tr
+            ? "\(fmt(n)) öğe artık yerinde yok, listede de yok"
+            : "\(count(n, "item is", "items are")) no longer there, so not listed"
+    }
+    func onNeverTouchList(_ n: Int) -> String {
+        active == .tr
+            ? "\(fmt(n)) öğe dokunulmayacaklar listesinde, listeye alınmadı"
+            : "\(count(n, "item is", "items are")) on the never-touch list, so not listed"
+    }
     func syncedItemCount(_ n: Int, _ providers: String) -> String {
         active == .tr
             ? "\(fmt(n)) öğe \(providers) içinde"

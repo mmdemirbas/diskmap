@@ -47,8 +47,29 @@ struct TrashConfirmView: View {
                     .opacity((plan?.coveredByAnAncestor ?? 0) > 0 ? 1 : 0)
                     .accessibilityHidden((plan?.coveredByAnAncestor ?? 0) == 0)
             }
+            // The rest of "you ticked more than this list shows". Both were
+            // counted and never said out loud, which left the reviewer to
+            // notice on their own that the list is shorter than the selection.
+            //
+            // One Text rather than one per reason: an invisible zero-count
+            // sibling still takes its width, which pushed whichever line did
+            // apply into the middle of the sheet. The line is reserved whether
+            // or not it applies, because ticking recomputes both numbers.
+            Text(asides.joined(separator: " · "))
+                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .lineLimit(1, reservesSpace: true)
+                .accessibilityHidden(asides.isEmpty)
         }
         .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
+    }
+
+    /// Ticked, and not on the list below, for a reason worth saying.
+    private var asides: [String] {
+        guard let plan else { return [] }
+        var out: [String] = []
+        if plan.alreadyGone > 0 { out.append(loc.alreadyGone(plan.alreadyGone)) }
+        if plan.excluded > 0 { out.append(loc.onNeverTouchList(plan.excluded)) }
+        return out
     }
 
     /// The one thing the Trash cannot take back. Above the list, in the warning

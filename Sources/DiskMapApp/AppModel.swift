@@ -1638,7 +1638,7 @@ final class AppModel: ObservableObject {
     // MARK: - Bulk trash
 
     func requestBulkTrash(groups: [[Int32]]? = nil) {
-        guard let tree, !checked.isEmpty else {
+        guard tree != nil, !checked.isEmpty else {
             toast = L10n.shared[.nothingToRemove]
             return
         }

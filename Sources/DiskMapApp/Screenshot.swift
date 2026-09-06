@@ -141,6 +141,9 @@ enum OffscreenRenderer {
             // this branch fell through to the main window and the most
             // destructive screen in the app had no render at all.
             model.panel = .duplicates
+            // Same knob the exclusions sheet reads, so the never-touch line on
+            // this screen can be rendered at all rather than only reasoned about.
+            model.excludedPaths = (env["DISKMAP_EXCLUDED"] ?? "").split(separator: ":").map(String.init)
             model.refreshSummarySync()
             guard let match = model.folderMatches.first else {
                 FileHandle.standardError.write(Data("no folder matches under that root\n".utf8))
