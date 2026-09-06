@@ -151,7 +151,7 @@ final class SyncSafetyTests: XCTestCase {
         XCTAssertEqual(checked.differing, ["twin.bin"])
 
         switch SyncPlanner.removeRedundant(c, side: .right,
-                                           contentDiffers: Set(checked.differing)) {
+                                           contentCheck: checked) {
         case .success:
             XCTFail("the only copy of twin.bin on the right is not a copy of anything")
         case .failure(let f):
@@ -357,8 +357,7 @@ final class SyncSafetyTests: XCTestCase {
         c.verifiedAt = Date()
 
         let result = SyncPlanner.removeRedundant(
-            c, side: .left, contentDiffers: Set(check.differing),
-            contentUnreadable: Set(check.unreadable))
+            c, side: .left, contentCheck: check)
         if case .success(let plan) = result {
             XCTFail("the whole left side is being moved to the Trash on a check that could not "
                     + "read \(check.unreadable) - \(plan.removals) removals")
@@ -378,8 +377,7 @@ final class SyncSafetyTests: XCTestCase {
 
         let plan = try SyncPlanner.plan(c, direction: .removeLeftDuplicates,
                                         syncRoots: SyncRoots(roots: []), excluded: [],
-                                        contentDiffers: Set(check.differing),
-                                        contentCheckWasComplete: !check.cancelled).get()
+                                        contentCheck: check).get()
         XCTAssertFalse(plan.contentWasChecked,
                        "the plan says the contents were read and agree, and the check was "
                        + "stopped after \(check.pairsChecked > 0 ? "some" : "none") of them")
@@ -425,8 +423,7 @@ final class SyncSafetyTests: XCTestCase {
         c.verifiedAt = Date()
 
         let plan = try SyncPlanner.removeRedundant(c, side: .left,
-                                                   contentDiffers: Set(check.differing),
-                                                   contentUnreadable: Set(check.unreadable)).get()
+                                                   contentCheck: check).get()
         XCTAssertTrue(plan.contentWasChecked)
 
         let outcome = SyncRunner.run(plan)
@@ -462,6 +459,44 @@ final class SyncSafetyTests: XCTestCase {
         }
         if case .success = SyncPlanner.removeRedundant(c, side: .left) {
             XCTFail("a whole side was offered for the Trash on a comparison that never finished")
+        }
+    }
+
+    // MARK: - Placeholders
+
+    /// A file whose bytes live in iCloud is a file the check did not read,
+    /// because reading one is what fetches it. Leaving it alone is right;
+    /// counting that as agreement is not.
+    func testPlaceholdersLeftInTheCloudAreNotAgreement() throws {
+        try write(left, "album/one.jpg", bytes: 4_000, fill: 1)
+        try write(right, "album/one.jpg", bytes: 4_000, fill: 1)
+
+        var c = try compare()
+        c.verifiedAt = Date()
+
+        // What `verify` returns when it walked past a placeholder rather than
+        // pulling it down.
+        let check = VerifyDifferences(pairsChecked: 0, bytesRead: 0, differing: [],
+                                      unreadable: [], notDownloaded: ["album/one.jpg"],
+                                      cancelled: false)
+        XCTAssertFalse(check.agreed)
+
+        if case .success = SyncPlanner.removeRedundant(c, side: .left, contentCheck: check) {
+            XCTFail("a whole side is being offered for the Trash on a check that never read "
+                    + "the files, because they were still in iCloud")
+        }
+
+        // The decision here is the folder `album`, collapsed as identical - the
+        // check answers about the file inside it. Nothing may be removed, so
+        // there is nothing left to do.
+        switch SyncPlanner.plan(c, direction: .removeLeftDuplicates,
+                                syncRoots: SyncRoots(roots: []), excluded: [],
+                                contentCheck: check) {
+        case .failure(let refusal):
+            XCTAssertEqual(refusal, .nothingToDo)
+        case .success(let plan):
+            XCTFail("a folder holding a placeholder is being removed as a proven duplicate: "
+                    + "\(plan.removals) removals")
         }
     }
 }

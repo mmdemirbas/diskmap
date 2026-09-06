@@ -556,6 +556,49 @@ func cmdLive(_ path: String, _ seconds: Int) {
     print(String(format: "  next debounce would be %.2fs", tree.flushDelay))
 }
 
+/// Times a folder comparison, and separates the two halves of the cost:
+/// walking both sides, and everything the comparison itself does on top.
+///
+/// The second half is the one that moves when the merge changes. It opens every
+/// folder to collect the decisions, so a change to how names are paired shows
+/// up here and nowhere else.
+func cmdCompare(_ left: String, _ right: String) {
+    let t0 = DispatchTime.now().uptimeNanoseconds
+    let scanned = DiskScanner().scan(ScanOptions(rootPath: left))
+    let scanOnly = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
+
+    let t1 = DispatchTime.now().uptimeNanoseconds
+    guard case .success(let c) = FolderDiff.compare(left: left, right: right) else {
+        print("refused"); return
+    }
+    let whole = Double(DispatchTime.now().uptimeNanoseconds - t1) / 1e9
+
+    print("compare \(left) against \(right)")
+    print("  items              \(c.leftItems) / \(c.rightItems)")
+    print("  decisions          \(c.entries.count)")
+    print("  identical          \(c.summary.identical)")
+    print("  differs            \(c.summary.differing)")
+    print("  only one side      \(c.summary.onlyLeft) / \(c.summary.onlyRight)")
+    print("  ignored names      \(c.summary.ignored)")
+    print("  unreadable         \(c.unreadable)")
+    print("  one side scanned   \(String(format: "%.2fs", scanOnly))"
+          + "  (\(scanned.stats.files + scanned.stats.directories) nodes)")
+    print("  whole comparison   \(String(format: "%.2fs", whole))")
+    print("  over two scans     \(String(format: "%.2fs", max(0, whole - scanOnly * 2)))")
+
+    let t2 = DispatchTime.now().uptimeNanoseconds
+    var rows = 0
+    var stack: [Int32] = [0]
+    while let id = stack.popLast() {
+        for child in c.tree.children(of: id) {
+            rows += 1
+            if c.tree.isOpen(child) || c.tree.kind(child) == .differs { stack.append(child) }
+        }
+    }
+    print("  walking every row  \(String(format: "%.2fs", Double(DispatchTime.now().uptimeNanoseconds - t2) / 1e9))"
+          + "  (\(rows) rows)")
+}
+
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "volume" {
 case "volume": cmdVolume()
@@ -576,11 +619,13 @@ case "live": cmdLive(args.count > 2 ? args[2] : FileManager.default.homeDirector
 case "relistcost": cmdRelistCost(args.count > 2 ? (Int(args[2]) ?? 8) : 8,
                                  args.count > 3 ? (Int(args[3]) ?? 40) : 40)
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
+case "compare": cmdCompare(args.count > 3 ? args[2] : ".", args.count > 3 ? args[3] : ".")
 case "verify": cmdVerify(Array(args.dropFirst(2)))
 case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                                budget: args.count > 3 ? (Int64(args[3]) ?? 0) << 30 : 12 << 30)
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
-               + " | dupes <path> | verify <path> <path> | verifytop <path> [GB]"
+               + " | dupes <path> | compare <left> <right>"
+               + " | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
                + " | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
 }

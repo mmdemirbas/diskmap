@@ -417,9 +417,18 @@ public enum FolderDiff {
                               progress: ((Int64) -> Void)? = nil) -> VerifyDifferences {
         let span = Telemetry.begin("compare.verify")
         var pairs: [(relative: String, left: String, right: String)] = []
+        var notDownloaded: [String] = []
         for entry in comparison.entries where entry.kind == .identical {
             if entry.isDirectory {
-                pairs += filePairs(under: entry.relativePath, comparison)
+                let below = filePairs(under: entry.relativePath, comparison)
+                pairs += below.settled
+                notDownloaded += below.dataless
+            } else if entry.dataless {
+                // Reading a placeholder is what fetches it. A check that
+                // silently pulled somebody's whole iCloud library down to
+                // answer a question about duplicates would be a worse surprise
+                // than the question.
+                notDownloaded.append(entry.relativePath)
             } else {
                 pairs.append((entry.relativePath,
                               comparison.path(entry.relativePath, on: .left),
@@ -445,30 +454,44 @@ public enum FolderDiff {
 
         let result = VerifyDifferences(pairsChecked: pairs.count, bytesRead: read,
                                        differing: differing, unreadable: unreadable,
+                                       notDownloaded: notDownloaded,
                                        cancelled: cancel?.isCancelled == true)
         span.end(["pairs": .int(Int64(pairs.count)), "bytes": .int(read),
                   "differing": .int(Int64(differing.count)),
                   "unreadable": .int(Int64(unreadable.count)),
+                  "notDownloaded": .int(Int64(notDownloaded.count)),
                   "cancelled": .flag(result.cancelled)])
         return result
     }
 
     /// Every file below a folder the comparison collapsed as identical.
     private static func filePairs(under relative: String, _ comparison: FolderComparison)
-        -> [(relative: String, left: String, right: String)] {
+        -> (settled: [(relative: String, left: String, right: String)], dataless: [String]) {
         var out: [(String, String, String)] = []
+        var dataless: [String] = []
         let base = comparison.path(relative, on: .left)
         guard let walker = FileManager.default.enumerator(
             at: URL(fileURLWithPath: base),
-            includingPropertiesForKeys: [.isRegularFileKey]) else { return out }
+            includingPropertiesForKeys: [.isRegularFileKey]) else { return (out, dataless) }
         for case let url as URL in walker {
             guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
             else { continue }
             let suffix = String(url.path.dropFirst(base.count + 1))
             let child = relative.isEmpty ? suffix : relative + "/" + suffix
+            // The scan flagged placeholders on the way past, but a folder that
+            // collapsed as identical was never walked into, so the flag for
+            // what is inside it was never carried out here. One `lstat` per
+            // file is cheaper than the download opening one would start.
+            if isDataless(url.path) { dataless.append(child); continue }
             out.append((child, url.path, comparison.path(child, on: .right)))
         }
-        return out
+        return (out, dataless)
+    }
+
+    static func isDataless(_ path: String) -> Bool {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return false }
+        return info.st_flags & SF_DATALESS_FLAG != 0
     }
 
     // MARK: - Shapes of paths
@@ -492,6 +515,22 @@ public struct VerifyDifferences: Sendable {
     public var differing: [String]
     /// Could not be opened on one side or the other, so nothing was settled.
     public var unreadable: [String]
+    /// Placeholders. Their bytes are in iCloud, and reading one is what brings
+    /// it down, so they are left alone and counted rather than checked.
+    public var notDownloaded: [String] = []
     public var cancelled: Bool
-    public var agreed: Bool { differing.isEmpty && unreadable.isEmpty && !cancelled }
+
+    public init(pairsChecked: Int, bytesRead: Int64, differing: [String],
+                unreadable: [String], notDownloaded: [String] = [], cancelled: Bool) {
+        self.pairsChecked = pairsChecked; self.bytesRead = bytesRead
+        self.differing = differing; self.unreadable = unreadable
+        self.notDownloaded = notDownloaded; self.cancelled = cancelled
+    }
+
+    /// Everything this could not settle, whatever the reason. A plan that
+    /// removes things has to keep all of it, so it is one list.
+    public var unsettled: [String] { unreadable + notDownloaded }
+    public var agreed: Bool {
+        differing.isEmpty && unreadable.isEmpty && notDownloaded.isEmpty && !cancelled
+    }
 }

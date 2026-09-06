@@ -302,9 +302,14 @@ final class L10n: ObservableObject {
     }
     // placed with the other sync result strings
     func compareKeptUnreadable(_ n: Int) -> String {
-        active == .tr ? "\(fmt(n)) öğe okunamadı ve yerinde bırakıldı"
-                      : (n == 1 ? "1 item could not be read and was left alone"
-                                : "\(fmt(n)) items could not be read and were left alone")
+        active == .tr ? "\(fmt(n)) öğe okunamadı ya da iCloud'dan indirilmedi, yerinde bırakıldı"
+                      : (n == 1 ? "1 item was not settled by the check and was left alone"
+                                : "\(fmt(n)) items were not settled by the check and were left alone")
+    }
+    func compareLeftInCloud(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) öğe hâlâ iCloud'da; içeriği okumak onları indirmek olurdu"
+                      : (n == 1 ? "1 item is still in iCloud — reading it would download it"
+                                : "\(fmt(n)) items are still in iCloud — reading them would download them")
     }
     func compareRemovesIgnored(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) öğe, yok sayılan adlar da içinde olmak üzere Çöp'e taşınıyor"

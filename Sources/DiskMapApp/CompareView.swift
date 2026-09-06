@@ -475,6 +475,9 @@ struct CompareView: View {
                         caution(.green, "shield.lefthalf.filled",
                                 loc.compareKeptDiffering(plan.keptBecauseContentDiffers.count))
                     }
+                    if let left = model.compareVerification?.notDownloaded, !left.isEmpty {
+                        caution(.secondary, "icloud", loc.compareLeftInCloud(left.count))
+                    }
                     if !plan.keptBecauseUnreadable.isEmpty {
                         caution(Palette.warning(scheme), "lock.slash",
                                 loc.compareKeptUnreadable(plan.keptBecauseUnreadable.count))

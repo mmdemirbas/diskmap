@@ -142,8 +142,8 @@ public struct SyncPlan: Sendable {
     /// Items that look identical and are not: the deep check read both sides
     /// and found different bytes. Never removed, whatever the direction says.
     public var keptBecauseContentDiffers: [String] = []
-    /// Items the deep check could not open on one side or the other. Never
-    /// removed either: nothing was settled about them.
+    /// Items the deep check did not settle - could not open, or left in iCloud
+    /// rather than downloading to compare. Never removed either.
     public var keptBecauseUnreadable: [String] = []
     /// Whether the deep check has run at all. A plan that frees space by
     /// trusting name and length alone has to say that is what it is doing.
@@ -213,9 +213,17 @@ public enum SyncPlanner {
                             syncRoots: SyncRoots = SyncRoots(roots: []),
                             excluded: [String] = [],
                             skipping: Set<Int> = [],
-                            contentDiffers: Set<String> = [],
-                            contentUnreadable: Set<String> = [],
-                            contentCheckWasComplete: Bool = true) -> Result<SyncPlan, CompareRefusal> {
+                            contentCheck: VerifyDifferences? = nil)
+    -> Result<SyncPlan, CompareRefusal> {
+        // The whole answer, not a selection from it. Handing the planner one
+        // list at a time is how "differs" arrived and "could not be read" did
+        // not, twice.
+        // Every folder above each one, too. A decision is a folder where the
+        // check's answers are files, so a folder removed whole takes files the
+        // check disagreed about with it unless the taint climbs.
+        let contentDiffers = taint(contentCheck?.differing ?? [])
+        let contentUnsettled = taint(contentCheck?.unsettled ?? [])
+        let contentCheckWasComplete = contentCheck?.cancelled != true
         let left = comparison.left, right = comparison.right
         // Stopped part-way is not a smaller comparison, it is a partial one:
         // the folders it never reached look empty, and a direction that
@@ -254,7 +262,7 @@ public enum SyncPlanner {
                 // Not opened is not the same as opened and found to agree. A
                 // file nobody could read is a file nobody can say is held
                 // somewhere else.
-                guard !contentUnreadable.contains(entry.relativePath) else {
+                guard !contentUnsettled.contains(entry.relativePath) else {
                     keptBecauseUnreadable.append(entry.relativePath); continue
                 }
                 removals.append(step(.remove, entry, from: side, comparison, syncRoots))
@@ -347,9 +355,8 @@ public enum SyncPlanner {
     public static func removeRedundant(_ comparison: FolderComparison, side: Side,
                                        syncRoots: SyncRoots = SyncRoots(roots: []),
                                        excluded: [String] = [],
-                                       contentDiffers: Set<String> = [],
-                                       contentUnreadable: Set<String> = [],
-                                       contentCheckWasComplete: Bool = true) -> Result<SyncPlan, CompareRefusal> {
+                                       contentCheck: VerifyDifferences? = nil)
+    -> Result<SyncPlan, CompareRefusal> {
         if comparison.cancelled { return .failure(.comparisonIncomplete) }
         let target = side == .left ? comparison.left : comparison.right
         if let refusal = structuralRefusal(left: comparison.left, right: comparison.right,
@@ -363,13 +370,12 @@ public enum SyncPlanner {
         // the content check has read the bytes and disagreed about even one of
         // them, this side holds something the other one does not, and taking
         // the whole of it is exactly the mistake the check exists to stop.
-        guard contentDiffers.isEmpty else { return .failure(.notRedundant) }
-        // Same reasoning one step further out: a file the check could not
-        // open, or a check that was stopped before it reached the end, leaves
-        // the claim unproven rather than proven.
-        guard contentUnreadable.isEmpty, contentCheckWasComplete else {
-            return .failure(.notRedundant)
-        }
+        // "Covered by the other side" is a claim about names and lengths. If a
+        // check ran, it has to have settled every one of them: bytes that
+        // disagreed, a file nobody could open, a placeholder nobody downloaded
+        // and a check that was stopped part-way all leave the claim unproven
+        // rather than proven.
+        if let check = contentCheck, !check.agreed { return .failure(.notRedundant) }
 
         let bytes = side == .left ? comparison.leftTotal : comparison.rightTotal
         // The folder as it stands right now, so the runner can tell whether
@@ -391,7 +397,7 @@ public enum SyncPlanner {
             freeOnRightVolume: VolumeInfo.forPath(comparison.right)?.trueAvailable ?? 0,
             datalessCopies: 0,
             leftDevice: deviceOf(comparison.left), rightDevice: deviceOf(comparison.right),
-            contentWasChecked: comparison.verifiedAt != nil && contentCheckWasComplete))
+            contentWasChecked: comparison.verifiedAt != nil && contentCheck?.cancelled != true))
     }
 
     // MARK: - Refusals
@@ -442,6 +448,20 @@ public enum SyncPlanner {
     /// `source` names the side the item is read from. A removal has no source
     /// to read: it names the side the item is removed *from*, and that is where
     /// the step points.
+    /// Each path, plus every folder above it.
+    static func taint(_ paths: [String]) -> Set<String> {
+        var out = Set<String>()
+        for path in paths {
+            out.insert(path)
+            var current = Substring(path)
+            while let slash = current.lastIndex(of: "/") {
+                current = current[current.startIndex..<slash]
+                out.insert(String(current))
+            }
+        }
+        return out
+    }
+
     static func deviceOf(_ path: String) -> Int32 {
         var info = stat()
         guard lstat(path, &info) == 0 else { return 0 }

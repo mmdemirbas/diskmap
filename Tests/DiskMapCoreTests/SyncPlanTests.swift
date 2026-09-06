@@ -303,7 +303,7 @@ final class SyncPlanTests: XCTestCase {
         XCTAssertEqual(checked.differing, ["looks-the-same.bin"])
 
         switch SyncPlanner.plan(comparison, direction: .removeLeftDuplicates,
-                                contentDiffers: Set(checked.differing)) {
+                                contentCheck: checked) {
         case .success(let plan):
             XCTAssertEqual(plan.steps.map(\.relativePath), ["really-the-same.bin"])
             XCTAssertEqual(plan.keptBecauseContentDiffers, ["looks-the-same.bin"])
