@@ -1352,15 +1352,28 @@ final class AppModel: ObservableObject {
 
     func toggleChecked(_ node: Int32) {
         if checked.contains(node) { checked.remove(node) }
-        else if !wouldBeTheLastCopy(node) { checked.insert(node) }
+        else if !wouldBeTheLastCopy(node), !isNeverTouch(node) { checked.insert(node) }
         if reviewing != nil { refreshReviewPlan() }
+    }
+
+    /// True when the never-touch list covers this node.
+    ///
+    /// Adding a path to the list already unticks what is under it, but the list
+    /// outlives the session: the copy report does not filter by it, so *Select
+    /// extras* would tick a folder excluded months ago. The card then said
+    /// "Trash" beside it while the planner dropped it — two screens describing
+    /// the same item differently, on the screen that decides what is deleted.
+    func isNeverTouch(_ node: Int32) -> Bool {
+        guard let tree, !excludedPaths.isEmpty else { return false }
+        let path = tree.withStore { $0.path(node) }
+        return excludedPaths.contains { TrashPlanner.isInside(path, $0) }
     }
 
     /// Keeps exactly this copy and removes the others in its group. One click
     /// for the decision the screen is actually asking about.
     func keepOnly(_ node: Int32, in group: ReviewGroup) {
         for member in group.members {
-            if member.node == node { checked.remove(member.node) }
+            if member.node == node || isNeverTouch(member.node) { checked.remove(member.node) }
             else { checked.insert(member.node) }
         }
         if reviewing != nil { refreshReviewPlan() }
@@ -1380,7 +1393,8 @@ final class AppModel: ObservableObject {
     /// Ticks every copy but the first. The first is a choice the user can undo
     /// by hand — nothing here decides which copy is the real one.
     func checkExtras(_ copies: [PathRef]) {
-        for copy in copies.dropFirst() where !wouldBeTheLastCopy(copy.id) {
+        for copy in copies.dropFirst()
+        where !wouldBeTheLastCopy(copy.id) && !isNeverTouch(copy.id) {
             checked.insert(copy.id)
         }
     }
@@ -2132,19 +2146,57 @@ final class AppModel: ObservableObject {
     /// Folders and large files ask first. Everything smaller goes straight to
     /// the Trash, which is recoverable and undoable anyway.
     func requestTrash(_ node: Int32) {
-        guard let tree else { return }
-        let info = tree.withStore { store -> (String, Int64, Int, Bool)? in
-            guard node > 0, node < Int32(store.count),
-                  !store.flagSet(node).contains(.removed) else { return nil }
-            return (store.name(node), store.totalPhysical[Int(node)],
-                    store.children(node).count, store.isDirectory(node))
-        }
-        guard let (name, bytes, children, isDir) = info else { return }
-        if isDir || bytes >= 5_000_000_000 {
-            pendingTrash = PendingTrash(node: node, name: name, bytes: bytes,
-                                        itemCount: children, isDirectory: isDir)
+        // Asked before the sheet, not after: being told a folder is a scan root
+        // is only useful while it is still a question. The plan is made again
+        // at the moment of the click, because the sheet can sit open for a
+        // while and the disk does not wait.
+        guard let candidate = planOne(node) else { return }
+        if candidate.isDirectory || candidate.bytes >= 5_000_000_000 {
+            pendingTrash = PendingTrash(node: candidate.node, name: candidate.name,
+                                        bytes: candidate.bytes,
+                                        itemCount: candidate.itemCount,
+                                        isDirectory: candidate.isDirectory)
         } else {
             performTrash(node)
+        }
+    }
+
+    /// One node through the same planner every other route to the Trash uses,
+    /// or nil with the reason on screen.
+    ///
+    /// This path used to check only that the id was in range and not marked
+    /// removed, and go. A scan root is node zero *only in a single-root scan* —
+    /// scan several folders and each root is a node above zero, so one
+    /// right-click would have taken a whole scanned folder. The never-touch
+    /// list was not consulted here at all.
+    ///
+    /// No groups: the never-empty-a-group rule protects a bulk selection from
+    /// wiping a set of copies, and somebody pointing at one file is not making
+    /// that mistake.
+    private func planOne(_ node: Int32) -> TrashCandidate? {
+        guard let tree else { return nil }
+        let outcome = tree.withStore {
+            TrashPlanner.plan(store: $0, selected: [node],
+                              syncRoots: syncRoots, excluded: excludedPaths)
+        }
+        switch outcome {
+        case .failure(let refusal):
+            toast = localizedRefusal(refusal)
+            return nil
+        case .success(let plan):
+            if let item = plan.items.first { return item }
+            // Dropped rather than refused. The planner tells the two apart, and
+            // silence here would look exactly like a Trash that worked.
+            if plan.excluded > 0 {
+                toast = L10n.shared[.refuseExcluded]
+            } else {
+                // Gone between the menu opening and the click, so its path may
+                // belong to something else entirely by now.
+                Telemetry.problem("trash", "target no longer exists")
+                toast = L10n.shared[.itemGone]
+                rebuild()
+            }
+            return nil
         }
     }
 
@@ -2155,24 +2207,9 @@ final class AppModel: ObservableObject {
     }
 
     private func performTrash(_ node: Int32) {
-        guard let tree else { return }
-        // The confirmation sheet can sit open while the disk moves on. A node
-        // marked removed means the thing that was there is gone, and its path
-        // may now belong to something else entirely — trashing it would take
-        // the wrong file.
-        let target = tree.withStore { store -> (String, Int64)? in
-            guard node > 0, node < Int32(store.count),
-                  !store.flagSet(node).contains(.removed) else { return nil }
-            return (store.path(node), store.totalPhysical[Int(node)])
-        }
-        guard let (path, bytes) = target else {
-            Telemetry.problem("trash", "target no longer exists")
-            toast = L10n.shared[.itemGone]
-            rebuild()
-            return
-        }
-        performTrash([(url: URL(fileURLWithPath: path), node: node, bytes: bytes)],
-                     label: L10n.shared.freedBytes(shortBytes(bytes)))
+        guard let item = planOne(node) else { return }
+        performTrash([(url: URL(fileURLWithPath: item.path), node: item.node, bytes: item.bytes)],
+                     label: L10n.shared.freedBytes(shortBytes(item.bytes)))
     }
 
     /// The one place anything is moved to the Trash. Everything above it

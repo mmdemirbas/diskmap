@@ -148,15 +148,21 @@ struct TrashConfirmView: View {
 
     private func memberRow(_ member: ReviewMember, in group: ReviewGroup) -> some View {
         let going = model.checked.contains(member.node)
-        // The last one left cannot be ticked: something has to survive.
-        let blocked = !going && group.isCopyGroup && model.wouldBeTheLastCopy(member.node)
+        // The last one left cannot be ticked: something has to survive. Nor can
+        // anything on the never-touch list, which the copy report does not
+        // filter by — the row used to tick and then read "Trash" beside an item
+        // the planner would drop.
+        let neverTouch = !going && model.isNeverTouch(member.node)
+        let blocked = neverTouch
+            || (!going && group.isCopyGroup && model.wouldBeTheLastCopy(member.node))
         return HStack(spacing: 9) {
             Image(systemName: going ? "trash.circle.fill" : "checkmark.circle")
                 .font(.system(size: 14))
                 .foregroundStyle(going ? AnyShapeStyle(Color.red)
                                        : AnyShapeStyle(blocked ? .tertiary : .secondary))
                 .onTapGesture { if !blocked { model.toggleChecked(member.node) } }
-                .help(blocked ? loc[.keepsOneCopy] : loc[.tickToChange])
+                .help(neverTouch ? loc[.refuseExcluded]
+                                 : (blocked ? loc[.keepsOneCopy] : loc[.tickToChange]))
 
             Text(going ? loc[.willBeTrashed] : loc[.willStay])
                 .font(.system(size: 10, weight: .medium))
@@ -178,6 +184,15 @@ struct TrashConfirmView: View {
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Color.orange.opacity(0.2), in: Capsule())
                             .foregroundStyle(.orange)
+                    }
+                    // A row that will not tick looks exactly like one that
+                    // will, and the reason was only in a tooltip.
+                    if neverTouch {
+                        Text(loc[.neverTouchBadge])
+                            .font(.system(size: 9, weight: .medium))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.secondary)
                     }
                 }
                 if member.isDirectory {

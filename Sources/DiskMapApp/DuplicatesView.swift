@@ -221,7 +221,8 @@ struct DuplicatesView: View {
         let ticked = model.checked.contains(copy.id)
         // The last surviving copy cannot be ticked at all. Refusing at the tick
         // says why while the selection is still small enough to understand.
-        let blocked = !ticked && model.wouldBeTheLastCopy(copy.id)
+        let neverTouch = !ticked && model.isNeverTouch(copy.id)
+        let blocked = neverTouch || (!ticked && model.wouldBeTheLastCopy(copy.id))
         return HStack(spacing: 8) {
             Image(systemName: ticked ? "checkmark.square.fill" : "square")
                 .font(.system(size: 11))
@@ -229,7 +230,7 @@ struct DuplicatesView: View {
                                          : AnyShapeStyle(ticked ? Color.accentColor : Color.secondary))
                 .frame(width: 13)
                 .onTapGesture { if !blocked { model.toggleChecked(copy.id) } }
-                .help(blocked ? loc[.keepsOneCopy] : "")
+                .help(neverTouch ? loc[.refuseExcluded] : (blocked ? loc[.keepsOneCopy] : ""))
             Text(copy.path)
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.head)

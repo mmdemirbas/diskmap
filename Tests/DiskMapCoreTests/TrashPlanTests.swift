@@ -131,6 +131,23 @@ final class TrashPlanTests: XCTestCase {
         XCTAssertEqual(try refusal(plan([0])), .includesAScanRoot(real("")))
     }
 
+    /// Scanning several folders puts a synthetic parent at node zero and the
+    /// roots themselves at one, two, three. So "is this a scan root" cannot be
+    /// answered by comparing the id to zero — which is exactly the check the
+    /// single-item Trash in the interface was making before it was routed
+    /// through here, and it would have taken a whole scanned folder.
+    func testAScanRootIsRefusedWhenItIsNotNodeZero() throws {
+        try write("left/one.bin", 40_000)
+        try write("right/two.bin", 40_000)
+        store = DiskScanner().scan(ScanOptions(roots: [root.appendingPathComponent("left").path,
+                                                       root.appendingPathComponent("right").path]))
+            .store
+        XCTAssertTrue(store.isMultiRoot)
+        let second = try XCTUnwrap(store.find(path: real("right")))
+        XCTAssertGreaterThan(second, 0, "the case the old check could not see")
+        XCTAssertEqual(try refusal(plan([second])), .includesAScanRoot(real("right")))
+    }
+
     /// The containment rule the plan leans on, on its own. Getting this wrong
     /// is how a folder appears to swallow its neighbour.
     func testContainmentIsByWholePathComponents() {

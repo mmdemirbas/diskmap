@@ -402,7 +402,7 @@ final class L10n: ObservableObject {
         case syncWarningTitle, alsoDeletedFromService, reviewBeforeTrashing, trashIsRecoverable
         case reviewWhatGoes, tickToChange, willStay, willBeTrashed, keepThisOne
         case sameContentsDifferentNames, neverSuggest, allExcluded, exclusions
-        case exclusionsExplained, addExclusion, removeExclusion, noExclusions
+        case exclusionsExplained, addExclusion, removeExclusion, noExclusions, neverTouchBadge
         case freeUpSpace, lookingForSpace, nothingObviousToFree, reviewItems, showInFinder
         case suggestionsNeverDelete, close
         case safetyComesBack, safetyCopyRemains, safetyYourCall
@@ -528,6 +528,9 @@ final class L10n: ObservableObject {
         .allExcluded: ("Everything picked is on the never-touch list",
                        "Seçilen her şey dokunulmayacaklar listesinde"),
         .exclusions: ("Never touch these", "Bunlara asla dokunma"),
+        // On a row that cannot be ticked, where the reason has to fit beside a
+        // path and be readable without hovering for a tooltip.
+        .neverTouchBadge: ("Never touch", "Dokunma"),
         .exclusionsExplained: ("Folders here are never proposed for deletion and can never be ticked. They are still measured, so the totals stay honest.",
                                "Buradaki klasörler asla silinmek üzere önerilmez ve işaretlenemez. Yine de ölçülürler, böylece toplamlar doğru kalır."),
         .addExclusion: ("Add folder…", "Klasör ekle…"),
