@@ -393,6 +393,14 @@ public final class LiveTree: @unchecked Sendable {
                              physical: isDir ? 0 : e.physical,
                              mtime: e.mtime, flags: e.flags)
             }
+            // Came back exactly as it was, under a new id only because the
+            // block had to be rebuilt. Anything holding the old one can follow.
+            if let old = existing[e.name],
+               store.isDirectory(old) == isDir,
+               store.mtime[Int(old)] == e.mtime,
+               isDir || store.totalLogical[Int(old)] == e.logical {
+                store.supersede(old, by: newID)
+            }
             if isDir && !e.flags.contains(.symlink) {
                 if let old = existing[e.name], store.isDirectory(old) {
                     store.reattach(oldNode: old, to: newID)   // keep the subtree

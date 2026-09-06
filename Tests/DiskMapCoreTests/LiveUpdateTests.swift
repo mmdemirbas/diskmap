@@ -333,4 +333,61 @@ extension LiveUpdateTests {
         // What survived is the recently seen end, not an arbitrary slice.
         XCTAssertNotNil(tree.holdOff("/d4999", now: DispatchTime(uptimeNanoseconds: 5_000_000_000)))
     }
+
+    /// A tick refers to a node. A relist appends new nodes for every entry in
+    /// the folder and marks the old ones removed, so anything else changing in
+    /// that folder silently invalidates the tick — and the planner then calls
+    /// the file "already gone" while it is sitting right there.
+    func testATickSurvivesSomethingElseChangingInTheSameFolder() throws {
+        try write("album/doomed.bin", 4_000)
+        try write("album/bystander.bin", 4_000)
+        let tree = self.tree()
+        let doomed = try XCTUnwrap(tree.withStore { $0.find(
+            path: root.appendingPathComponent("album/doomed.bin").path) })
+
+        // Something unrelated lands in the same folder.
+        try write("album/arrived.bin", 500)
+        XCTAssertTrue(tree.refresh(directory: root.appendingPathComponent("album").path))
+
+        let stillThere = FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("album/doomed.bin").path)
+        XCTAssertTrue(stillThere, "the ticked file is still on disk")
+
+        tree.withStore { store in
+            XCTAssertFalse(store.flagSet(store.current(doomed)).contains(.removed),
+                           "the ticked file cannot be followed to where it went when a "
+                           + "different file arrived beside it")
+            switch TrashPlanner.plan(store: store, selected: [doomed]) {
+            case .failure(let refusal):
+                XCTFail("refused: \(refusal)")
+            case .success(let plan):
+                XCTAssertEqual(plan.alreadyGone, 0,
+                               "the planner calls a file that is right there already gone")
+                XCTAssertEqual(plan.items.count, 1)
+            }
+        }
+    }
+
+    /// Following is only safe while the entry is the same entry. A name reused
+    /// by different bytes must not inherit a tick made about the old ones.
+    func testATickDoesNotFollowANameOnToDifferentBytes() throws {
+        try write("album/doomed.bin", 4_000)
+        try write("album/bystander.bin", 4_000)
+        let tree = self.tree()
+        let doomed = try XCTUnwrap(tree.withStore { $0.find(
+            path: root.appendingPathComponent("album/doomed.bin").path) })
+
+        // Same name, different file, and something else changes too so the
+        // folder is rebuilt rather than resized in place.
+        try fm.removeItem(at: root.appendingPathComponent("album/doomed.bin"))
+        try write("album/doomed.bin", 90_000)
+        try write("album/arrived.bin", 500)
+        XCTAssertTrue(tree.refresh(directory: root.appendingPathComponent("album").path))
+
+        tree.withStore { store in
+            XCTAssertEqual(store.current(doomed), doomed,
+                           "a tick followed a name on to bytes it was never made about")
+            XCTAssertTrue(store.flagSet(doomed).contains(.removed))
+        }
+    }
 }

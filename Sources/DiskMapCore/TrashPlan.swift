@@ -89,6 +89,12 @@ public enum TrashPlanner {
         var plan = TrashPlan()
         var resolved: [(node: Int32, path: String)] = []
 
+        // A relist rebuilds a folder's children under new ids. A tick made
+        // before one refers to the old id, and "already gone" is the wrong
+        // thing to say about a file that is still there.
+        let selected = Set(selected.map(store.current))
+        let groups = groups.map { $0.map(store.current) }
+
         for node in selected.sorted() {
             guard node != 0 else { return .failure(.includesAScanRoot(store.path(0))) }
             guard node > 0, node < Int32(store.count) else { plan.alreadyGone += 1; continue }

@@ -167,6 +167,31 @@ public final class NodeStore {
     public func ownLogical(_ id: Int32) -> Int64 { isDirectory(id) ? 0 : totalLogical[Int(id)] }
 
     public func flagSet(_ id: Int32) -> NodeFlags { NodeFlags(rawValue: flags[Int(id)]) }
+
+    /// Where a node went when a relist rebuilt its folder.
+    ///
+    /// Children are one contiguous block, so adding or removing a single entry
+    /// appends a fresh block for the whole folder and marks the old one
+    /// removed. Everything that holds a node — a tick, a review, a selection —
+    /// would otherwise be pointing at a node that says "gone" about a file
+    /// sitting right there.
+    ///
+    /// Only entries that came back unchanged are recorded, so following one
+    /// can never arrive at different bytes under the same name.
+    private var superseded: [Int32: Int32] = [:]
+
+    func supersede(_ old: Int32, by new: Int32) { superseded[old] = new }
+
+    /// The node this one became, or itself. Bounded: a folder relisted many
+    /// times builds a chain, and a cycle would be a bug rather than a shape.
+    public func current(_ node: Int32) -> Int32 {
+        var id = node
+        for _ in 0..<64 {
+            guard let next = superseded[id] else { return id }
+            id = next
+        }
+        return id
+    }
     public func isDirectory(_ id: Int32) -> Bool { flags[Int(id)] & NodeFlags.directory.rawValue != 0 }
 
     public func children(_ id: Int32) -> Range<Int32> {
