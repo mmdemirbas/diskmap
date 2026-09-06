@@ -1,7 +1,7 @@
 ---
 title: What could have moved the wrong file
 eyebrow: Safety review
-subtitle: Eleven defects in DiskMap's folder comparison and sync, found by asking what each one would cost
+subtitle: Twenty-six defects in DiskMap's destructive paths, found by asking what each one would cost
 audience: Maintainer
 date: 2026-09-02
 summary: A deep review of the compare/plan/run path, the shapes on disk that broke it, and what stops each one now.
@@ -10,22 +10,24 @@ documents_history: true
 
 > [!TLDR]
 > Every destructive direction in the app rests on one sentence: *the other side
-> holds these bytes too*. Twenty-three separate defects let that sentence be
+> holds these bytes too*. Twenty-six separate defects let that sentence be
 > true on screen and false on disk.
 >
-> - Eleven of them would have moved a file the user had only one copy of. All go to the Trash, so all were recoverable — but none announced themselves.
-> - The most likely to fire in daily use is Turkish filenames: the same name spelled two ways read as two files, and a mirror trashed one of them. The worst is a mounted disk, which read as an empty folder and passed every gate.
-> - Six passes. **Every pass after the first found a defect the previous pass had already fixed — one door over, in a sibling that shared the claim but not the code.** That pattern is the most useful thing here.
-> - All twenty-three are fixed, each with a test that fails without the fix. The suite went from 264 to 291.
+> - Thirteen of them would have moved a file the user had only one copy of, and one would have moved a whole scanned folder. All go to the Trash, so all were recoverable — but none announced themselves.
+> - The most likely to fire in daily use is Turkish filenames: the same name spelled two ways read as two files, and a mirror trashed one of them. The worst is a mounted disk, which read as an empty folder and passed every gate. The largest single item is a scan root: right-click, *Move to Trash*, and a whole scanned folder went, because the check for "is this a root" was "is the id zero" and a multi-root scan numbers its roots from one.
+> - Seven passes. **Every pass after the first found a defect the previous pass had already fixed — one door over, in a sibling that shared the claim but not the code.** That pattern is the most useful thing here.
+> - All twenty-six are fixed, each with a test that fails without the fix. The suite went from 264 to 294.
 
 This is a **findings report**, not a guide. The opening two sections build the
 one idea the rest depends on; from "The findings" onward it is a catalog, meant
 to be scanned and returned to rather than read through.
 
-It covers six passes. The first two were deliberate reviews of the comparison
+It covers seven passes. The first two were deliberate reviews of the comparison
 and sync path. The rest came from pointing the app at real folders, then at the
 scanner underneath it, then at the two sibling features that delete things on
-the same kind of evidence. The **Pass** column in the table says which.
+the same kind of evidence, and finally at the live-update path — the one part of
+the app that changes the tree while somebody is looking at it. The **Pass**
+column in the table says which.
 
 ## What was reviewed, and what was not {#scope}
 
@@ -42,24 +44,25 @@ flowchart LR
     W["walk both sides"] --> M["pair names"] --> C["classify each pair"]
     C --> P["build a plan"] --> R["carry it out"]
   end
-  subgraph outside["not reviewed this round"]
+  subgraph outside["pulled in by a later pass"]
     direction TB
     S["the scanner itself"]
     T["Trash and Cleanup"]
     D["duplicate finder"]
+    L["FSEvents and relisting"]
   end
   R -.->|"uses"| S
   classDef inside fill:var(--series-1-soft),stroke:var(--series-1),color:var(--text)
   classDef out fill:var(--surface),stroke:var(--border),color:var(--text)
   class W,M,C,P,R inside
-  class S,T,D out
+  class S,T,D,L out
 ```
 
-The scanner, the Trash view and the duplicate finder were touched only where
-the comparison reads from them. Performance was not measured. The Turkish
-strings were written, not proofread by a second reader. Concurrency was checked
-by reading every call site of the diff tree rather than by running a race
-detector.
+Each box outside the subgraph started out of scope and was pulled in by a later
+pass, because a defect inside kept turning out to have a twin there. What is
+still outside: performance was not measured, the Turkish strings were written
+rather than proofread by a second reader, and concurrency was checked by reading
+every call site of the diff tree rather than by running a race detector.
 
 ## The sentence everything rests on {#the-sentence}
 
@@ -106,23 +109,25 @@ disk had moved on before anyone pressed the button.
 
 Ordered as they were found. "Loses a file" means an item that existed on one
 side only was moved to the Trash — recoverable with *Put Back*, but unannounced.
-The **Pass** column separates the deliberate first sweep from the second one,
-which went back over the same code after the first round's fixes were in.
+The **Pass** column says which sweep found it: the two deliberate reviews of the
+comparison code, then the passes that came from running the app, going under it,
+and going sideways into the features that delete on the same kind of evidence.
 
 ```oku-table
-{"headers": ["#", "Pass", "Defect", "What it would have done", "Cost", "Stopped by"], "rows": [["1", "1 compare", "Names were paired by comparing raw bytes", "A name spelled two ways — precomposed `ş` on one side, `s` plus a combining cedilla on the other — read as two files, one missing from each side. A mirror trashed the one on the target side.", "Loses a file", "Folding the name the way the volume folds it, with a fallback to raw bytes in any folder where folding would make two names equal"], ["2", "1 compare", "A symlink was compared by the length of the path it holds", "Two links pointing at completely different places matched, and `removeLeftDuplicates` trashed one. The content check could not contradict it: it reads regular files, so it never opens a link.", "Loses a file", "Links match on where they point"], ["3", "1 compare", "A symlink facing a regular file matched on length", "A 12-byte link and a 12-byte file were called identical.", "Loses a file", "A link facing a file is a kind clash"], ["4", "1 compare", "The runner never re-checked its target", "Between a plan appearing on screen and the button being pressed, anything can change on disk. A 400-byte file replaced by a different 90 KB file was trashed anyway, and the run reported zero failures.", "Loses a file", "Each step records the kind, length and date it saw, and refuses if that is no longer what is there"], ["5", "1 compare", "Removing a whole side never saw the content check's disagreements", "The planner had no parameter for them and the screen had no way to send them. So a side the check had just proved was *not* a duplicate could still be trashed whole.", "Loses a file", "The parameter exists, the screen sends it, and one disagreement refuses the whole direction"], ["6", "1 compare", "A file the check could not open counted as agreeing", "`unreadable` was collected and then dropped on the floor. A permission-denied file was removed as a proven duplicate.", "Loses a file", "Unreadable items are kept and counted on the plan"], ["7", "1 compare", "A cancelled content check counted as a finished one", "Stopping the check after two files out of ten thousand still marked the comparison verified, and the plan said the contents were read and agree.", "Loses a file", "A cancelled check is not a check; removing a whole side refuses on it"], ["8", "1 compare", "A cancelled comparison could be planned from", "Cancelling the walk returns a result rather than an error, and the sheet fills in. The folders it never reached are absent, and a mirror reads absent as *remove from the other side*.", "Loses a file", "Every direction that removes something refuses on it; copies still go ahead"], ["9", "1 compare", "A replacement trashed the old file before writing the new one", "A copy that failed left the path empty — the original in the Trash, nothing standing where it was.", "Empty path", "The replacement is written beside the target first and moved into place after"], ["10", "1 compare", "A copy's size was the space it occupies, not the size of the file", "Two names for one file occupy the space once. The plan promised 120 KB and wrote 240 KB, and *will this fit* was answering about the wrong number.", "Wrong number", "Removals are still counted in space freed; copies are counted in file size"], ["11", "1 compare", "An ejected disk was rebuilt on the boot disk", "A mount point that has gone away is an ordinary empty folder. The runner created every intermediate directory and copied the tree there, and called it a clean run.", "Fills the wrong disk", "The plan records which volume each folder was on; the run stops outright if either has moved"], ["12", "2 compare", "A mounted disk read as an empty folder", "The walk stops at a mount point on purpose, and nothing downstream knew. Observed with a real image mounted: a 10 MB volume holding a file nobody else has compared **identical** to a folder with nothing in it, `unreadable: 0`, every gate passed. Removing the redundant side would have been offered.", "Loses a file", "Salted per side so it cannot match its opposite number, given a decision of its own so it is on screen, never turned into a step, and taking a whole side refuses outright"], ["13", "2 compare", "The check answers about files; a decision is a folder", "A folder that collapsed as identical is one decision. The guard compared its path against the check's answers, which are file paths, so a file the check disagreed about never matched the folder that would take it to the Trash.", "Loses a file", "The taint climbs: a disagreement anywhere below a decision is a disagreement about the decision"], ["14", "2 compare", "The content check opened iCloud placeholders", "Opening a placeholder is what fetches it. `DeepVerify` had always stepped around them with that comment attached; `FolderDiff.verify` enumerated with `FileManager` and did not — so checking a folder pair holding an iCloud library would have downloaded the library to answer a question about duplicates.", "Downloads a library", "Skipped and counted, and skipped is not settled: a placeholder is never removed as a proven duplicate"], ["15", "2 compare", "The comparison screen said the contents were verified", "Whenever nothing had disagreed — including when the check could not open a file, left a placeholder in iCloud, or was stopped part-way. The same sentence as finding 7, one screen earlier.", "Wrong claim", "The badge asks whether the check settled everything, not whether anything disagreed"], ["16", "3 real data", "`._*` was not in the default ignore list", "A folder copied to a drive that cannot hold extended attributes comes back with a `._name` beside every name, one per file — so it never matches its source. The notes on this disk are full of them.", "Misses matches", "Added, for the same reason every other filesystem-droppings pattern was"], ["17", "3 real data", "Ignored names were counted only in folders the tree opened", "A folder that matches *because* a name was ignored collapses and is never opened, so the count read zero for exactly the folders the pattern was written for.", "Wrong number", "Counted in the signature pass, which visits every node on both sides"], ["18", "3 real data", "The sheet was a hard 980×700", "Real filenames share long prefixes. Two name columns at that width turned `S06E05 The Great Patriotic War` into `S0…t Patriotic War` and took the episode number with it.", "Unreadable", "Resizable; only the name columns grow. Checked at 1500 — nothing else moved"], ["19", "4 scanner", "A folder past `PATH_MAX` read as unreadable", "`open(2)` refuses a path over 1024 bytes, but npm, git and rsync build trees with relative steps and have no such limit. A tree twelve levels deep scanned as five directories, no files, zero bytes — the file at the bottom invisible.", "Under-reports", "Walking down a component at a time with `openat`, only where the ordinary open has already failed"], ["20", "4 scanner", "Hardlink dedup was keyed on the inode alone", "An inode number is unique on the volume that issued it and nowhere else. Two fresh images both handed out 21, 24, 27, 30, 33; scanned as two roots, 17 extra links were reported where there were 12, and the collisions had their bytes zeroed.", "Wrong number", "Keyed by volume as well. Only reachable with more than one root, which is why it survived"], ["21", "5 duplicates", "The folder matcher hashed a symlink by its target’s length", "`current -> releases/2026-01` and `current -> releases/2026-02` are the same length, which is the ordinary shape of a deploy tree. Two backups differing only in which release was live came out as exact copies with bytes to reclaim.", "Loses a file", "The leaf hash now lives in one place the comparison and the duplicate finder both call"], ["22", "5 duplicates", "The screen where things go to the Trash did not say whether the bytes were read", "The duplicates panel shows the verdict; the confirmation screen after it did not repeat it. Same claim, same consequence, one screen later.", "Wrong claim", "Repeated per group, in the same words — it reads “Not read” on the real 6.77 GB pair on this disk"], ["23", "6 trash", "The trash executor never re-checked its target", "`FileActions.moveToTrash` trashed whatever was at the path. A 400-byte file replaced by a different 90,000-byte one went to the Trash with zero failures — the same measurement as finding 4, through a different door.", "Loses a file", "The check lives in one place both destructive paths call, and a target has to say what was seen"]]}
+{"headers": ["#", "Pass", "Defect", "What it would have done", "Cost", "Stopped by"], "rows": [["1", "1 compare", "Names were paired by comparing raw bytes", "A name spelled two ways — precomposed `ş` on one side, `s` plus a combining cedilla on the other — read as two files, one missing from each side. A mirror trashed the one on the target side.", "Loses a file", "Folding the name the way the volume folds it, with a fallback to raw bytes in any folder where folding would make two names equal"], ["2", "1 compare", "A symlink was compared by the length of the path it holds", "Two links pointing at completely different places matched, and `removeLeftDuplicates` trashed one. The content check could not contradict it: it reads regular files, so it never opens a link.", "Loses a file", "Links match on where they point"], ["3", "1 compare", "A symlink facing a regular file matched on length", "A 12-byte link and a 12-byte file were called identical.", "Loses a file", "A link facing a file is a kind clash"], ["4", "1 compare", "The runner never re-checked its target", "Between a plan appearing on screen and the button being pressed, anything can change on disk. A 400-byte file replaced by a different 90 KB file was trashed anyway, and the run reported zero failures.", "Loses a file", "Each step records the kind, length and date it saw, and refuses if that is no longer what is there"], ["5", "1 compare", "Removing a whole side never saw the content check's disagreements", "The planner had no parameter for them and the screen had no way to send them. So a side the check had just proved was *not* a duplicate could still be trashed whole.", "Loses a file", "The parameter exists, the screen sends it, and one disagreement refuses the whole direction"], ["6", "1 compare", "A file the check could not open counted as agreeing", "`unreadable` was collected and then dropped on the floor. A permission-denied file was removed as a proven duplicate.", "Loses a file", "Unreadable items are kept and counted on the plan"], ["7", "1 compare", "A cancelled content check counted as a finished one", "Stopping the check after two files out of ten thousand still marked the comparison verified, and the plan said the contents were read and agree.", "Loses a file", "A cancelled check is not a check; removing a whole side refuses on it"], ["8", "1 compare", "A cancelled comparison could be planned from", "Cancelling the walk returns a result rather than an error, and the sheet fills in. The folders it never reached are absent, and a mirror reads absent as *remove from the other side*.", "Loses a file", "Every direction that removes something refuses on it; copies still go ahead"], ["9", "1 compare", "A replacement trashed the old file before writing the new one", "A copy that failed left the path empty — the original in the Trash, nothing standing where it was.", "Empty path", "The replacement is written beside the target first and moved into place after"], ["10", "1 compare", "A copy's size was the space it occupies, not the size of the file", "Two names for one file occupy the space once. The plan promised 120 KB and wrote 240 KB, and *will this fit* was answering about the wrong number.", "Wrong number", "Removals are still counted in space freed; copies are counted in file size"], ["11", "1 compare", "An ejected disk was rebuilt on the boot disk", "A mount point that has gone away is an ordinary empty folder. The runner created every intermediate directory and copied the tree there, and called it a clean run.", "Fills the wrong disk", "The plan records which volume each folder was on; the run stops outright if either has moved"], ["12", "2 compare", "A mounted disk read as an empty folder", "The walk stops at a mount point on purpose, and nothing downstream knew. Observed with a real image mounted: a 10 MB volume holding a file nobody else has compared **identical** to a folder with nothing in it, `unreadable: 0`, every gate passed. Removing the redundant side would have been offered.", "Loses a file", "Salted per side so it cannot match its opposite number, given a decision of its own so it is on screen, never turned into a step, and taking a whole side refuses outright"], ["13", "2 compare", "The check answers about files; a decision is a folder", "A folder that collapsed as identical is one decision. The guard compared its path against the check's answers, which are file paths, so a file the check disagreed about never matched the folder that would take it to the Trash.", "Loses a file", "The taint climbs: a disagreement anywhere below a decision is a disagreement about the decision"], ["14", "2 compare", "The content check opened iCloud placeholders", "Opening a placeholder is what fetches it. `DeepVerify` had always stepped around them with that comment attached; `FolderDiff.verify` enumerated with `FileManager` and did not — so checking a folder pair holding an iCloud library would have downloaded the library to answer a question about duplicates.", "Downloads a library", "Skipped and counted, and skipped is not settled: a placeholder is never removed as a proven duplicate"], ["15", "2 compare", "The comparison screen said the contents were verified", "Whenever nothing had disagreed — including when the check could not open a file, left a placeholder in iCloud, or was stopped part-way. The same sentence as finding 7, one screen earlier.", "Wrong claim", "The badge asks whether the check settled everything, not whether anything disagreed"], ["16", "3 real data", "`._*` was not in the default ignore list", "A folder copied to a drive that cannot hold extended attributes comes back with a `._name` beside every name, one per file — so it never matches its source. The notes on this disk are full of them.", "Misses matches", "Added, for the same reason every other filesystem-droppings pattern was"], ["17", "3 real data", "Ignored names were counted only in folders the tree opened", "A folder that matches *because* a name was ignored collapses and is never opened, so the count read zero for exactly the folders the pattern was written for.", "Wrong number", "Counted in the signature pass, which visits every node on both sides"], ["18", "3 real data", "The sheet was a hard 980×700", "Real filenames share long prefixes. Two name columns at that width turned `S06E05 The Great Patriotic War` into `S0…t Patriotic War` and took the episode number with it.", "Unreadable", "Resizable; only the name columns grow. Checked at 1500 — nothing else moved"], ["19", "4 scanner", "A folder past `PATH_MAX` read as unreadable", "`open(2)` refuses a path over 1024 bytes, but npm, git and rsync build trees with relative steps and have no such limit. A tree twelve levels deep scanned as five directories, no files, zero bytes — the file at the bottom invisible.", "Under-reports", "Walking down a component at a time with `openat`, only where the ordinary open has already failed"], ["20", "4 scanner", "Hardlink dedup was keyed on the inode alone", "An inode number is unique on the volume that issued it and nowhere else. Two fresh images both handed out 21, 24, 27, 30, 33; scanned as two roots, 17 extra links were reported where there were 12, and the collisions had their bytes zeroed.", "Wrong number", "Keyed by volume as well. Only reachable with more than one root, which is why it survived"], ["21", "5 duplicates", "The folder matcher hashed a symlink by its target’s length", "`current -> releases/2026-01` and `current -> releases/2026-02` are the same length, which is the ordinary shape of a deploy tree. Two backups differing only in which release was live came out as exact copies with bytes to reclaim.", "Loses a file", "The leaf hash now lives in one place the comparison and the duplicate finder both call"], ["22", "5 duplicates", "The screen where things go to the Trash did not say whether the bytes were read", "The duplicates panel shows the verdict; the confirmation screen after it did not repeat it. Same claim, same consequence, one screen later.", "Wrong claim", "Repeated per group, in the same words — it reads “Not read” on the real 6.77 GB pair on this disk"], ["23", "6 trash", "The trash executor never re-checked its target", "`FileActions.moveToTrash` trashed whatever was at the path. A 400-byte file replaced by a different 90,000-byte one went to the Trash with zero failures — the same measurement as finding 4, through a different door.", "Loses a file", "The check lives in one place both destructive paths call, and a target has to say what was seen"], ["24", "7 live tree", "A relist renumbered a folder's children, and a tick still pointed at the old id", "Anything arriving beside a ticked file rebuilds every child of that folder under fresh ids — there was already a fast path keeping the ids when only sizes moved, and none when a name appeared. The planner then called a file sitting right there <em>already gone</em> and dropped it, and a copy group whose members had all been renumbered read as having no living member, so the whole selection was refused.", "Misses the item", "The store records old → new when a rebuilt child is recognisably the same entry, and the planner maps its selection and its groups through that before deciding anything"], ["25", "7 trash", "The single-item Trash never asked the planner", "Right-click, <em>Move to Trash</em>, went straight to the executor after checking only that the id was in range. Every rule that protects data lives in the planner, and this door did not knock: a scan root is node zero <em>only in a single-root scan</em>, so with several folders scanned each root is a node above zero and one click would have taken a whole scanned folder. The never-touch list and the outside-the-tree check were not consulted here at all.", "Loses a folder", "One node through the same planner as everything else, asked before the confirmation sheet rather than after it, and asked again at the click"], ["26", "7 trash", "An item on the never-touch list could still be ticked", "The copy report does not filter by that list, so <em>Select extras</em> would tick a folder excluded in an earlier session. The card read “Trash” beside it and the planner silently dropped it — two screens describing the same item differently, on the screen whose whole job is to say what is about to happen.", "Wrong claim", "Those nodes refuse the tick, and the row carries a badge saying why rather than only a tooltip"]]}
 ```
 
-Two more were found and are **not** defects in the same sense — they made the
+Three more were found and are **not** defects in the same sense — they made the
 app worse at its job without risking anything:
 
 - Ignore patterns did not reach the identical-collapse, because the signatures came from the duplicate finder, which knows nothing about them. A folder differing only by `.DS_Store` stayed *differs* — exactly backwards, since hiding that name is why the pattern exists. Space-freeing then offered the files inside one at a time instead of the folder as a unit.
 - Nothing warned that a folder matching *only* because something was ignored still holds that ignored name, and takes it along when the folder is removed.
+- Two of the three reasons the planner drops a ticked item — it went before the sheet opened, it is on the never-touch list — were counted and never shown. A selection of ten could arrive as a list of seven with nothing on screen accounting for the other three.
 
 ## What the second pass changed {#second-pass}
 
-Four of the fifteen came out of going back over the same code with the first
-round's fixes in place. Three of them share a cause worth naming: **the planner
+Four of the first fifteen came out of going back over the same code with the
+first round's fixes in place. Three of them share a cause worth naming: **the planner
 was being handed a selection of what the content check found, rather than the
 finding.**
 
@@ -169,7 +174,8 @@ gets removed, a file is what the check reports, and nothing connected them.
 
 Every pass after the first found something the previous pass had already fixed —
 in a different file, reached by a different button, making the same claim about
-the same bytes. Four times, in four different shapes.
+the same bytes. Five times, in five different shapes — and the fifth is the
+variant where the claim was never wrong twice, only unasked once.
 
 ```mermaid
 flowchart LR
@@ -181,11 +187,13 @@ flowchart LR
   C2 -.->|"pass 4: found again"| C3["excluded paths"]
   D["“the contents<br/>were read”"] -->|"pass 1: the plan"| D2["fixed on the plan"]
   D2 -.->|"pass 2 and 5: found again"| D3["two more screens"]
+  E["the never-touch<br/>list applies"] -->|"always: the planner"| E2["enforced in TrashPlanner"]
+  E2 -.->|"pass 7: two doors<br/>that never asked"| E3["right-click, and the tick"]
   classDef found fill:var(--series-4-soft),stroke:var(--series-4),color:var(--text)
   classDef fixed fill:var(--series-3-soft),stroke:var(--series-3),color:var(--text)
-  class A,B,C,D found
-  class A2,B2,C2,D2 fixed
-  class A3,B3,C3,D3 found
+  class A,B,C,D,E found
+  class A2,B2,C2,D2,E2 fixed
+  class A3,B3,C3,D3,E3 found
 ```
 
 *Each row is one claim about the world. The middle column is where it was
@@ -204,17 +212,26 @@ the code rather than the intention**:
 - The "has this changed since the plan?" check lives in one function the sync runner and the trash executor both call, so they cannot come to different answers about the same path.
 - "Did the walk stop at this door rather than fail at it?" is one question with one answer, whether the door is a mount point or a never-touch path.
 - The planner takes the content check's whole result rather than a selection from it, so a category added later cannot be forgotten at a call site.
+- Every route to the Trash now goes through one planner call — the review screen, the sync runner and the context menu alike — so a rule added to it applies everywhere by construction rather than by three separate memories of it.
 
 > [!IMPORTANT]
-> Three of the four were found in code that an earlier pass had just written or
+> Three of the five were found in code that an earlier pass had just written or
 > just touched. A fix is new code, and new code has not been reviewed. That is
 > the argument for reviewing again after fixing, and it is not a comfortable
 > one.
+>
+> The fifth is the shape's other half, and it is worse: the rule was never
+> wrong anywhere. `TrashPlanner` had the never-touch list, the scan-root
+> refusal and the outside-the-tree check, all tested. A right-click simply did
+> not call it. Tests measure code that runs in tests, not whether the interface
+> reaches it, so a missing caller leaves no trace — the planner's coverage went
+> up with every pass while one button walked around it.
 
 ## The gates a destructive step passes now {#gates}
 
-Four of the eleven fixes added a gate. This is where they sit relative to the
-ones that were already there.
+Four of the fixes on the sync path added a gate. This is where they sit relative
+to the ones that were already there. The single-item Trash reaches the last two
+of these now as well, through the planner rather than around it.
 
 ```mermaid
 flowchart TB
@@ -345,6 +362,7 @@ that nobody has to rediscover them.
 | Turkish `İ` against `i` will not fold | Swift's lowercasing and the volume's own table disagree on that letter, so the two would read as different files rather than one. That direction is noisy, never dangerous — it shows two rows where there is one item, and never pairs two things that are not the same. |
 | The default noise patterns do not reach the duplicate finder | A stray `.DS_Store` turns an exact folder match into a partial one. That is a less confident answer, not a wrong one, and in a duplicate finder "these differ by one file" is arguably the better thing to say. |
 | The fallback for a volume that tells case apart has no test | Producing one needs a case-sensitive volume, and creating one hangs on this machine rather than failing. It guards against a volume the suite cannot make. |
+| A tick survives a relist by recognising the file, not by identity | A rebuilt child is matched to the old one on name, kind, date and — for files — size. A file replaced by a different one of exactly the same length within the same second would be recognised as itself, and a tick made before the swap would still point at it. That is the same window the re-check has, and the re-check runs after this, at the moment of the click. |
 | A cancelled sync leaves the steps it finished | Every step is individually complete, and everything removed is in the Trash, but there is no undo of a partial run beyond *Put Back*. |
 
 ## How this was verified {#verification}
@@ -369,8 +387,15 @@ The plan screen was rendered headlessly against a folder pair built to light up
 several cautions at once, and read rather than assumed: the folder that differed
 only by `.DS_Store` collapsed, and the differing symlink appeared as a Replace.
 
+The seventh pass did the same for the review screen, which had no render at all
+until this round — the report that finds the copies had to be run first, and
+nothing ran it. Rendered against three real copies of a 63 MB folder with one
+of them on the never-touch list: the excluded row reads *Stays* with a badge,
+the reason line sits under the tap hint, and the list below starts at the same
+pixel whether that line applies or not.
+
 ```oku-table
-{"headers":["Check","Before","After"],"rows":[["Tests executed","264","291"],["Failures","0","0"],["Skipped","1","2"],["Files that may call a delete API","0","0"],["Passes over the same code","1","6"]]}
+{"headers":["Check","Before","After"],"rows":[["Tests executed","264","294"],["Failures","0","0"],["Skipped","1","2"],["Files that may call a delete API","0","0"],["Passes over the same code","1","7"]]}
 ```
 
 The last row is a source-grep test, not a claim: `removeItem`, `unlink`, `rmdir`
@@ -385,7 +410,7 @@ Nothing this review found was unrecoverable. Every path that removes something
 goes through the Trash, and that was true before this round. The defects
 determined *which* file went there, not whether it could come back.
 
-**Which of the eleven was most likely to fire in practice?**
+**Which was most likely to fire in practice?**
 The name spelling one, by a distance. It needs no unusual setup — a folder with
 Turkish names that arrived from two different places is enough, and both the
 comparison screen and a mirror would have acted on it.
@@ -398,23 +423,32 @@ outcomes is not symmetric. A false refusal costs a second comparison; a false
 pass moves a folder whose contents changed. It is left strict.
 
 **What would the next round look at?**
-The live-update path — FSEvents, relisting, and the signature cache — which is
-the one part of the app that changes the tree while somebody is looking at it,
-and the only major subsystem no pass has touched. Firmlinks and files whose size
-changes mid-read were not exercised either.
+The seventh pass took the answer the sixth gave here — the live-update path —
+and found one defect in it, plus two in the code that reads its output. What is
+left untouched: the signature cache across a relist, firmlinks, files whose size
+changes mid-read, and the undo stack, which holds paths into a tree that keeps
+moving underneath it.
 
 **Was each extra pass worth running?**
 The second found four, one as severe as anything in the first. The third found
 three by pointing the app at real folders rather than test ones. The fourth and
 fifth each found defects the first pass had fixed one door over, and the sixth
-found the same again. On this evidence the answer is yes and the pattern is
-still not exhausted — which is a statement about how the passes were run, not a
-promise that the next one finds nothing.
+found the same again. The seventh found the largest single item in the table —
+a whole scanned folder, one right-click away — in code no pass had touched,
+reached by asking a different question: not *is this rule right* but *does
+everything that needs it call it*. On this evidence the answer is yes and the
+pattern is still not exhausted, which is a statement about how the passes were
+run rather than a promise that the next one finds nothing.
 
 **How much of this was found by reading, and how much by running?**
 The severe ones were run. The mounted disk, the deep tree, the colliding inodes,
-both drift holes and the name spelling were all reproduced on disk before being
-fixed, and the numbers in the table are measurements rather than readings. Two
+both drift holes, the renumbered tick and the name spelling were all reproduced
+on disk before being fixed, and the numbers in the table are measurements rather
+than readings. One exception is stated as such: the scan-root hole was
+established by reading — the planner refuses that shape in a test, and the
+interface reached the executor without calling it — because exercising a
+context menu needs a running window, and the fix removed the path rather than
+instrumenting it. Two
 things were established by running and turned out to be *non*-defects — APFS
 refuses non-UTF-8 names, and file duplicates have a size floor a symlink cannot
 reach — and both are recorded here because a negative nobody wrote down gets
