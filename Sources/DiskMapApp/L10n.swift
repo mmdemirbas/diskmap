@@ -306,6 +306,11 @@ final class L10n: ObservableObject {
                       : (n == 1 ? "1 item was not settled by the check and was left alone"
                                 : "\(fmt(n)) items were not settled by the check and were left alone")
     }
+    func compareNotSettled(_ n: Int) -> String {
+        active == .tr ? "Karşılaştırma tamamlanmadı: \(fmt(n)) öğe karara bağlanamadı"
+                      : (n == 1 ? "Not settled: 1 item was not read"
+                                : "Not settled: \(fmt(n)) items were not read")
+    }
     func compareLeftInCloud(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) öğe hâlâ iCloud'da; içeriği okumak onları indirmek olurdu"
                       : (n == 1 ? "1 item is still in iCloud — reading it would download it"
@@ -430,7 +435,7 @@ final class L10n: ObservableObject {
         case columnDate, nothingMatchesFilter
         case compareAgain, refuseNotAFolder, refuseSameFolder, refuseNested
         case refuseVolumeRoot, refuseExcluded, refuseNothingToDo, refuseNotRedundant
-        case refuseComparisonIncomplete
+        case refuseComparisonIncomplete, refuseVolumeInside
         case refuseUnreadable, compareUnreadableWarning
         case folderLabel, videoLabel, imageLabel, audioLabel, archiveLabel, documentLabel
         case codeLabel, appLabel, diskImageLabel, vmLabel, modelLabel, databaseLabel, cacheLabel, otherLabel
@@ -766,6 +771,9 @@ final class L10n: ObservableObject {
         .refuseExcluded: ("That folder is on the never-touch list",
                           "O klasör dokunulmayacaklar listesinde"),
         .refuseNothingToDo: ("Nothing to do — they already match", "Yapacak bir şey yok, zaten eşleşiyorlar"),
+        .refuseVolumeInside: (
+            "Another disk is mounted inside this folder, and nothing under it was compared:",
+            "Bu klasörün içinde başka bir disk bağlı ve altındaki hiçbir şey karşılaştırılmadı:"),
         .refuseComparisonIncomplete: (
             "The comparison was stopped before it finished, so compare again first",
             "Karşılaştırma tamamlanmadan durduruldu, önce yeniden karşılaştırın"),

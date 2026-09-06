@@ -499,4 +499,68 @@ final class SyncSafetyTests: XCTestCase {
                     + "\(plan.removals) removals")
         }
     }
+
+    // MARK: - Another disk mounted inside
+
+    @discardableResult
+    private func hdiutil(_ arguments: [String]) -> Int32 {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        task.arguments = arguments
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        guard (try? task.run()) != nil else { return -1 }
+        task.waitUntilExit()
+        return task.terminationStatus
+    }
+
+    /// The walk stops at a mount point, so the folder behind it reads as empty
+    /// — and an empty folder matches every other empty folder. Left alone, a
+    /// whole volume compares identical to a folder with nothing in it.
+    func testAVolumeMountedInsideIsNeverCalledAMatch() throws {
+        let image = root.appendingPathComponent("img.dmg")
+        let vault = left.appendingPathComponent("vault")
+        try fm.createDirectory(at: vault, withIntermediateDirectories: true)
+        try fm.createDirectory(at: right.appendingPathComponent("vault"),
+                               withIntermediateDirectories: true)
+        try write(left, "shared.txt", bytes: 200, fill: 1)
+        try write(right, "shared.txt", bytes: 200, fill: 1)
+
+        try XCTSkipUnless(
+            hdiutil(["create", "-size", "10m", "-fs", "APFS", "-volname", "dmtest",
+                     "-quiet", image.path]) == 0,
+            "cannot create a disk image here")
+        try XCTSkipUnless(
+            hdiutil(["attach", image.path, "-mountpoint", vault.path, "-nobrowse", "-quiet"]) == 0,
+            "cannot mount a disk image here")
+        defer { hdiutil(["detach", vault.path, "-force", "-quiet"]) }
+
+        try Data(repeating: 9, count: 500).write(to: vault.appendingPathComponent("only-here.bin"))
+
+        let c = try compare()
+        XCTAssertFalse(c.volumesInside.isEmpty, "the mounted volume was not noticed")
+        XCTAssertEqual(c.entries.filter { $0.relativePath == "vault" }.first?.notCompared, true,
+                       "a whole volume is being reported as though it had been compared: "
+                       + c.entries.map { "\($0.kind) \($0.relativePath)" }.joined(separator: ", "))
+
+        // Taking the whole side would take the folder the disk is mounted on.
+        switch SyncPlanner.removeRedundant(c, side: .left) {
+        case .failure(let refusal):
+            guard case .volumeMountedInside = refusal else {
+                return XCTFail("refused, but for the wrong reason: \(refusal)")
+            }
+        case .success:
+            XCTFail("the whole left side is being offered for the Trash, and a disk is mounted "
+                    + "inside it")
+        }
+
+        // And no direction may touch that pair.
+        for direction in SyncDirection.allCases {
+            guard let plan = try? SyncPlanner.plan(c, direction: direction,
+                                                   syncRoots: SyncRoots(roots: []),
+                                                   excluded: []).get() else { continue }
+            XCTAssertTrue(plan.steps.allSatisfy { !$0.relativePath.hasPrefix("vault") },
+                          "\(direction) has a step for the folder another disk is mounted on")
+        }
+    }
 }

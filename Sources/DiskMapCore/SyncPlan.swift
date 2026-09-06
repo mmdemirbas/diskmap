@@ -254,6 +254,11 @@ public enum SyncPlanner {
 
             // Freeing space is its own shape: only what the other side already
             // holds goes, and only where nothing has said otherwise.
+            // A doorway to another disk. It is on the screen so nobody wonders
+            // where it went, and it is left exactly as it is, whatever the
+            // direction says.
+            if entry.notCompared { unresolved.append(entry.relativePath); continue }
+
             if direction.freesSpace {
                 guard entry.kind == .identical, let side = direction.target else { continue }
                 guard !contentDiffers.contains(entry.relativePath) else {
@@ -365,6 +370,11 @@ public enum SyncPlanner {
         }
         // A folder that could not be fully read cannot be shown to be redundant.
         if comparison.unreadable > 0 { return .failure(.someFoldersUnreadable(comparison.unreadable)) }
+        // Nor can one holding a doorway to another disk: taking this side whole
+        // takes that folder too, and nothing under it was ever looked at.
+        if let volume = comparison.volumesInside.first {
+            return .failure(.volumeMountedInside(volume))
+        }
         guard comparison.summary.isCoveredByTheOtherSide(side) else { return .failure(.notRedundant) }
         // "Covered by the other side" is a claim about names and lengths. Once
         // the content check has read the bytes and disagreed about even one of

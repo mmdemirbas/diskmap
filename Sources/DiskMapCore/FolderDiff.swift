@@ -93,6 +93,9 @@ public struct DiffEntry: Sendable, Identifiable {
     /// The ignore patterns kept something out of this item's subtree, so
     /// copying or removing it whole takes along a name nothing compared.
     public var coversIgnored = false
+    /// Another disk is mounted on one side of this pair, so the walk never
+    /// went in. Shown, never acted on.
+    public var notCompared = false
 
     public func bytes(on side: Side) -> Int64 { side == .left ? leftBytes : rightBytes }
     public func logical(on side: Side) -> Int64 { side == .left ? leftLogical : rightLogical }
@@ -116,7 +119,8 @@ public struct DiffEntry: Sendable, Identifiable {
                 items: Int, dataless: Bool, newerSide: Side? = nil,
                 leftLogical: Int64 = 0, rightLogical: Int64 = 0,
                 leftIsFolder: Bool = false, rightIsFolder: Bool = false,
-                coversIgnored: Bool = false) {
+                coversIgnored: Bool = false, notCompared: Bool = false) {
+        self.notCompared = notCompared
         self.leftLogical = leftLogical; self.rightLogical = rightLogical
         self.leftIsFolder = leftIsFolder; self.rightIsFolder = rightIsFolder
         self.coversIgnored = coversIgnored
@@ -182,6 +186,9 @@ public struct FolderComparison: Sendable {
     /// Folders that could not be opened, on either side. Non-zero means the
     /// comparison did not see everything, so nothing may be mirrored from it.
     public var unreadable: Int
+    /// Folders inside either side where another disk is mounted. The walk
+    /// stops at the door, so nothing below them was compared.
+    public var volumesInside: [String] = []
     public var cancelled: Bool
     public var elapsed: Double
     /// Relative paths that the deep check found to differ despite matching
@@ -199,7 +206,9 @@ public struct FolderComparison: Sendable {
                 options: CompareOptions = CompareOptions(),
                 entries: [DiffEntry], summary: DiffSummary,
                 leftTotal: Int64, rightTotal: Int64, leftItems: Int, rightItems: Int,
-                unreadable: Int, cancelled: Bool, elapsed: Double, verifiedAt: Date? = nil) {
+                unreadable: Int, cancelled: Bool, elapsed: Double, verifiedAt: Date? = nil,
+                volumesInside: [String] = []) {
+        self.volumesInside = volumesInside
         self.left = left; self.right = right; self.tree = tree; self.options = options
         self.entries = entries; self.summary = summary
         self.leftTotal = leftTotal; self.rightTotal = rightTotal
@@ -210,6 +219,9 @@ public struct FolderComparison: Sendable {
 }
 
 public enum CompareRefusal: Error, Sendable, Equatable {
+    /// Removing a whole side would take a folder holding another disk with it,
+    /// and nothing below that folder was ever compared.
+    case volumeMountedInside(String)
     case notAFolder(String)
     case sameFolder(String)
     case nested(inner: String, outer: String)
@@ -263,8 +275,10 @@ public enum FolderDiff {
         // Subtree hashes let a folder whose contents match all the way down be
         // reported as one line instead of ten thousand, and let it stay one
         // line until somebody opens it.
-        let leftSignatures = DiffTree.signatures(ls, ignore: options.ignore)
-        let rightSignatures = DiffTree.signatures(rs, ignore: options.ignore)
+        // Different salts, so a folder the walk stopped at on one side can
+        // never hash equal to the one facing it.
+        let leftSignatures = DiffTree.signatures(ls, ignore: options.ignore, salt: 1)
+        let rightSignatures = DiffTree.signatures(rs, ignore: options.ignore, salt: 2)
         let tree = DiffTree(left: ls, right: rs,
                             leftSig: leftSignatures.values, rightSig: rightSignatures.values,
                             leftHasIgnored: leftSignatures.hasIgnored,
@@ -286,7 +300,9 @@ public enum FolderDiff {
             rightItems: rightScan.stats.files + rightScan.stats.directories,
             unreadable: leftScan.stats.unreadableDirectories + rightScan.stats.unreadableDirectories,
             cancelled: cancel?.isCancelled == true,
-            elapsed: Date().timeIntervalSince(started))
+            elapsed: Date().timeIntervalSince(started),
+            volumesInside: leftSignatures.volumes.map { ls.path($0) }
+                + rightSignatures.volumes.map { rs.path($0) })
 
         span.end(["entries": .int(Int64(entries.count)),
                   "treeNodes": .int(Int64(tree.count)),
@@ -341,6 +357,21 @@ public enum FolderDiff {
             let name = tree.name(child)
             let relative = prefix.isEmpty ? name : prefix + "/" + name
 
+            // Not descended into: there is another disk behind this name and
+            // the walk stopped at the door. It gets a decision of its own so it
+            // is on the screen, rather than being opened and found empty.
+            if tree.notCompared(child) {
+                summary.differing += 1
+                tree.beginDecisions(child, at: out.count)
+                out.append(DiffEntry(
+                    id: 0, relativePath: relative, kind: .differs, isDirectory: true,
+                    leftBytes: 0, rightBytes: 0, leftModified: 0, rightModified: 0,
+                    items: 0, dataless: false, notCompared: true))
+                tree.endDecisions(child, at: out.count)
+                tree.absorb(child, into: id)
+                continue
+            }
+
             if kind == .differs,
                tree.isDirectory(child, on: .left), tree.isDirectory(child, on: .right) {
                 collect(tree, child, prefix: relative, into: &out, summary: &summary,
@@ -387,7 +418,8 @@ public enum FolderDiff {
                 leftIsFolder: tree.isDirectory(child, on: .left),
                 rightIsFolder: tree.isDirectory(child, on: .right),
                 coversIgnored: tree.coversIgnored(child, on: .left)
-                    || tree.coversIgnored(child, on: .right)))
+                    || tree.coversIgnored(child, on: .right),
+                notCompared: tree.notCompared(child)))
             tree.endDecisions(child, at: out.count)
             tree.absorb(child, into: id)
         }

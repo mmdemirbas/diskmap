@@ -281,6 +281,8 @@ func localizedRefusal(_ refusal: CompareRefusal) -> String {
     case .nothingToDo: t(.refuseNothingToDo)
     case .notRedundant: t(.refuseNotRedundant)
     case .comparisonIncomplete: t(.refuseComparisonIncomplete)
+    case .volumeMountedInside(let path):
+        "\(t(.refuseVolumeInside)) \((path as NSString).lastPathComponent)"
     case .someFoldersUnreadable: t(.refuseUnreadable)
     }
 }

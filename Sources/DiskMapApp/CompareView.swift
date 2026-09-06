@@ -368,11 +368,16 @@ struct CompareView: View {
             // check that says "they agree" without saying how much it looked at
             // is a claim rather than a result.
             Group {
-                if result.differing.isEmpty {
-                    mark("checkmark.seal.fill", .green, loc[.compareVerified])
-                } else {
+                if !result.differing.isEmpty {
                     mark("xmark.circle.fill", Palette.warning(scheme),
                          loc.compareContentDiffers(result.differing.count))
+                } else if result.agreed {
+                    mark("checkmark.seal.fill", .green, loc[.compareVerified])
+                } else {
+                    // Nothing disagreed, and the check did not get through
+                    // everything either. Those are not the same result.
+                    mark("exclamationmark.circle.fill", Palette.warning(scheme),
+                         loc.compareNotSettled(result.unsettled.count + (result.cancelled ? 1 : 0)))
                 }
             }
             .fixedSize()
@@ -474,6 +479,10 @@ struct CompareView: View {
                     if !plan.keptBecauseContentDiffers.isEmpty {
                         caution(.green, "shield.lefthalf.filled",
                                 loc.compareKeptDiffering(plan.keptBecauseContentDiffers.count))
+                    }
+                    if let volume = model.folderComparison?.volumesInside.first {
+                        caution(Palette.warning(scheme), "externaldrive",
+                                "\(loc[.refuseVolumeInside]) \((volume as NSString).lastPathComponent)")
                     }
                     if let left = model.compareVerification?.notDownloaded, !left.isEmpty {
                         caution(.secondary, "icloud", loc.compareLeftInCloud(left.count))
