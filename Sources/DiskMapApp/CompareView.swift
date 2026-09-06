@@ -27,7 +27,13 @@ struct CompareView: View {
             case .result: resultPage
             }
         }
-        .frame(width: 980, height: 700)
+        // Resizable, because the one thing real folders have that test folders
+        // do not is long names that share a long prefix — two name columns at
+        // a fixed 980 turn "S06E05 The Great Patriotic War" into "S0…t
+        // Patriotic War" and take the episode number with it. Only the name
+        // columns grow; every fixed column stays where it was.
+        .frame(minWidth: 980, idealWidth: 980, maxWidth: .infinity,
+               minHeight: 640, idealHeight: 700, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 

@@ -585,4 +585,22 @@ final class SyncSafetyTests: XCTestCase {
                        + c.entries.map { "\($0.kind) \($0.relativePath)" }.joined(separator: ", "))
         XCTAssertEqual(c.summary.onlyRight, 0)
     }
+
+    /// A folder copied to a drive that cannot hold extended attributes comes
+    /// back with a `._name` beside every `name`. There is one per file, so
+    /// without this the folder never matches its source.
+    func testAppleDoubleSidecarsDoNotStopAFolderMatching() throws {
+        try write(left, "flight/DJI_0001.MP4", bytes: 5_000, fill: 1)
+        try write(left, "flight/DJI_0002.MP4", bytes: 5_000, fill: 2)
+        try write(right, "flight/DJI_0001.MP4", bytes: 5_000, fill: 1)
+        try write(right, "flight/DJI_0002.MP4", bytes: 5_000, fill: 2)
+        try write(right, "flight/._DJI_0001.MP4", bytes: 4_096, fill: 9)
+        try write(right, "flight/._DJI_0002.MP4", bytes: 4_096, fill: 9)
+
+        let c = try compare()
+        XCTAssertEqual(c.entries.first(where: { $0.relativePath == "flight" })?.kind, .identical,
+                       "the sidecars are deciding whether the folder matches: "
+                       + c.entries.map { "\($0.kind) \($0.relativePath)" }.joined(separator: ", "))
+        XCTAssertEqual(c.summary.ignored, 2)
+    }
 }

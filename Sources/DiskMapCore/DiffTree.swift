@@ -83,7 +83,14 @@ public final class DiffTree: @unchecked Sendable {
     public let options: CompareOptions
     /// Names the ignore patterns kept out. Counted rather than dropped
     /// silently: a filter nobody can see is a filter that lies.
-    public private(set) var ignored = 0
+    /// Names the patterns left out, counted per side.
+    ///
+    /// Counted during the signature pass rather than while folders are opened,
+    /// because the folders where it matters most are the ones that never get
+    /// opened: a folder that matches only because a name was ignored collapses,
+    /// and a count taken at open time would report zero for exactly the case
+    /// the pattern was written for.
+    public internal(set) var ignored = 0
 
     public private(set) var nodes: [Node] = []
     public var count: Int { nodes.count }
@@ -491,11 +498,12 @@ public final class DiffTree: @unchecked Sendable {
     /// the entire point of ignoring it. And a symlink is what it points at, not
     /// how long that path happens to be.
     static func signatures(_ store: NodeStore, ignore: [String], salt: UInt64)
-        -> (values: [UInt64], hasIgnored: [Bool], volumes: [Int32]) {
+        -> (values: [UInt64], hasIgnored: [Bool], volumes: [Int32], ignored: Int) {
         var sig = [UInt64](repeating: 0, count: store.count)
         var dirty = [Bool](repeating: false, count: store.count)
         var volumes: [Int32] = []
-        guard store.count > 0 else { return (sig, dirty, volumes) }
+        var ignored = 0
+        guard store.count > 0 else { return (sig, dirty, volumes, ignored) }
         let order = FolderMatches.evaluationOrder(store)
 
         store.nameBytes.withUnsafeBufferPointer { names in
@@ -516,7 +524,9 @@ public final class DiffTree: @unchecked Sendable {
                 if store.isDirectory(id) {
                     var acc: UInt64 = 0, kids: UInt64 = 0
                     for c in store.children(id) where !store.flagSet(c).contains(.removed) {
-                        if matchesAny(store, c, names, ignore) { dirty[i] = true; continue }
+                        if matchesAny(store, c, names, ignore) {
+                            dirty[i] = true; ignored += 1; continue
+                        }
                         if dirty[Int(c)] { dirty[i] = true }
                         if store.flagSet(c).contains(.mountPoint) { dirty[i] = true }
                         acc = acc &+ FolderMatches.mix(sig[Int(c)])
@@ -555,7 +565,7 @@ public final class DiffTree: @unchecked Sendable {
                 }
             }
         }
-        return (sig, dirty, volumes)
+        return (sig, dirty, volumes, ignored)
     }
 
     static func matchesAny(_ store: NodeStore, _ node: Int32,
@@ -609,7 +619,7 @@ public final class DiffTree: @unchecked Sendable {
         guard node >= 0, store.isDirectory(node) else { return [] }
         var kids: [Int32] = []
         for child in store.children(node) where !store.flagSet(child).contains(.removed) {
-            if isIgnored(store, child, bytes) { ignored += 1; continue }
+            if isIgnored(store, child, bytes) { continue }
             kids.append(child)
         }
         return kids

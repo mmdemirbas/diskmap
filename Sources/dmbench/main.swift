@@ -562,7 +562,7 @@ func cmdLive(_ path: String, _ seconds: Int) {
 /// The second half is the one that moves when the merge changes. It opens every
 /// folder to collect the decisions, so a change to how names are paired shows
 /// up here and nowhere else.
-func cmdCompare(_ left: String, _ right: String) {
+func cmdCompare(_ left: String, _ right: String, verify: Bool = false) {
     let t0 = DispatchTime.now().uptimeNanoseconds
     let scanned = DiskScanner().scan(ScanOptions(rootPath: left))
     let scanOnly = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
@@ -597,6 +597,25 @@ func cmdCompare(_ left: String, _ right: String) {
     }
     print("  walking every row  \(String(format: "%.2fs", Double(DispatchTime.now().uptimeNanoseconds - t2) / 1e9))"
           + "  (\(rows) rows)")
+
+    guard verify else { return }
+    // The claim the space-freeing directions stand on, against real bytes.
+    let t3 = DispatchTime.now().uptimeNanoseconds
+    var lastReport: Int64 = 0
+    let check = FolderDiff.verify(c, progressStep: 1 << 30) { read in
+        if read - lastReport >= 1 << 30 { lastReport = read; print("    read \(fmt(read)) ...") }
+    }
+    let took = Double(DispatchTime.now().uptimeNanoseconds - t3) / 1e9
+    print("\ncontent check")
+    print("  pairs read         \(check.pairsChecked)")
+    print("  bytes read         \(fmt(check.bytesRead))")
+    print("  differing          \(check.differing.count)")
+    print("  unreadable         \(check.unreadable.count)")
+    print("  left in iCloud     \(check.notDownloaded.count)")
+    print("  agreed             \(check.agreed)")
+    print("  took               \(String(format: "%.1fs", took))"
+          + (took > 0 ? "  (\(fmt(Int64(Double(check.bytesRead) / took)))/s)" : ""))
+    for path in check.differing.prefix(5) { print("    differs: \(path)") }
 }
 
 let args = CommandLine.arguments
@@ -619,12 +638,13 @@ case "live": cmdLive(args.count > 2 ? args[2] : FileManager.default.homeDirector
 case "relistcost": cmdRelistCost(args.count > 2 ? (Int(args[2]) ?? 8) : 8,
                                  args.count > 3 ? (Int(args[3]) ?? 40) : 40)
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
-case "compare": cmdCompare(args.count > 3 ? args[2] : ".", args.count > 3 ? args[3] : ".")
+case "compare": cmdCompare(args.count > 3 ? args[2] : ".", args.count > 3 ? args[3] : ".",
+                           verify: args.contains("--verify"))
 case "verify": cmdVerify(Array(args.dropFirst(2)))
 case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                                budget: args.count > 3 ? (Int64(args[3]) ?? 0) << 30 : 12 << 30)
 default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]"
-               + " | dupes <path> | compare <left> <right>"
+               + " | dupes <path> | compare <left> <right> [--verify]"
                + " | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
                + " | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")

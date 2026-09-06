@@ -603,7 +603,7 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
 ## Development
 
 ```sh
-swift test                                   # 284 tests, including FSEvents end-to-end
+swift test                                   # 285 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation

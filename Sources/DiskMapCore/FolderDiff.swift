@@ -27,9 +27,15 @@ public struct CompareOptions: Sendable, Equatable {
 
     /// Files the system writes and nobody compares. On by default, and the
     /// screen says how many were skipped so it is never a silent decision.
+    /// `._name` is the other half of `name`, split off because the volume it
+    /// was copied to cannot hold extended attributes — every external drive
+    /// formatted for both Macs and Windows does this to every file on it. The
+    /// pattern goes here rather than being left to the user, because a folder
+    /// copied to such a drive and back differs from its source in one of these
+    /// for every file it holds, and none of them is the thing being compared.
     public static let noise = [".DS_Store", ".Spotlight-V100", ".fseventsd",
                                ".TemporaryItems", ".Trashes", ".localized",
-                               "Thumbs.db", "desktop.ini", ".apDisk"]
+                               "Thumbs.db", "desktop.ini", ".apDisk", "._*"]
 }
 
 public enum DiffKind: String, Sendable, CaseIterable {
@@ -285,6 +291,7 @@ public enum FolderDiff {
                             rightHasIgnored: rightSignatures.hasIgnored,
                             leftItems: subtreeItems(ls), rightItems: subtreeItems(rs),
                             options: options)
+        tree.ignored = leftSignatures.ignored + rightSignatures.ignored
 
         var entries: [DiffEntry] = []
         var summary = DiffSummary()

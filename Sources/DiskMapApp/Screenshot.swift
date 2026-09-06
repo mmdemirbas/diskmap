@@ -131,7 +131,10 @@ enum OffscreenRenderer {
             if env["DISKMAP_COMPARE_PAGE"] == "ignore" {
                 view = AnyView(CompareIgnoreView(model: model).environment(\.colorScheme, scheme))
             } else {
-                view = AnyView(CompareView(model: model).environment(\.colorScheme, scheme))
+                // Sized here as well as inside, so a resizable sheet can be
+                // checked at more than the one width it opens at.
+                view = AnyView(CompareView(model: model).environment(\.colorScheme, scheme)
+                    .frame(width: width, height: height))
             }
         } else if env["DISKMAP_SHEET"] == "trash", let match = model.folderMatches.first {
             model.checkExtras(match.copies)
