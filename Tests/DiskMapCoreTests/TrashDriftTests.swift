@@ -1,5 +1,5 @@
-import DiskMapCore
 import XCTest
+@testable import DiskMapCore
 
 /// What happens between the review screen appearing and the button being
 /// pressed. Everything here goes to the Trash, so nothing is unrecoverable —
@@ -84,4 +84,58 @@ final class TrashDriftTests: XCTestCase {
                       "a folder that gained a file since the plan was made went to the Trash "
                       + "with the new file inside it")
     }
+
+    /// Undo reports what it restored, and the caller counts a success per item
+    /// that did not throw. So a restore that quietly does nothing is a restore
+    /// that gets counted — "restored 12 items" with twelve items still in the
+    /// Trash, and no way to tell from the screen.
+    func testARestoreWithNowhereToRestoreFromIsAFailure() throws {
+        let item = TrashedItem(originalURL: root.appendingPathComponent("gone.bin"),
+                               trashURL: nil, bytesFreed: 400, node: 7)
+        XCTAssertThrowsError(try FileActions.restore(item),
+                             "reported success without moving anything")
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("gone.bin").path))
+    }
+
+    /// The ordinary round trip, which nothing covered on its own.
+    func testTrashThenRestorePutsItBack() throws {
+        let doomed = root.appendingPathComponent("doomed.bin")
+        try Data(repeating: 1, count: 400).write(to: doomed)
+        var seen = stat()
+        XCTAssertEqual(lstat(doomed.path, &seen), 0)
+        let (done, failures) = try FileActions.moveToTrash([
+            FileActions.Target(url: doomed, node: 7, bytes: 400, isFolder: false, length: 400,
+                               modified: Int32(truncatingIfNeeded: seen.st_mtimespec.tv_sec))])
+        XCTAssertEqual(failures.count, 0, "\(failures)")
+        let item = try XCTUnwrap(done.first)
+        XCTAssertFalse(fm.fileExists(atPath: doomed.path))
+
+        try FileActions.restore(item)
+        XCTAssertTrue(fm.fileExists(atPath: doomed.path), "undo did not put it back")
+        XCTAssertEqual(try Data(contentsOf: doomed).count, 400)
+    }
+
+
+    /// Undo puts a file back at a path it no longer owns. Something else can be
+    /// standing there — the point of the check is that undo is not allowed to
+    /// be the thing that destroys it.
+    func testARestoreOntoAnOccupiedPathDoesNotOverwriteIt() throws {
+        let doomed = root.appendingPathComponent("doomed.bin")
+        try Data(repeating: 1, count: 400).write(to: doomed)
+        var seen = stat()
+        XCTAssertEqual(lstat(doomed.path, &seen), 0)
+        let (done, _) = try FileActions.moveToTrash([
+            FileActions.Target(url: doomed, node: 7, bytes: 400, isFolder: false, length: 400,
+                               modified: Int32(truncatingIfNeeded: seen.st_mtimespec.tv_sec))])
+        let item = try XCTUnwrap(done.first)
+        if let url = item.trashURL { trashed.append(url) }
+
+        // Somebody else takes the name while the item sits in the Trash.
+        try Data(repeating: 9, count: 12_345).write(to: doomed)
+
+        XCTAssertThrowsError(try FileActions.restore(item))
+        XCTAssertEqual(try Data(contentsOf: doomed).count, 12_345,
+                       "undo overwrote the file that was standing there")
+    }
+
 }

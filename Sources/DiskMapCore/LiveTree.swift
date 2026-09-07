@@ -356,18 +356,31 @@ public final class LiveTree: @unchecked Sendable {
                return store.isDirectory(c) == e.flags.contains(.directory)
            }) {
             var delta: Int64 = 0, deltaPhysical: Int64 = 0
+            // The date and the flags are written here too, so the size alone
+            // cannot say whether anything moved. A symlink is the case that
+            // costs something: its contribution to a folder hash is *where it
+            // points*, read from disk when hashing and never held in the store,
+            // so re-pointing `current` from one release to a same-length
+            // sibling changes no size at all. The revision then does not move,
+            // and the report cache keyed on it keeps answering for where the
+            // link used to point — including "these two folders are copies".
+            var touched = false
             for e in entries {
                 let c = existing[e.name]!
                 guard !store.isDirectory(c) else { continue }
                 delta += e.logical - store.totalLogical[Int(c)]
                 deltaPhysical += e.physical - store.totalPhysical[Int(c)]
+                if store.mtime[Int(c)] != e.mtime
+                    || store.flags[Int(c)] != e.flags.rawValue { touched = true }
                 store.totalLogical[Int(c)] = e.logical
                 store.totalPhysical[Int(c)] = e.physical
                 store.mtime[Int(c)] = e.mtime
                 store.flags[Int(c)] = e.flags.rawValue
             }
-            guard delta != 0 || deltaPhysical != 0 else { return false }
-            resizedSinceFlush += 1
+            guard delta != 0 || deltaPhysical != 0 || touched else { return false }
+            // Counted as a resize only when something actually resized; this is
+            // the number the flush interval is tuned against.
+            if delta != 0 || deltaPhysical != 0 { resizedSinceFlush += 1 }
             entriesSinceFlush += entries.count
             changes += 1
             store.totalLogical[Int(node)] += delta

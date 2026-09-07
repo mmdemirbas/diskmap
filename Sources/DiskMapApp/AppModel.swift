@@ -251,6 +251,13 @@ struct VerifyStatus {
 
 /// The folder hashes cover the whole tree and only change when the tree does,
 /// so browsing with the panel open should not pay for them again each time.
+///
+/// The key is the tree's revision, and a hash is not purely a function of the
+/// tree: a symlink contributes where it points, which is read from disk. That
+/// holds together only because the revision moves whenever a relist writes
+/// anything — including a date with no size behind it, which is all a
+/// re-pointed link leaves in the store. The cache is exactly as fresh as the
+/// tree, never fresher.
 final class SignatureCache: @unchecked Sendable {
     private let lock = NSLock()
     private var revision = -1
@@ -2268,10 +2275,20 @@ final class AppModel: ObservableObject {
         guard let batch = undoStack.popLast() else { return }
         var restored = 0
         var lastFailure: String?
+        var stillInTheTrash: [TrashedItem] = []
         for item in batch.items {
             do { try FileActions.restore(item); restored += 1 }
-            catch { lastFailure = error.localizedDescription }
+            catch {
+                lastFailure = error.localizedDescription
+                stillInTheTrash.append(item)
+            }
         }
+        // Whatever did not come back is still in the Trash and still belongs
+        // somewhere, and this app was the only thing that knew where. Dropping
+        // the batch on a failure spent the undo without doing it — put the
+        // remainder back so a second press can try again once whatever was in
+        // the way is out of it.
+        if !stillInTheTrash.isEmpty { undoStack.append(TrashBatch(items: stillInTheTrash)) }
 
         // Only the folders that actually got something back need re-reading.
         var parents = Set<String>()

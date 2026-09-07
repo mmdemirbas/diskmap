@@ -110,8 +110,17 @@ public enum FileActions {
     }
 
     /// Undo for a trash operation: moves the item back where it came from.
+    ///
+    /// A missing trash URL is a failure, not a no-op. `trashItem` reports where
+    /// it put things and there is no known volume where it does not, but the
+    /// nil case has to be handled and returning quietly made the caller count
+    /// it as restored — so undoing a batch could say "restored 12 items" with
+    /// twelve items still in the Trash.
     public static func restore(_ item: TrashedItem) throws {
-        guard let from = item.trashURL else { return }
+        guard let from = item.trashURL else {
+            throw FileActionError.failed(url: item.originalURL,
+                                         underlying: "the Trash did not say where it put this")
+        }
         try FileManager.default.moveItem(at: from, to: item.originalURL)
     }
 

@@ -390,4 +390,49 @@ extension LiveUpdateTests {
             XCTAssertTrue(store.flagSet(doomed).contains(.removed))
         }
     }
+
+    /// A folder's hash is not a function of the store alone: a symlink
+    /// contributes where it points, which is read from disk at hashing time and
+    /// never stored. So the report cache — keyed on the tree's change counter —
+    /// has to be invalidated by a relist that saw a symlink move, and the only
+    /// thing in the store that moves with it is the date.
+    ///
+    /// Re-pointing `current` from one release to another of the same length is
+    /// the ordinary shape of a deploy tree, and it changes no size at all.
+    ///
+    /// The date is stored to the second, so the re-point is given a date the
+    /// store cannot mistake for the old one. Two changes inside one second are
+    /// invisible here for the same reason they are invisible to the re-check
+    /// before a deletion, and that limit is the subject of its own note rather
+    /// than something this test can hide by sleeping.
+    func testRepointingASymlinkCountsAsAChange() throws {
+        try write("releases/2026-01/app.bin", 10_000)
+        try write("releases/2026-02/app.bin", 20_000)
+        let link = root.appendingPathComponent("live/current")
+        try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: "../releases/2026-01")
+
+        let tree = tree()
+        let before = signature(tree, "live")
+        let revisionBefore = tree.changeCount
+
+        try fm.removeItem(at: link)
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: "../releases/2026-02")
+        setLinkDate(link, secondsAgo: 3600)
+
+        XCTAssertTrue(tree.refresh(directory: link.deletingLastPathComponent().path),
+                      "the relist reported nothing happened, so nothing downstream re-reads")
+        XCTAssertGreaterThan(tree.changeCount, revisionBefore,
+                             "the folder now points somewhere else and the revision did not move, "
+                             + "so every cache keyed on it keeps the answer for where it used to point")
+        XCTAssertNotEqual(signature(tree, "live"), before)
+    }
+
+    /// Sets a symlink's own date without following it.
+    private func setLinkDate(_ url: URL, secondsAgo: Int) {
+        var times = [timeval(tv_sec: time(nil) - secondsAgo, tv_usec: 0),
+                     timeval(tv_sec: time(nil) - secondsAgo, tv_usec: 0)]
+        XCTAssertEqual(url.path.withCString { lutimes($0, &times) }, 0)
+    }
+
 }
