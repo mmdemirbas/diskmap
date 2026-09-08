@@ -239,7 +239,7 @@ public enum Find {
     /// faster than the tuple once the caller is inlined — kept because it is
     /// the simpler thing to read, not because it bought anything.
     @inline(__always)
-    private static func matchStart(_ haystack: UnsafeBufferPointer<UInt8>,
+    static func matchStart(_ haystack: UnsafeBufferPointer<UInt8>,
                                    _ offset: Int, _ length: Int,
                                    _ needle: [UInt8]) -> Int {
         guard let base = haystack.baseAddress else { return -1 }
@@ -338,7 +338,7 @@ public enum Find {
 
     /// Nil when the needle is not plain ASCII, which is the signal to take the
     /// slower path that folds case properly.
-    private static func asciiLowered(_ s: String) -> [UInt8]? {
+    static func asciiLowered(_ s: String) -> [UInt8]? {
         var out: [UInt8] = []
         out.reserveCapacity(s.utf8.count)
         for byte in s.utf8 {

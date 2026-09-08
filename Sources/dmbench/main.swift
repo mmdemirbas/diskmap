@@ -505,6 +505,49 @@ func cmdFind(_ path: String, _ needle: String) {
     }
 }
 
+/// One line per sort key, every field starting at the same column.
+private func report(_ label: String, _ ms: Double, _ page: FileTablePage) {
+    let name = label.padding(toLength: 11, withPad: " ", startingAt: 0)
+    let rows = "\(page.rows.count) of \(page.total.formatted())"
+    print(String(format: "  %@%7.1f ms   %@", name, ms,
+                 rows.padding(toLength: 20, withPad: " ", startingAt: 0) + fmt(page.totalPhysical)))
+}
+
+/// What the flat table costs, per sort key.
+///
+/// The claim the screen rests on is that re-ordering ten million files does
+/// not mean sorting ten million files: the walk keeps only the page it is
+/// about to show. This is where that claim is checked against a real tree
+/// rather than a fixture.
+func cmdTable(_ path: String, _ limit: Int) {
+    let store = DiskScanner().scan(ScanOptions(rootPath: path)).store
+    print("\(store.count.formatted()) nodes, page of \(limit)")
+    // The table's own total, summed file by file, against what the scan
+    // aggregated bottom-up. They are two routes to the same number, and a
+    // footer that disagrees with the map is worse than no footer.
+    print("  tree total \(fmt(store.totalPhysical[0]))")
+    for sort in FileSort.allCases {
+        var best = Double.infinity
+        var page = FileTablePage()
+        for _ in 0..<3 {
+            let t0 = DispatchTime.now()
+            page = FileTable.page(store: store, sort: sort, ascending: false, limit: limit)
+            best = min(best, Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6)
+        }
+        report(sort.rawValue, best, page)
+    }
+    // A filtered pass costs the same walk plus the test, and it is the shape
+    // most likely to be run repeatedly while somebody narrows an answer.
+    var filter = FileFilter()
+    filter.categories = [.video]
+    filter.minBytes = 100 << 20
+    let t0 = DispatchTime.now()
+    let filtered = FileTable.page(store: store, filter: filter, sort: .size, limit: limit)
+    let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+    report("video>100M", ms, filtered)
+    for row in filtered.rows.prefix(5) { print("    \(fmt(row.physical))  \(row.path)") }
+}
+
 final class Tally: @unchecked Sendable {
     private let lock = NSLock()
     private var counts: [String: Int] = [:]
@@ -630,6 +673,8 @@ case "snapshot": cmdSnapshot(args.count > 2 ? args[2] : FileManager.default.home
 case "changes": cmdChanges(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                            args.count > 3 ? args[3] : nil)
 case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
+case "table": cmdTable(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                       args.count > 3 ? (Int(args[3]) ?? 1000) : 1000)
 case "find": cmdFind(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                      args.count > 3 ? args[3] : "node_modules")
 case "churn": cmdChurn(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
@@ -648,5 +693,5 @@ default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]
                + " | dupes <path> | compare <left> <right> [--verify]"
                + " | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
-               + " | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
+               + " | table <path> [rows] | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
 }
