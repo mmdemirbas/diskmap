@@ -393,7 +393,7 @@ final class AppModel: ObservableObject {
     @Published var reviewing: [ReviewGroup]?
     @Published private(set) var reviewPlan: TrashPlan?
     @Published private(set) var reviewRefusal: TrashRefusal?
-    @Published var suggestions: [CleanupSuggestion] = []
+    var suggestions: [CleanupSuggestion] { space.suggestions }
     @Published var showCompare = false
     @Published var showCompareIgnore = false
     @Published var compareLeft = ""
@@ -485,12 +485,18 @@ final class AppModel: ObservableObject {
     @Published private(set) var findTotal = 0
     @Published private(set) var findSearching = false
     private var findTask: Task<Void, Never>?
-    @Published var suggestionsLoading = false
+    var suggestionsLoading: Bool { space.loading }
     @Published var showCleanup = false
     /// Sizes below which a suggestion is not worth making. A field rather than
     /// a constant so a fixture can exercise the screen without a gigabyte of
     /// files, and so it can become a preference later.
-    var cleanupThresholds = Cleanup.Thresholds()
+    /// Where the easy space is. Re-emitted like the session, so the sheet that
+    /// reads `model.suggestions` did not have to be re-pointed for the move.
+    let space = SpaceModule()
+    private var spaceRelay: AnyCancellable?
+    var cleanupThresholds: Cleanup.Thresholds {
+        get { space.thresholds } set { space.thresholds = newValue }
+    }
     /// Folders the app must never propose removing. Kept across launches,
     /// because "stop suggesting my Drive" is not a thing anyone wants to say
     /// twice. Deliberately not applied to the scan: excluding a folder from
@@ -602,6 +608,9 @@ final class AppModel: ObservableObject {
         // Re-emitting them keeps every existing view — all of which observe
         // this object — seeing the scan exactly as before.
         sessionRelay = session.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+        spaceRelay = space.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
         volumes = VolumeInfo.mountedVolumes()
@@ -889,7 +898,7 @@ final class AppModel: ObservableObject {
         selectedInfo = nil
         checked = []
         reviewing = nil
-        suggestions = []
+        space.clear()
         summary = nil
         largeFiles = []
         matchGroups = []
@@ -1512,43 +1521,11 @@ final class AppModel: ObservableObject {
 
     // MARK: - Where the easy space is
 
-    /// Computed when asked for rather than kept up to date: it needs the match
-    /// passes, and nobody wants to pay for those while browsing.
     func openCleanup() {
         guard let tree else { return }
         showCleanup = true
-        suggestionsLoading = true
-        let root = currentDirectory
-        let cache = signatureCache
-        let revision = tree.changeCount
-        let thresholds = cleanupThresholds
-        let excluded = excludedPaths
-        Task { [weak self] in
-            let found = await Task.detached(priority: .userInitiated) {
-                Self.computeSuggestions(tree: tree, root: root, cache: cache,
-                                        revision: revision, thresholds: thresholds,
-                                        excluding: excluded)
-            }.value
-            guard let self else { return }
-            self.suggestions = found
-            self.suggestionsLoading = false
-        }
-    }
-
-    nonisolated static func computeSuggestions(tree: LiveTree, root: Int32,
-                                               cache: SignatureCache, revision: Int,
-                                               thresholds: Cleanup.Thresholds,
-                                               excluding: [String] = []) -> [CleanupSuggestion] {
-        tree.withStore { store in
-            let folders = FolderMatches.find(store: store, root: root,
-                                             precomputed: cache.signatures(for: store,
-                                                                           revision: revision))
-            let files = Duplicates.find(store: store, root: root, insideMatched: folders)
-            return Cleanup.suggest(store: store, root: root,
-                                   folderCopies: folders.map(\.nodes),
-                                   fileCopies: files.map(\.nodes),
-                                   thresholds: thresholds, excluding: excluding)
-        }
+        space.load(tree: tree, root: currentDirectory,
+                   cache: signatureCache, excluding: excludedPaths)
     }
 
     /// A suggestion never deletes. It fills the selection and hands over to the

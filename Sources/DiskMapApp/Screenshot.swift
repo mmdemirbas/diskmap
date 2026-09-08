@@ -96,12 +96,8 @@ enum OffscreenRenderer {
             model.openChanges()
             view = AnyView(ChangesView(model: model).environment(\.colorScheme, scheme))
         } else if env["DISKMAP_SHEET"] == "cleanup" {
-            model.suggestions = MainActor.assumeIsolated {
-                AppModel.computeSuggestions(tree: model.tree!, root: model.currentDirectory,
-                                            cache: SignatureCache(), revision: 0,
-                                            thresholds: model.cleanupThresholds)
-            }
-            model.suggestionsLoading = false
+            model.space.loadSynchronously(tree: model.tree!, root: model.currentDirectory,
+                                          cache: SignatureCache())
             view = AnyView(CleanupView(model: model).environment(\.colorScheme, scheme))
         } else if env["DISKMAP_SHEET"] == "compare" {
             // Two folders on disk, walked for real. There is no fixture form of
