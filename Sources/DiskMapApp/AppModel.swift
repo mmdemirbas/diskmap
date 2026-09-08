@@ -1902,6 +1902,23 @@ final class AppModel: ObservableObject {
     func runComparison() { compare.runComparison() }
     func cancelComparison() { compare.cancelComparison() }
     func chooseCompareSide(_ side: Side) { compare.chooseCompareSide(side) }
+
+    /// Sets one side from a path that is already known — a drop, or a folder
+    /// picked somewhere else in the app.
+    ///
+    /// A file resolves to the folder holding it. Dropping a file on a folder
+    /// comparison is a near miss rather than a mistake, and refusing it teaches
+    /// nothing.
+    func setCompareSide(_ side: Side, _ url: URL) {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path,
+                                                    isDirectory: &isDirectory)
+        guard exists else { return }
+        let path = isDirectory.boolValue ? url.path : url.deletingLastPathComponent().path
+        if side == .left { compareLeft = path } else { compareRight = path }
+        compare.clearResult()
+        if canCompare { runComparison() }
+    }
     func swapCompareSides() { compare.swapCompareSides() }
     func rebuildCompareRows() { compare.rebuildCompareRows() }
     func openTheDifferences(_ tree: DiffTree) { compare.openTheDifferences(tree) }

@@ -13,6 +13,8 @@ import SwiftUI
 struct CompareView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared
+    /// Which side the pointer is currently over, while a drag is in flight.
+    @State private var dropTarget: Side?
     @Environment(\.colorScheme) private var scheme
 
     private static let stepRowHeight: CGFloat = 30
@@ -87,12 +89,16 @@ struct CompareView: View {
                    items: model.folderComparison?.rightItems)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .frame(height: 84)
+        .frame(height: 96)
     }
 
+    /// Each side is a well you can drop a folder onto, so it is drawn as one:
+    /// a bordered surface rather than a line of text with a button beside it.
+    /// An invisible drop target is a feature nobody finds.
     private func picker(_ side: Side, _ path: String,
                         bytes: Int64?, items: Int?) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let hot = dropTarget == side
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(side == .left ? loc[.compareLeftSide] : loc[.compareRightSide])
                     .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
@@ -110,7 +116,18 @@ struct CompareView: View {
                 .font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
                 .lineLimit(1)
         }
+        .padding(.horizontal, 8).padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(hot ? Color.accentColor.opacity(0.10) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
+            hot ? Color.accentColor : Color(nsColor: .separatorColor),
+            lineWidth: hot ? 2 : 1))
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first else { return false }
+            model.setCompareSide(side, url)
+            return true
+        } isTargeted: { dropTarget = $0 ? side : nil }
     }
 
     /// The pairs compared before. A sync is a thing you do again next week, and
