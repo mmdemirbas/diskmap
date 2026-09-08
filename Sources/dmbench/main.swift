@@ -497,10 +497,11 @@ func cmdFind(_ path: String, _ needle: String) {
         let t0 = DispatchTime.now()
         let found = Find.search(store: store, needle: probe, limit: 300)
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
-        print(String(format: "  %-28@ %7.1f ms  %d shown", probe as NSString, ms, found.count))
+        print(String(format: "  %-28@ %7.1f ms  %d shown of %d", probe as NSString, ms,
+                     found.items.count, found.total))
     }
-    for item in Find.search(store: store, needle: needle, limit: 5) {
-        print("    \(fmt(item.physical))  \(item.path)")
+    for item in Find.search(store: store, needle: needle, limit: 5).items {
+        print("    \(fmt(item.physical))  \(item.kind)  \(item.path)")
     }
 }
 

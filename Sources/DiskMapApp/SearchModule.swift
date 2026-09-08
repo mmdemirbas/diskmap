@@ -46,15 +46,12 @@ final class SearchModule: ObservableObject {
             // work that has already started.
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }
-            let (found, count) = await Task.detached(priority: .userInitiated) {
-                tree.withStore { store in
-                    let all = Find.search(store: store, needle: needle, limit: .max)
-                    return (Array(all.prefix(limit)), all.count)
-                }
+            let outcome = await Task.detached(priority: .userInitiated) {
+                tree.withStore { Find.search(store: $0, needle: needle, limit: limit) }
             }.value
             guard !Task.isCancelled, let self, self.text == needle else { return }
-            self.results = found
-            self.total = count
+            self.results = outcome.items
+            self.total = outcome.total
             self.searching = false
         }
     }
@@ -67,12 +64,9 @@ final class SearchModule: ObservableObject {
             return
         }
         let needle = text
-        let (found, count) = tree.withStore { store -> ([FoundItem], Int) in
-            let all = Find.search(store: store, needle: needle, limit: .max)
-            return (Array(all.prefix(shown)), all.count)
-        }
-        results = found
-        total = count
+        let outcome = tree.withStore { Find.search(store: $0, needle: needle, limit: shown) }
+        results = outcome.items
+        total = outcome.total
         searching = false
     }
 
