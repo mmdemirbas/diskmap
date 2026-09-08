@@ -120,12 +120,7 @@ enum OffscreenRenderer {
             if let d = env["DISKMAP_COMPARE_DATE"], let filter = DateFilter(rawValue: d) {
                 model.dateFilter = filter
             }
-            if case .success(let comparison) = FolderDiff.compare(left: model.compareLeft,
-                                                                  right: model.compareRight) {
-                model.folderComparison = comparison
-                model.openTheDifferences(comparison.tree)
-                model.rebuildCompareRows()
-            }
+            model.compare.compareSynchronously()
             switch env["DISKMAP_COMPARE_PAGE"] {
             case "plan": model.previewSync()
             case "redundant": model.previewRemoveRedundant(.right)
