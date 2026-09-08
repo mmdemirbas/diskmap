@@ -95,6 +95,7 @@ enum OffscreenRenderer {
                 model.space.loadSynchronously(tree: tree, root: model.currentDirectory,
                                               cache: SignatureCache())
             }
+            if tab == .duplicates { model.refreshSummarySync() }
             if tab == .search, let tree = model.tree {
                 model.findText = env["DISKMAP_FIND"] ?? ""
                 model.search.runSynchronously(in: tree)

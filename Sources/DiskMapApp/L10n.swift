@@ -386,7 +386,7 @@ final class L10n: ObservableObject {
     enum K: String, CaseIterable {
         case appName, inUse, purgeable, free, why, capacityHelp
         case tabMap, tabDuplicates, tabCompare, tabSearch, closeTab
-        case needsAScan, chooseWhatToScan
+        case needsAScan, chooseWhatToScan, copiesSubtitle
         case whereSpaceIs, whereSpaceIsSubtitle, capacity, used, freeReally, freeFinder
         case purgeableNote, writableNow, includesPurgeable
         case scanVsFilesystem, volumeReportsUsed, scanAttributed, unaccounted, done
@@ -468,6 +468,8 @@ final class L10n: ObservableObject {
         .needsAScan: ("This tool reads a scan, and nothing has been scanned yet",
                       "Bu araç bir tarama okur, henüz hiçbir şey taranmadı"),
         .chooseWhatToScan: ("Choose what to scan", "Ne taranacağını seçin"),
+        .copiesSubtitle: ("Folders and files that appear more than once. Nothing is removed from here — every row opens the full list first.",
+                          "Birden fazla kez görünen klasörler ve dosyalar. Buradan hiçbir şey silinmez — her satır önce tam listeyi açar."),
         .inUse: ("In use", "Kullanımda"),
         .purgeable: ("Purgeable", "Temizlenebilir"),
         .free: ("Free", "Boş"),

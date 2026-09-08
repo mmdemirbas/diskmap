@@ -12,10 +12,7 @@ import SwiftUI
 /// is being read, which is the drift the safety review spent eight passes
 /// closing. Both stay sheets on purpose.
 enum ModuleTab: String, Identifiable, Hashable, CaseIterable {
-    // Copies is not here yet. It is still a panel inside the map rather than a
-    // tool of its own, and a tab that showed the map with a panel preselected
-    // would be a tab in name only.
-    case map, space, compare, search, changes
+    case map, space, duplicates, compare, search, changes
 
     var id: String { rawValue }
 
@@ -30,6 +27,7 @@ enum ModuleTab: String, Identifiable, Hashable, CaseIterable {
         switch self {
         case .map: "square.grid.2x2.fill"
         case .space: "sparkles"
+        case .duplicates: "doc.on.doc"
         case .compare: "arrow.left.arrow.right"
         case .search: "magnifyingglass"
         case .changes: "clock.arrow.circlepath"
@@ -40,6 +38,7 @@ enum ModuleTab: String, Identifiable, Hashable, CaseIterable {
         switch self {
         case .map: .tabMap
         case .space: .freeUpSpace
+        case .duplicates: .tabDuplicates
         case .compare: .tabCompare
         case .search: .tabSearch
         case .changes: .whatChanged

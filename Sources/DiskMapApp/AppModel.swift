@@ -405,11 +405,15 @@ final class AppModel: ObservableObject {
     /// longer closes another, which is the entire reason these stopped being
     /// sheets.
     func open(_ tab: ModuleTab) {
+        let wasClosed = !openTabs.contains(tab)
         if !openTabs.contains(tab) {
             openTabs.append(tab)
             openTabs.sort { ModuleTab.allCases.firstIndex(of: $0)! < ModuleTab.allCases.firstIndex(of: $1)! }
         }
         activeTab = tab
+        // The copy report is a second walk and only runs for whoever wants it,
+        // so opening the tool is what asks for it.
+        if wasClosed, tab == .duplicates { refreshSummary() }
     }
 
     func close(_ tab: ModuleTab) {
@@ -1355,10 +1359,10 @@ final class AppModel: ObservableObject {
     /// Whole-subtree reports. Walking 11M nodes takes a moment, so it runs off
     /// the main thread and only when a report panel is actually showing.
     func refreshSummary() {
-        guard let tree, panel != .contents else { return }
+        guard let tree, wantsAReport else { return }
         let root = currentDirectory
         let physical = usePhysicalSize
-        let wantsDuplicates = panel == .duplicates
+        let wantsDuplicates = wantsDuplicateReport
         // Verdicts belong to the tree that produced them. Dropping the state
         // without stopping the run would leave gigabytes of reading in flight
         // for an answer nobody can see any more.
@@ -1380,10 +1384,24 @@ final class AppModel: ObservableObject {
     }
 
     /// Blocking report used by the offscreen renderer, which has no async pass.
+    /// Who is asking for a report, and whether copies are part of it.
+    ///
+    /// This used to read the map's side panel and nothing else, which was true
+    /// while the copy report only existed as one of that panel's four views.
+    /// It is a tool of its own now, so the panel is one of two things that can
+    /// want the answer.
+    private var wantsAReport: Bool {
+        panel != .contents || openTabs.contains(.duplicates)
+    }
+
+    private var wantsDuplicateReport: Bool {
+        panel == .duplicates || openTabs.contains(.duplicates)
+    }
+
     func refreshSummarySync() {
         guard let tree else { return }
         apply(Self.report(tree: tree, root: currentDirectory, physical: usePhysicalSize,
-                          includeDuplicates: panel == .duplicates,
+                          includeDuplicates: wantsDuplicateReport,
                           cache: signatureCache, revision: tree.changeCount))
     }
 

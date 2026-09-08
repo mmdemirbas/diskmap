@@ -90,6 +90,7 @@ struct ContentView: View {
         switch model.activeTab {
         case .map:        mapTab
         case .space:      needsScan { CleanupView(model: model) }
+        case .duplicates: needsScan { CopiesView(model: model) }
         case .compare:    CompareView(model: model)
         case .search:     needsScan { FindView(model: model) }
         case .changes:    needsScan { ChangesView(model: model) }
