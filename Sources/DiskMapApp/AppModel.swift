@@ -426,53 +426,38 @@ final class AppModel: ObservableObject {
     /// time it draws.
     private var skippedPrefix: [Int] = []
 
-    /// Persisted across launches: these are settings, not session state.
-    @AppStorage("compareIgnore") private var storedIgnore = CompareOptions.noise.joined(separator: "\n")
-    @AppStorage("compareDateTolerance") var compareDateTolerance = 0
-    @AppStorage("comparePairs") private var storedPairs = ""
+    /// Persisted across launches, and shared by every comparison rather than
+    /// owned by one of them.
+    let compareSettings = CompareSettings()
+    private var compareSettingsRelay: AnyCancellable?
 
-    var compareIgnore: [String] {
-        get { storedIgnore.split(separator: "\n").map(String.init).filter { !$0.isEmpty } }
-        set { objectWillChange.send(); storedIgnore = newValue.joined(separator: "\n") }
+    var compareDateTolerance: Int {
+        get { compareSettings.dateTolerance } set { compareSettings.dateTolerance = newValue }
     }
+    var compareIgnore: [String] { compareSettings.ignore }
+    var compareOptions: CompareOptions { compareSettings.options }
+    var comparePairs: [(left: String, right: String)] { compareSettings.pairs }
 
     /// Adding or dropping a pattern changes what the answer on screen is, so
     /// the answer is worked out again rather than left standing as something
-    /// the current settings would not produce.
+    /// the current settings would not produce. The settings object reports
+    /// whether anything actually changed; deciding what to do about it is this
+    /// object's business, not its.
     func addIgnorePattern(_ pattern: String) {
-        let trimmed = pattern.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !compareIgnore.contains(trimmed) else { return }
-        compareIgnore = compareIgnore + [trimmed]
-        if folderComparison != nil { runComparison() }
+        if compareSettings.add(pattern), folderComparison != nil { runComparison() }
     }
 
     func removeIgnorePattern(_ pattern: String) {
-        compareIgnore = compareIgnore.filter { $0 != pattern }
-        if folderComparison != nil { runComparison() }
+        if compareSettings.remove(pattern), folderComparison != nil { runComparison() }
     }
 
     func resetIgnorePatterns() {
-        compareIgnore = CompareOptions.noise
+        compareSettings.reset()
         if folderComparison != nil { runComparison() }
     }
 
-    var compareOptions: CompareOptions {
-        CompareOptions(ignore: compareIgnore, dateTolerance: Int32(compareDateTolerance))
-    }
-
-    /// Folder pairs compared before, newest first. A sync is a thing you do
-    /// again next week, and retyping both sides is the part nobody does.
-    var comparePairs: [(left: String, right: String)] {
-        storedPairs.split(separator: "\n").compactMap { line in
-            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
-            return parts.count == 2 ? (parts[0], parts[1]) : nil
-        }
-    }
-
     private func rememberPair(_ left: String, _ right: String) {
-        var kept = comparePairs.filter { !($0.left == left && $0.right == right) }
-        kept.insert((left, right), at: 0)
-        storedPairs = kept.prefix(8).map { "\($0.left)\t\($0.right)" }.joined(separator: "\n")
+        compareSettings.remember(left, right)
     }
     private var compareCancel: CancelToken?
     private var compareGeneration = 0
@@ -625,6 +610,9 @@ final class AppModel: ObservableObject {
             self?.objectWillChange.send()
         }
         changesRelay = changes.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+        compareSettingsRelay = compareSettings.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
         volumes = VolumeInfo.mountedVolumes()
