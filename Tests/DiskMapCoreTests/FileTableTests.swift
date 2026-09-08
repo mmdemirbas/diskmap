@@ -165,6 +165,22 @@ final class FileTableTests: XCTestCase {
         XCTAssertGreaterThan(withFolders.total, filesOnly.total)
     }
 
+    /// The live tree marks a node removed rather than compacting the arrays, so
+    /// a table that did not skip those would keep showing files that have been
+    /// deleted since the scan — on the one screen whose rows lead to the Trash.
+    func testSomethingDeletedSinceTheScanIsNotARow() throws {
+        try write("staying.txt", 1_000)
+        try write("going.txt", 1_000)
+        let tree = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: root.path)))
+        store = tree.withStore { $0 }
+        let doomed = try XCTUnwrap(tree.withStore { $0.find(path: root.appendingPathComponent("going.txt").path) })
+
+        XCTAssertEqual(Set(names(page())), ["staying.txt", "going.txt"])
+        tree.markRemoved(doomed)
+        XCTAssertEqual(names(page()), ["staying.txt"])
+        XCTAssertEqual(page().total, 1)
+    }
+
     // MARK: - Filters
 
     func testFilterBySizeWindow() throws {

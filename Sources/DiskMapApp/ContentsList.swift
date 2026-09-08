@@ -186,7 +186,7 @@ private struct RowView: View {
     }
 
     private var icon: some View {
-        Image(systemName: row.isDirectory ? "folder.fill" : iconName(row.category))
+        Image(systemName: row.isDirectory ? "folder.fill" : row.category.glyph)
             .font(.system(size: 11))
             .foregroundStyle(row.category.color(scheme))
             .frame(width: 14)
@@ -206,17 +206,6 @@ private struct RowView: View {
         }
     }
 
-    private func iconName(_ c: FileCategory) -> String {
-        switch c {
-        case .video: "film";                case .image: "photo"
-        case .audio: "waveform";            case .archive: "shippingbox"
-        case .document: "doc.text";         case .code: "chevron.left.forwardslash.chevron.right"
-        case .application: "app";           case .diskImage: "externaldrive"
-        case .virtualMachine: "desktopcomputer"
-        case .model: "brain";               case .cache: "clock.arrow.circlepath"
-        default: "doc"
-        }
-    }
 }
 struct DetailsPanel: View {
     @ObservedObject var model: AppModel

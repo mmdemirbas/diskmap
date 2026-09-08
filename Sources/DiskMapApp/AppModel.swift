@@ -423,6 +423,7 @@ final class AppModel: ObservableObject {
         switch tab {
         case .compare: compare.close()
         case .search: search.clear()
+        case .files: files.clear()
         default: break
         }
         openTabs.removeAll { $0 == tab }
@@ -513,12 +514,54 @@ final class AppModel: ObservableObject {
     /// re-pointed for the move.
     let search = SearchModule()
     private var searchRelay: AnyCancellable?
+
+    /// Every file at once, as a flat table. Re-emitted like the rest, so a view
+    /// observing this object sees the table change without knowing there is a
+    /// second object underneath.
+    let files = FilesModule()
+    private var filesRelay: AnyCancellable?
     var findText: String {
         get { search.text } set { search.text = newValue }
     }
     var findResults: [FoundItem] { search.results }
     var findTotal: Int { search.total }
     var findSearching: Bool { search.searching }
+
+    // MARK: - The flat table
+
+    /// Forwarded the way the comparison's settings are: a view binds to this
+    /// object, and `$model.filesText` reaches the module without every screen
+    /// having to know there is one.
+    var filesText: String {
+        get { files.text } set { files.text = newValue }
+    }
+    var filesKinds: Set<FileCategory> {
+        get { files.categories } set { files.categories = newValue }
+    }
+    var filesSize: FilesModule.SizeBand {
+        get { files.sizeBand } set { files.sizeBand = newValue }
+    }
+    var filesTime: FilesModule.TimeBand {
+        get { files.timeBand } set { files.timeBand = newValue }
+    }
+    var filesShowFolders: Bool {
+        get { files.includeFolders } set { files.includeFolders = newValue }
+    }
+
+    func reloadFiles() { files.reload(in: tree) }
+    func resetFiles() { files.reset(in: tree) }
+    func sortFiles(by key: FileSort) { files.sortBy(key, in: tree) }
+    func showMoreFiles() { files.showMore(in: tree) }
+
+    func clearFileFilters() {
+        files.text = ""
+        files.categories = []
+        files.sizeBand = .any
+        files.timeBand = .any
+        files.includeFolders = false
+        files.reset(in: tree)
+    }
+
     var suggestionsLoading: Bool { space.loading }
     /// Sizes below which a suggestion is not worth making. A field rather than
     /// a constant so a fixture can exercise the screen without a gigabyte of
@@ -657,6 +700,9 @@ final class AppModel: ObservableObject {
             self?.objectWillChange.send()
         }
         searchRelay = search.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+        filesRelay = files.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
         changesRelay = changes.objectWillChange.sink { [weak self] in
@@ -1003,6 +1049,7 @@ final class AppModel: ObservableObject {
         checked = []
         reviewing = nil
         space.clear()
+        files.clear()
         summary = nil
         largeFiles = []
         matchGroups = []
@@ -1074,6 +1121,11 @@ final class AppModel: ObservableObject {
         guard windowIsVisible else { rebuildWhenVisible = true; return }
         refreshVolumeIfStale()
         rebuild()
+        // The flat table is a snapshot of the index, so something moved or
+        // trashed elsewhere leaves it showing a row that is no longer there.
+        // Only while it is open: the walk is a tenth of a second and nobody
+        // should pay for it to refresh a screen they cannot see.
+        if openTabs.contains(.files) { files.reload(in: tree) }
     }
 
     // MARK: - Navigation
@@ -1656,11 +1708,13 @@ final class AppModel: ObservableObject {
     /// Show a found item where it lives: open its folder, put the selection on
     /// it, and leave the sheet. Finding something and being told only its path
     /// would make the user do the navigating twice.
-    func focus(_ item: FoundItem) {
+    func focus(_ item: FoundItem) { focus(node: item.node) }
+
+    func focus(node: Int32) {
         guard let tree else { return }
         let parent = tree.withStore { store -> Int32 in
-            guard item.node > 0, item.node < Int32(store.count) else { return 0 }
-            return store.parent[Int(item.node)]
+            guard node > 0, node < Int32(store.count) else { return 0 }
+            return store.parent[Int(node)]
         }
         activeTab = .map
         // A filter still in force would hide the very row being focused.
@@ -1673,8 +1727,8 @@ final class AppModel: ObservableObject {
         } else {
             rebuild()
         }
-        select(item.node)
-        scrollTo = item.node
+        select(node)
+        scrollTo = node
     }
 
     /// The row the list should bring into view. Cleared once it has.

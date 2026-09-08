@@ -96,6 +96,21 @@ enum OffscreenRenderer {
                                               cache: SignatureCache())
             }
             if tab == .duplicates { model.refreshSummarySync() }
+            if tab == .files, let tree = model.tree {
+                model.filesText = env["DISKMAP_FILES_TEXT"] ?? ""
+                if let k = env["DISKMAP_FILES_KIND"], let kind = FileCategory.allCases
+                    .first(where: { String(describing: $0) == k }) {
+                    model.filesKinds = [kind]
+                }
+                if let b = env["DISKMAP_FILES_SIZE"],
+                   let band = FilesModule.SizeBand(rawValue: b) { model.filesSize = band }
+                if let b = env["DISKMAP_FILES_TIME"],
+                   let band = FilesModule.TimeBand(rawValue: b) { model.filesTime = band }
+                if let c = env["DISKMAP_FILES_SORT"], let sort = FileSort(rawValue: c) {
+                    model.files.sort = sort
+                }
+                model.files.reloadSynchronously(in: tree)
+            }
             if tab == .search, let tree = model.tree {
                 model.findText = env["DISKMAP_FIND"] ?? ""
                 model.search.runSynchronously(in: tree)

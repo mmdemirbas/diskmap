@@ -377,6 +377,25 @@ final class L10n: ObservableObject {
     func moreItems(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) küçük öğe daha" : "\(fmt(n)) smaller items"
     }
+    /// Never lets the rows on screen stand for the whole answer, and says how
+    /// much disk the whole answer accounts for rather than only what fits.
+    func filesShown(_ shown: Int, _ total: Int, _ bytes: String) -> String {
+        if shown >= total {
+            return active == .tr ? "\(fmt(total)) satır · \(bytes)"
+                                 : "\(fmt(total)) rows · \(bytes)"
+        }
+        return active == .tr ? "\(fmt(total)) satırın \(fmt(shown)) tanesi · toplam \(bytes)"
+                             : "\(fmt(shown)) of \(fmt(total)) rows · \(bytes) in all"
+    }
+
+    func showMoreRows(_ n: Int) -> String {
+        active == .tr ? "\(fmt(n)) satır daha" : "\(fmt(n)) more"
+    }
+
+    func kindsChosen(_ n: Int) -> String {
+        active == .tr ? "\(n) tür" : count(n, "kind", "kinds")
+    }
+
     func moreRows(_ n: Int) -> String {
         active == .tr ? "\(fmt(n)) öğe daha (listede gösterilmiyor)" : "\(fmt(n)) more items, not listed"
     }
@@ -390,7 +409,13 @@ final class L10n: ObservableObject {
 
     enum K: String, CaseIterable {
         case appName, inUse, purgeable, free, why, capacityHelp
-        case tabMap, tabDuplicates, tabCompare, tabSearch, closeTab
+        case tabMap, tabFiles, tabDuplicates, tabCompare, tabSearch, closeTab
+        case filesSubtitle, kind, folder, modified, marks, showInMap
+        case filterByName, filterByKind, filterBySize, filterByDate
+        case everyKind, includeFolders, clearFilters
+        case anySize, underOneMB, atLeast1MB, atLeast10MB, atLeast100MB, atLeast1GB
+        case anyTime, lastWeek, lastMonth, lastYear, olderThanAYear, olderThanTwoYears
+        case hardlinkMark, symlinkMark, compressedMark, unreadableMark
         case needsAScan, chooseWhatToScan, copiesSubtitle
         case startOverTitle, startOverBody, startOverConfirm
         case alreadyCovered, forgetFolder
@@ -468,7 +493,43 @@ final class L10n: ObservableObject {
         // Short forms, because these sit in a row of tabs rather than at the
         // top of a sheet with the width to explain themselves.
         .tabMap: ("Disk map", "Disk haritası"),
+        .tabFiles: ("All files", "Tüm dosyalar"),
         .tabDuplicates: ("Copies", "Kopyalar"),
+        .filesSubtitle: ("Every file in the scan on one list, however deep it sits. Sort by a column, or narrow it down, to ask a question the map cannot answer.",
+                         "Taramadaki her dosya, ne kadar derinde olursa olsun, tek listede. Haritanın yanıtlayamadığı bir soruyu sormak için bir sütuna göre sıralayın ya da listeyi daraltın."),
+        .kind: ("Kind", "Tür"),
+        .folder: ("Folder", "Klasör"),
+        .modified: ("Modified", "Değiştirilme"),
+        // The column of small marks at the end of a row: in iCloud only, a
+        // second link, compressed, unreadable.
+        .marks: ("Notes", "Notlar"),
+        .showInMap: ("Show in the map", "Haritada göster"),
+        .filterByName: ("Name contains", "Ad şunu içeriyor"),
+        .filterByKind: ("Only these kinds", "Yalnızca bu türler"),
+        .filterBySize: ("Only these sizes", "Yalnızca bu boyutlar"),
+        .filterByDate: ("Only these dates", "Yalnızca bu tarihler"),
+        .everyKind: ("Every kind", "Her tür"),
+        .includeFolders: ("Folders too", "Klasörler de"),
+        .clearFilters: ("Clear", "Temizle"),
+        .anySize: ("Any size", "Her boyut"),
+        .underOneMB: ("Under 1 MB", "1 MB'ın altı"),
+        .atLeast1MB: ("1 MB and up", "1 MB ve üstü"),
+        .atLeast10MB: ("10 MB and up", "10 MB ve üstü"),
+        .atLeast100MB: ("100 MB and up", "100 MB ve üstü"),
+        .atLeast1GB: ("1 GB and up", "1 GB ve üstü"),
+        .anyTime: ("Any date", "Her tarih"),
+        .lastWeek: ("Last 7 days", "Son 7 gün"),
+        .lastMonth: ("Last 30 days", "Son 30 gün"),
+        .lastYear: ("Last year", "Son bir yıl"),
+        .olderThanAYear: ("Untouched for a year", "Bir yıldır dokunulmamış"),
+        .olderThanTwoYears: ("Untouched for two years", "İki yıldır dokunulmamış"),
+        .hardlinkMark: ("A second link to bytes already counted somewhere else",
+                        "Başka bir yerde zaten sayılmış baytlara ikinci bağlantı"),
+        .symlinkMark: ("A symbolic link, not the file itself",
+                       "Sembolik bağlantı, dosyanın kendisi değil"),
+        .compressedMark: ("Stored compressed by the filesystem",
+                          "Dosya sistemi tarafından sıkıştırılmış olarak saklanıyor"),
+        .unreadableMark: ("Could not be read", "Okunamadı"),
         .tabCompare: ("Compare", "Karşılaştır"),
         .tabSearch: ("Find", "Bul"),
         .closeTab: ("Close tab", "Sekmeyi kapat"),

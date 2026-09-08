@@ -101,6 +101,7 @@ struct ContentView: View {
     @ViewBuilder private var openTool: some View {
         switch model.activeTab {
         case .map:        mapTab
+        case .files:      needsScan { FilesView(model: model) }
         case .space:      needsScan { CleanupView(model: model) }
         case .duplicates: needsScan { CopiesView(model: model) }
         case .compare:    CompareView(model: model)

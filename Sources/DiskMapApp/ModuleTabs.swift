@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The five tools, as things you open rather than things you are shown.
+/// The tools, as things you open rather than things you are shown.
 ///
 /// Each of these was a modal sheet, which meant opening one closed whatever
 /// was already there and none of them survived being left. A tab does not have
@@ -12,7 +12,7 @@ import SwiftUI
 /// is being read, which is the drift the safety review spent eight passes
 /// closing. Both stay sheets on purpose.
 enum ModuleTab: String, Identifiable, Hashable, CaseIterable {
-    case map, space, duplicates, compare, search, changes
+    case map, files, space, duplicates, compare, search, changes
 
     var id: String { rawValue }
 
@@ -26,6 +26,7 @@ enum ModuleTab: String, Identifiable, Hashable, CaseIterable {
     var icon: String {
         switch self {
         case .map: "square.grid.2x2.fill"
+        case .files: "tablecells"
         case .space: "sparkles"
         case .duplicates: "doc.on.doc"
         case .compare: "arrow.left.arrow.right"
@@ -37,6 +38,7 @@ enum ModuleTab: String, Identifiable, Hashable, CaseIterable {
     var key: L10n.K {
         switch self {
         case .map: .tabMap
+        case .files: .tabFiles
         case .space: .freeUpSpace
         case .duplicates: .tabDuplicates
         case .compare: .tabCompare

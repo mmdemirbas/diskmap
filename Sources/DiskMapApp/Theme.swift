@@ -60,6 +60,23 @@ extension FileCategory {
         case .other: t(.otherLabel)
         }
     }
+
+    /// One glyph per kind, shared by every list that shows a file. It lived in
+    /// the tree table until the flat table needed the same mapping, and a kind
+    /// drawn one way in one list and another way elsewhere is the reader
+    /// learning the same alphabet twice.
+    var glyph: String {
+        switch self {
+        case .folder: "folder.fill";        case .video: "film"
+        case .image: "photo";               case .audio: "waveform"
+        case .archive: "shippingbox";       case .document: "doc.text"
+        case .code: "chevron.left.forwardslash.chevron.right"
+        case .application: "app";           case .diskImage: "externaldrive"
+        case .virtualMachine: "desktopcomputer"
+        case .model: "brain";               case .cache: "clock.arrow.circlepath"
+        case .database: "doc";              case .other: "doc"
+        }
+    }
 }
 
 /// A sequential ramp, cool for fresh and warm for stale, so a folder full of
