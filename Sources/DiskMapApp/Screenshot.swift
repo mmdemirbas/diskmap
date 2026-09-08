@@ -95,6 +95,13 @@ enum OffscreenRenderer {
             model.currentDigest = tree.withStore { DiskDigest.of(store: $0, stats: tree.stats) }
             model.openChanges()
             view = AnyView(ChangesView(model: model).environment(\.colorScheme, scheme))
+        } else if env["DISKMAP_SHEET"] == "find", let tree = model.tree {
+            // Had no branch at all, so this sheet rendered as the main window
+            // and the search screen could not be looked at.
+            model.findText = env["DISKMAP_FIND"] ?? ""
+            model.search.runSynchronously(in: tree)
+            view = AnyView(FindView(model: model).environment(\.colorScheme, scheme)
+                .frame(width: width, height: height))
         } else if env["DISKMAP_SHEET"] == "cleanup" {
             model.space.loadSynchronously(tree: model.tree!, root: model.currentDirectory,
                                           cache: SignatureCache())

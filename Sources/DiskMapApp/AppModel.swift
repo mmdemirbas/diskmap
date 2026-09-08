@@ -478,13 +478,17 @@ final class AppModel: ObservableObject {
     private var compareGeneration = 0
 
     @Published var showFind = false
-    @Published var findText = ""
-    @Published private(set) var findResults: [FoundItem] = []
-    /// How many matched altogether. The list is capped, and a reader must not
-    /// take the rows they can see for the whole answer.
-    @Published private(set) var findTotal = 0
-    @Published private(set) var findSearching = false
-    private var findTask: Task<Void, Never>?
+    /// Finding one thing, and telling this scan apart from a stored one. Both
+    /// re-emitted like the session, so their views did not have to be
+    /// re-pointed for the move.
+    let search = SearchModule()
+    private var searchRelay: AnyCancellable?
+    var findText: String {
+        get { search.text } set { search.text = newValue }
+    }
+    var findResults: [FoundItem] { search.results }
+    var findTotal: Int { search.total }
+    var findSearching: Bool { search.searching }
     var suggestionsLoading: Bool { space.loading }
     @Published var showCleanup = false
     /// Sizes below which a suggestion is not worth making. A field rather than
@@ -544,13 +548,17 @@ final class AppModel: ObservableObject {
     /// Both settable so the offscreen renderer can point them at a fixture: a
     /// comparison screen that cannot be rendered is a screen nobody has checked.
     var snapshots = SnapshotStore()
+    lazy var changes = ChangesModule(snapshots: snapshots)
+    private var changesRelay: AnyCancellable?
     /// What this scan looked like, kept so a comparison has a right-hand side
     /// without re-walking the tree.
-    var currentDigest: DiskDigest?
     @Published var showChanges = false
-    @Published var history: [SnapshotStore.Entry] = []
-    @Published var comparison: DigestDiff?
-    @Published var comparingTo: String?
+    var currentDigest: DiskDigest? {
+        get { changes.current } set { changes.current = newValue }
+    }
+    var history: [SnapshotStore.Entry] { changes.history }
+    var comparison: DigestDiff? { changes.comparison }
+    var comparingTo: String? { changes.comparingTo }
     /// Every set of things the app called copies of each other, so the planner
     /// can refuse to empty one.
     private var matchGroups: [[Int32]] = []
@@ -611,6 +619,12 @@ final class AppModel: ObservableObject {
             self?.objectWillChange.send()
         }
         spaceRelay = space.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+        searchRelay = search.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+        changesRelay = changes.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
         volumes = VolumeInfo.mountedVolumes()
@@ -903,7 +917,12 @@ final class AppModel: ObservableObject {
         largeFiles = []
         matchGroups = []
         reviewGroups = []
-        currentDigest = nil
+        // Was `currentDigest = nil`, which left the comparison, the entry it
+        // was against and the history list standing. `openChanges` only
+        // auto-compares when there is no comparison yet, so after a rescan the
+        // screen kept showing a diff computed from the digest of a scan that no
+        // longer existed — and kept skipping the one it should have made.
+        changes.clear()
         // Trashed items are still in the Trash and still recoverable from
         // Finder; the app just can no longer be the one to put them back,
         // because "back" was a place in a tree that no longer exists.
@@ -1457,51 +1476,25 @@ final class AppModel: ObservableObject {
 
     // MARK: - What changed since last time
 
-    /// A few megabytes per scan, so a month of them is affordable. Written off
-    /// the main thread: it walks the tree.
     private func recordDigest(of live: LiveTree) {
-        let store = snapshots
-        Task { [weak self] in
-            let digest = await Task.detached(priority: .utility) {
-                live.withStore { DiskDigest.of(store: $0, stats: live.stats) }
-            }.value
-            self?.currentDigest = digest
-            await Task.detached(priority: .utility) {
-                do {
-                    try store.write(digest)
-                } catch {
-                    Telemetry.problem("snapshot", error.localizedDescription)
-                }
-            }.value
-            Telemetry.record("snapshot.write", ["folders": .int(Int64(digest.folders.count))])
-        }
+        changes.record(live)
     }
 
     func openChanges() {
         showChanges = true
-        // Everything except this scan's own entry, which would compare the
-        // tree against itself.
-        let mine = currentDigest?.takenAt.timeIntervalSince1970
-        history = snapshots.list()
-            .filter { abs($0.takenAt.timeIntervalSince1970 - (mine ?? -1)) > 1 }
-            .reversed()
-        if comparison == nil, let latest = history.first { compare(with: latest) }
+        report { try changes.loadHistory(tree: tree) }
     }
 
     func compare(with entry: SnapshotStore.Entry) {
-        guard let current = currentDigest else { return }
+        report { try changes.compare(with: entry, tree: tree) }
+    }
+
+    /// A module says a stored digest is unreadable by throwing; saying so on
+    /// screen is this object's job, because the toast is shared and a module
+    /// that writes to it directly is a module that cannot be opened twice.
+    private func report(_ work: () throws -> Void) {
         do {
-            let old = try snapshots.read(entry.url)
-            let raw = DiskDigest.diff(from: old, to: current)
-            // Only the live tree can tell a deleted folder from one that merely
-            // shrank below what a digest records.
-            comparison = tree.map { live in
-                live.withStore { store in raw.resolvingVanished { store.find(path: $0) != nil } }
-            } ?? raw
-            comparingTo = entry.id
-            Telemetry.record("snapshot.compare",
-                             ["changes": .int(Int64(comparison?.changes.count ?? 0)),
-                              "delta": .int(comparison?.totalDelta ?? 0)])
+            try work()
         } catch {
             Telemetry.problem("snapshot.read", error.localizedDescription)
             toast = L10n.shared[.snapshotUnreadable]
@@ -1553,32 +1546,7 @@ final class AppModel: ObservableObject {
 
     func runFind() {
         guard let tree else { return }
-        let needle = findText
-        guard needle.trimmingCharacters(in: .whitespaces).count >= 2 else {
-            findResults = []; findTotal = 0; findSearching = false
-            return
-        }
-        findSearching = true
-        let limit = 300
-        findTask?.cancel()
-        findTask = Task { [weak self] in
-            // A search over nine million names costs about two tenths of a
-            // second, which is fine once and wasteful on every keystroke.
-            // Waiting for the typing to settle is cheaper than cancelling
-            // work that has already started.
-            try? await Task.sleep(nanoseconds: 180_000_000)
-            guard !Task.isCancelled else { return }
-            let (found, total) = await Task.detached(priority: .userInitiated) {
-                tree.withStore { store in
-                    let all = Find.search(store: store, needle: needle, limit: .max)
-                    return (Array(all.prefix(limit)), all.count)
-                }
-            }.value
-            guard !Task.isCancelled, let self, self.findText == needle else { return }
-            self.findResults = found
-            self.findTotal = total
-            self.findSearching = false
-        }
+        search.run(in: tree)
     }
 
     /// Show a found item where it lives: open its folder, put the selection on
