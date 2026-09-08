@@ -558,7 +558,9 @@ final class AppModel: ObservableObject {
     var comparingTo: String? { changes.comparingTo }
     /// Every set of things the app called copies of each other, so the planner
     /// can refuse to empty one.
-    private var matchGroups: [[Int32]] = []
+    /// The copy groups the last report found. Internal rather than private so
+    /// the review-flow tests can set up a group without running the report.
+    var matchGroups: [[Int32]] = []
     /// The groups the open review is judged against — the panel's matches, or
     /// the ones a suggestion came from.
     private var reviewGroups: [[Int32]] = []
@@ -1642,8 +1644,14 @@ final class AppModel: ObservableObject {
         reviewGroups = groups ?? matchGroups
         rebuildReview()
         if reviewing?.isEmpty == true {
+            // The review can come back empty for more than one reason, and
+            // cancelling drops the refusal that says which — so every one of
+            // them used to report the never-touch list. Ticking a scan root
+            // was answered with "everything picked is on the never-touch
+            // list", which is not what happened and not what to do about it.
+            let why = reviewRefusalText
             cancelBulkTrash()
-            toast = L10n.shared[.allExcluded]
+            toast = why ?? L10n.shared[.allExcluded]
         }
     }
 
