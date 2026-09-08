@@ -76,10 +76,11 @@ struct StartView: View {
         } isTargeted: { isTargeted = $0 }
     }
 
-    /// Whatever is in the list that is not one of the mounted volumes.
+    /// Every folder that has been added, ticked or not, minus anything that is
+    /// really one of the mounted disks.
     private var folderTargets: [String] {
         let disks = Set(model.volumes.map(\.path))
-        return model.scanTargets.filter { !disks.contains($0) }
+        return model.addedFolders.filter { !disks.contains($0) }
     }
 
     private func sectionHeader<T: View>(_ title: String,
@@ -111,20 +112,36 @@ struct StartView: View {
         .onTapGesture { model.toggle(volume) }
     }
 
+    /// The same shape as a disk row, because a disk and a folder are the same
+    /// kind of thing here. It ticks, it unticks, and the × forgets it — three
+    /// separate ideas that used to be one button.
     private func folderRow(_ path: String) -> some View {
-        HStack(spacing: 9) {
+        let covered = model.coveringTarget(path)
+        let on = model.isTargeted(folder: path)
+        return HStack(spacing: 9) {
+            Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(on ? AnyShapeStyle(covered == nil ? Color.accentColor : Color.secondary)
+                                    : AnyShapeStyle(.tertiary))
             Image(systemName: "folder.fill")
                 .foregroundStyle(FileCategory.folder.color(scheme))
-            Text(path).font(.system(size: 11))
+            Text(path).font(.system(size: 11, weight: on ? .medium : .regular))
                 .lineLimit(1).truncationMode(.head)
             Spacer(minLength: 8)
-            Button { model.removeTarget(path) } label: {
+            // Says why the tick will not move rather than letting the click
+            // appear to do nothing.
+            Text(covered == nil ? "" : loc[.alreadyCovered])
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .lineLimit(1)
+            Button { model.forgetFolder(path) } label: {
                 Image(systemName: "xmark.circle.fill").font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain).help(loc[.clearTargets])
+            .buttonStyle(.plain).help(loc[.forgetFolder])
         }
         .padding(.horizontal, 12).padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture { model.toggle(folder: path) }
+        .help(covered.map { loc.coveredBy($0) } ?? "")
     }
 
     private var emptyFolders: some View {

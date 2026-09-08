@@ -156,6 +156,11 @@ final class L10n: ObservableObject {
             ? "\(fmt(n)) öğe Çöp Kutusu'na taşınsın mı? (\(size))"
             : "Move \(fmt(n)) items to the Trash? (\(size))"
     }
+    func coveredBy(_ root: String) -> String {
+        active == .tr
+            ? "Zaten \(root) içinde ölçülüyor"
+            : "Already measured as part of \(root)"
+    }
     func alsoCovered(_ n: Int) -> String {
         active == .tr
             ? "\(fmt(n)) öğe zaten seçili bir klasörün içinde, ayrıca taşınmayacak"
@@ -388,6 +393,7 @@ final class L10n: ObservableObject {
         case tabMap, tabDuplicates, tabCompare, tabSearch, closeTab
         case needsAScan, chooseWhatToScan, copiesSubtitle
         case startOverTitle, startOverBody, startOverConfirm
+        case alreadyCovered, forgetFolder
         case whereSpaceIs, whereSpaceIsSubtitle, capacity, used, freeReally, freeFinder
         case purgeableNote, writableNow, includesPurgeable
         case scanVsFilesystem, volumeReportsUsed, scanAttributed, unaccounted, done
@@ -473,6 +479,8 @@ final class L10n: ObservableObject {
         .startOverBody: ("This throws away the scan and everything open with it, including the list of what was moved to the Trash — those items stay in the Trash, but this app can no longer put them back.",
                          "Bu, taramayı ve onunla birlikte açık olan her şeyi atar; Çöp Kutusu'na taşınanların listesi de buna dahildir — o öğeler Çöp Kutusu'nda kalır, ancak bu uygulama artık onları geri koyamaz."),
         .startOverConfirm: ("Start over", "Baştan başla"),
+        .alreadyCovered: ("in a ticked disk", "işaretli bir diskin içinde"),
+        .forgetFolder: ("Remove from the list", "Listeden çıkar"),
         .copiesSubtitle: ("Folders and files that appear more than once. Nothing is removed from here — every row opens the full list first.",
                           "Birden fazla kez görünen klasörler ve dosyalar. Buradan hiçbir şey silinmez — her satır önce tam listeyi açar."),
         .inUse: ("In use", "Kullanımda"),

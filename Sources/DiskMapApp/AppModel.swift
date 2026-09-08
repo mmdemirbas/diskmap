@@ -823,12 +823,55 @@ final class AppModel: ObservableObject {
 
     // MARK: - Scan targets
 
+    /// Folders the user has added, ticked or not.
+    ///
+    /// A disk stays in the list whether or not it is ticked, because the list
+    /// of disks is what is mounted. A folder had no such list: `scanTargets`
+    /// was both the folders and the choice, so leaving one out of a scan meant
+    /// deleting it and typing it in again next time. Now the two are separate
+    /// for folders as well, and the × means forget it rather than skip it.
+    @Published private(set) var addedFolders: [String] = []
+
     func addTargets(_ urls: [URL]) {
+        for path in urls.map(\.path) where !addedFolders.contains(path) {
+            addedFolders.append(path)
+        }
         let candidates = scanTargets + urls.map(\.path)
         let normalized = RootSet.normalize(candidates)
         scanTargets = normalized.roots
         rejectedRoots = normalized.rejected
         refreshVolume()
+    }
+
+    /// True when this folder will be measured: ticked, or already inside
+    /// something else that is.
+    func isTargeted(folder path: String) -> Bool {
+        scanTargets.contains(path) || coveringTarget(path) != nil
+    }
+
+    /// The ticked root that already contains this folder, if any. Adding a
+    /// folder inside a ticked disk is absorbed by normalisation, so the row has
+    /// to say it is covered rather than appear unticked while being measured.
+    func coveringTarget(_ path: String) -> String? {
+        scanTargets.first { $0 != path && TrashPlanner.isInside(path, $0) }
+    }
+
+    func toggle(folder path: String) {
+        // Nothing to toggle while a ticked disk contains it: unticking here
+        // would not leave it out, and pretending otherwise is worse than
+        // saying so.
+        guard coveringTarget(path) == nil else { return }
+        if scanTargets.contains(path) {
+            removeTarget(path)
+        } else {
+            addTargets([URL(fileURLWithPath: path)])
+        }
+    }
+
+    /// Drops it from the list entirely, which is what the × has always meant.
+    func forgetFolder(_ path: String) {
+        addedFolders.removeAll { $0 == path }
+        removeTarget(path)
     }
 
     func removeTarget(_ path: String) {
@@ -839,6 +882,7 @@ final class AppModel: ObservableObject {
 
     func clearTargets() {
         scanTargets = []
+        addedFolders = []
         rejectedRoots = []
         refreshVolume()
     }
