@@ -1,3 +1,4 @@
+import AppKit
 import DiskMapCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -16,6 +17,11 @@ struct DiskMapApp: App {
         Window(L10n.shared[.appName], id: "main") {
             ContentView(model: model)
                 .onAppear {
+                    // A service can arrive before anything is on screen, since
+                    // choosing one is what launches the app.
+                    ServicesProvider.shared.model = model
+                    NSApplication.shared.servicesProvider = ServicesProvider.shared
+                    NSUpdateDynamicServices()
                     Telemetry.record("app.launch", [
                         "os": .text(ProcessInfo.processInfo.operatingSystemVersionString),
                         "cores": .int(Int64(ProcessInfo.processInfo.activeProcessorCount)),

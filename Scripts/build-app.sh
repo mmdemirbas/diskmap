@@ -85,6 +85,28 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key><string>Personal build</string>
+    <!-- Right-click a folder in the Finder, Services. Sending the app to the
+         top level of that menu instead would need a Finder Sync extension,
+         which is a second signed bundle a Swift package cannot build. -->
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict><key>default</key><string>Compare in Disk Map</string></dict>
+            <key>NSMessage</key><string>compareFolders</string>
+            <key>NSPortName</key><string>Disk Map</string>
+            <key>NSSendFileTypes</key>
+            <array><string>public.folder</string></array>
+        </dict>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict><key>default</key><string>Measure in Disk Map</string></dict>
+            <key>NSMessage</key><string>measureFolders</string>
+            <key>NSPortName</key><string>Disk Map</string>
+            <key>NSSendFileTypes</key>
+            <array><string>public.folder</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
