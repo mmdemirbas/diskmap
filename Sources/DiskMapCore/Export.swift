@@ -212,7 +212,112 @@ public enum Export {
         }
     }
 
-    public static func encode(_ doc: Document, prettyPrinted: Bool = true) throws -> Data {
+    // MARK: - Asking the index a question
+
+    /// One row of the flat table, for a reader that is a program.
+    ///
+    /// The same fields the screen shows, with the kind as a stable token rather
+    /// than the translated label: a script that greps for "Disk image" breaks
+    /// the day somebody runs the app in Turkish.
+    public struct TableRow: Codable, Sendable {
+        public var path: String
+        public var name: String
+        public var folder: String
+        public var kind: String
+        public var directory: Bool
+        public var physical: Int64
+        public var logical: Int64
+        public var modified: Date
+        /// Only what is true of this row: `dataless`, `hardlink`, `symlink`,
+        /// `compressed`, `unreadable`. Absent rather than false.
+        public var marks: [String]
+    }
+
+    /// A page of the flat table, and what it is a page of.
+    ///
+    /// `matched` against `shown` is the field that matters: the rows are capped
+    /// and the answer is not, and a consumer that reads `rows.count` as the
+    /// count has been given enough to know better.
+    public struct TableDocument: Codable, Sendable {
+        public var schema: String
+        public var generatedAt: Date
+        public var roots: [String]
+        public var sortedBy: String
+        public var ascending: Bool
+        public var matched: Int
+        public var shown: Int
+        /// Over everything that matched, not over the rows returned. Files
+        /// only, even when folders are rows: a folder's size is its subtree.
+        public var physical: Int64
+        public var logical: Int64
+        public var rows: [TableRow]
+    }
+
+    public static let tableSchema = "diskmap.table/1"
+
+    public static func table(store: NodeStore, roots: [String], page: FileTablePage,
+                             sort: FileSort, ascending: Bool,
+                             now: Date = Date()) -> TableDocument {
+        TableDocument(schema: tableSchema, generatedAt: now, roots: roots,
+                      sortedBy: sort.rawValue, ascending: ascending,
+                      matched: page.total, shown: page.rows.count,
+                      physical: page.totalPhysical, logical: page.totalLogical,
+                      rows: page.rows.map(row))
+    }
+
+    public static func row(_ r: FileRow) -> TableRow {
+        var marks: [String] = []
+        if r.flags.contains(.dataless) { marks.append("dataless") }
+        if r.flags.contains(.hardlinkDuplicate) { marks.append("hardlink") }
+        if r.flags.contains(.symlink) { marks.append("symlink") }
+        if r.flags.contains(.compressed) { marks.append("compressed") }
+        if r.flags.contains(.unreadable) { marks.append("unreadable") }
+        return TableRow(path: r.path, name: r.name, folder: r.folder,
+                        kind: r.category.token, directory: r.isDirectory,
+                        physical: r.physical, logical: r.logical,
+                        modified: Date(timeIntervalSince1970: TimeInterval(r.mtime)),
+                        marks: marks)
+    }
+
+    /// What a search found. `matched` and `shown` carry the same warning the
+    /// table's do, and `how` says why a row is in the answer at all — a
+    /// subsequence hit means the needle matched nothing outright and was read
+    /// as an abbreviation instead.
+    public struct SearchHit: Codable, Sendable {
+        public var path: String
+        public var name: String
+        public var directory: Bool
+        public var physical: Int64
+        public var logical: Int64
+        public var how: String
+    }
+
+    public struct SearchDocument: Codable, Sendable {
+        public var schema: String
+        public var generatedAt: Date
+        public var roots: [String]
+        public var needle: String
+        public var matched: Int
+        public var shown: Int
+        public var hits: [SearchHit]
+    }
+
+    public static let searchSchema = "diskmap.search/1"
+
+    public static func search(roots: [String], needle: String, results: FindResults,
+                              now: Date = Date()) -> SearchDocument {
+        SearchDocument(schema: searchSchema, generatedAt: now, roots: roots,
+                       needle: needle, matched: results.total, shown: results.items.count,
+                       hits: results.items.map { item in
+                           SearchHit(path: item.path,
+                                     name: (item.path as NSString).lastPathComponent,
+                                     directory: item.isDirectory,
+                                     physical: item.physical, logical: item.logical,
+                                     how: item.kind.token)
+                       })
+    }
+
+    public static func encode<T: Encodable>(_ doc: T, prettyPrinted: Bool = true) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         // Sorted so two exports of the same disk diff cleanly.

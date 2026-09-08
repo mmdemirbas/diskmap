@@ -29,6 +29,55 @@ final class ExportTests: XCTestCase {
         return Export.document(store: r.store, stats: r.stats, options: options)
     }
 
+    // MARK: - Answering a question rather than describing a disk
+
+    /// The field that stops a caller reading `rows.count` as the count.
+    func testTheTableDocumentSaysHowMuchItIsNotShowing() throws {
+        let r = scan()
+        let page = FileTable.page(store: r.store, sort: .size, limit: 1)
+        let doc = Export.table(store: r.store, roots: r.store.roots, page: page,
+                               sort: .size, ascending: false)
+
+        XCTAssertEqual(doc.schema, "diskmap.table/1")
+        XCTAssertEqual(doc.shown, 1)
+        XCTAssertEqual(doc.matched, 3)
+        XCTAssertEqual(doc.sortedBy, "size")
+        XCTAssertFalse(doc.ascending)
+        // Over every match, not over the one row returned.
+        XCTAssertEqual(doc.logical, 1_300_500)
+        XCTAssertEqual(doc.rows.first?.name, "one.bin")
+        XCTAssertEqual(doc.rows.first?.kind, "other")
+        XCTAssertTrue(doc.rows.first?.marks.isEmpty ?? false)
+    }
+
+    /// A translated label in machine output breaks the day somebody runs the
+    /// app in another language, so the kind travels as a token — and the token
+    /// has to be the one the command line accepts back.
+    func testEveryKindHasATokenThatParsesBackToIt() throws {
+        for category in FileCategory.allCases {
+            XCTAssertEqual(FileCategory.named(category.token), category, category.token)
+        }
+        XCTAssertEqual(FileCategory.named("DISKIMAGE"), .diskImage)
+        XCTAssertNil(FileCategory.named("nonsense"))
+    }
+
+    func testASearchDocumentSaysHowEachRowMatched() throws {
+        let r = scan()
+        let found = Find.search(store: r.store, needle: "one.bin", limit: 10)
+        let doc = Export.search(roots: r.store.roots, needle: "one.bin", results: found)
+
+        XCTAssertEqual(doc.schema, "diskmap.search/1")
+        XCTAssertEqual(doc.needle, "one.bin")
+        XCTAssertEqual(doc.hits.first?.how, "exact")
+        XCTAssertEqual(doc.hits.first?.name, "one.bin")
+
+        // A needle that matched nothing outright is read as an abbreviation,
+        // and the document has to say that is what happened.
+        let loose = Find.search(store: r.store, needle: "onbn", limit: 10)
+        let looseDoc = Export.search(roots: r.store.roots, needle: "onbn", results: loose)
+        XCTAssertEqual(looseDoc.hits.first?.how, "subsequence")
+    }
+
     func testTheTotalsMatchTheScan() throws {
         let r = scan()
         let doc = Export.document(store: r.store, stats: r.stats)

@@ -167,6 +167,26 @@ public enum FileCategory: Int, Sendable, CaseIterable {
     case folder, video, image, audio, archive, document, code, application
     case diskImage, virtualMachine, model, database, cache, other
 
+    /// A stable name for a kind, for machine output and for a command line
+    /// that has to accept one. Deliberately not `label`, which is display text
+    /// and is translated: a script that greps for "Disk image" breaks the day
+    /// somebody runs the app in Turkish.
+    public var token: String {
+        switch self {
+        case .folder: "folder";           case .video: "video"
+        case .image: "image";             case .audio: "audio"
+        case .archive: "archive";         case .document: "document"
+        case .code: "code";               case .application: "application"
+        case .diskImage: "diskImage";     case .virtualMachine: "virtualMachine"
+        case .model: "model";             case .database: "database"
+        case .cache: "cache";             case .other: "other"
+        }
+    }
+
+    public static func named(_ token: String) -> FileCategory? {
+        allCases.first { $0.token.caseInsensitiveCompare(token) == .orderedSame }
+    }
+
     public var label: String {
         switch self {
         case .folder: "Folder";           case .video: "Video"

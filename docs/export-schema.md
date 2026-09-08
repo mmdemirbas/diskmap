@@ -1,31 +1,47 @@
 ---
 title: Reading a scan from another program
 eyebrow: DiskMap
-subtitle: The JSON document, field by field, and what it deliberately leaves out
+subtitle: The JSON documents, field by field, and what they deliberately leave out
 audience: Anyone integrating with DiskMap
 date: 2026-09-01
 accent: teal
-summary: One versioned JSON document, produced either by the `diskmap` command or by Export Results in the app. Folders above a size floor, the largest files, the totals and the volumes — with the floor and the cut-off reported so a consumer can tell what is missing rather than assume it saw everything.
+summary: Three commands, three versioned JSON documents — the whole report, a filtered table of files, and a search. Produced by the `diskmap` command or, for the report, by Export Results in the app. Every one of them says what it left out, so a consumer can tell absence from omission.
 documents_history: true
 ---
 
 ## How do I get one?
 
-Two ways, producing the same document.
-
 **From the command line**, for anything automated. `make cli` builds it and
 puts it in `~/.local/bin`:
 
 ```
-diskmap ~/Downloads ~/Movies --out report.json
+diskmap scan ~/Downloads ~/Movies --out report.json
 diskmap / --min-folder 500MB --top-files 200 --duplicates
-diskmap ~/dev --compact | jq '.totals.physical'
+diskmap files ~/Movies --kind video --min 1GB --older-than 365 --tsv
+diskmap find rprt ~/dev --limit 20
 ```
+
+Three commands, each with its own document and its own `--help`:
+
+| Command | Answers | Schema |
+|---|---|---|
+| `scan <path>...` | where the space went, over the whole tree | `diskmap.export/1` |
+| `files <path>...` | which files, filtered and sorted, as a flat list | `diskmap.table/1` |
+| `find <needle> <path>...` | where is that, by name | `diskmap.search/1` |
+
+`diskmap <path>...` with no command still means `scan`, which is what it meant
+before there were commands. The one ambiguity is a folder named after a
+command: write `./files` and it is a path again.
 
 Paths may be folders or whole disks, and any number of either can be given —
 they are measured as one total. A path inside another is dropped rather than
 counted twice, and the reason is printed on stderr. With no `--out` the document
 goes to stdout, so stderr carries progress and stdout carries only JSON.
+
+**Every command scans first.** There is no stored index, so the cost of a
+question is the cost of the scan plus the question. Asking three questions
+about one disk means three scans; if that matters, use `scan` once and query
+its output.
 
 Exit codes: `0` success, `1` bad usage, `2` nothing could be measured, `3` the
 write failed.
@@ -149,11 +165,82 @@ for `suggestions`.
 confirmation naming every path, and an integration should hold to the same
 standard.
 
+## `diskmap.table/1` — the `files` command
+
+A flat list of files, however deep they sit, filtered and sorted by whichever
+property the question is about. The same thing the app's *All files* tab shows.
+
+```json
+{
+  "schema": "diskmap.table/1",
+  "generatedAt": "2026-09-08T19:30:24Z",
+  "roots": ["/Users/md/Movies"],
+  "sortedBy": "size", "ascending": false,
+  "matched": 3832, "shown": 1000,
+  "physical": 5203984384, "logical": 5203102931,
+  "rows": [
+    {
+      "path": "...", "name": "A001.MOV", "folder": "...",
+      "kind": "video", "directory": false,
+      "physical": 55871078400, "logical": 55871078400,
+      "modified": "2026-06-14T16:21:00Z", "marks": []
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `matched` / `shown` | How many there were, and how many came back. **Read `matched`, never `rows.length`** — the list is capped by `--limit` and the answer is not |
+| `physical`, `logical` | Over every match, not over the rows returned. Files only, even with `--folders`: a folder's size is its subtree, so counting both would add the same bytes once per level |
+| `kind` | A stable token — `video`, `diskImage`, `virtualMachine` — never the translated label. The same tokens `--kind` accepts |
+| `marks` | Only what is true of that row: `dataless` (iCloud placeholder, its apparent size is not on this disk), `hardlink` (a second link to bytes counted elsewhere), `symlink`, `compressed`, `unreadable` |
+
+Filters are `--name`, `--kind`, `--min`, `--max`, `--newer-than`,
+`--older-than` and `--folders`; ordering is `--sort` and `--asc`. All of them
+are answered from the scan's index, so a filter costs one pass over memory and
+never opens a file.
+
+`--tsv` writes `path`, `kind`, `physical`, `logical`, `modified`, `marks`
+instead, with a header line, for the half of headless use that is a pipeline:
+
+```bash
+diskmap files / --kind video --min 1GB --older-than 730 --tsv --quiet \
+  | awk -F'\t' 'NR>1 { total += $3 } END { print total/1024/1024/1024 " GB" }'
+```
+
+## `diskmap.search/1` — the `find` command
+
+```json
+{
+  "schema": "diskmap.search/1",
+  "needle": "rprt",
+  "matched": 1, "shown": 1,
+  "hits": [
+    { "path": "...", "name": "report.pdf", "directory": false,
+      "physical": 24576, "logical": 22686, "how": "subsequence" }
+  ]
+}
+```
+
+`how` is the field worth reading: `exact`, `prefix`, `substring` or
+`subsequence`. The first three mean the needle is in the name. `subsequence`
+means it was not, anywhere, and the letters were read as an abbreviation
+instead — `rprt` for `report.pdf`. A caller that wants only real matches should
+filter on `how`, not on the count.
+
+A needle with a `/` in it names a path: `keep/notes` looks for `notes` under a
+folder called `keep`, and the segments need not be adjacent.
+
 ## What it will not do
 
-- **It does not delete anything, and there is no flag that makes it.** Removal
-  goes through the app, through a confirmation listing every path, and into the
-  Trash where it can be put back.
+- **It does not delete, move or copy anything, and there is no flag that makes
+  it.** That is deliberate rather than unfinished. Every destructive path in
+  the app goes through a report that is checked again immediately before it
+  acts, against the disk as it is at that moment; a flag on a command line
+  cannot be checked against what the person meant. Removal goes through the
+  app, through a confirmation listing every path, and into the Trash where it
+  can be put back.
 - **It does not follow mount points.** A drive mounted inside a scanned folder
   is a separate budget; pass its path explicitly to include it.
 - **It does not stream.** The document is built whole, so `--min-folder 0` on a

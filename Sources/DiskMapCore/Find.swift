@@ -54,6 +54,14 @@ public enum Find {
         public static func < (a: MatchKind, b: MatchKind) -> Bool {
             a.rawValue < b.rawValue
         }
+
+        /// A stable name for machine output.
+        public var token: String {
+            switch self {
+            case .exact: "exact";           case .prefix: "prefix"
+            case .substring: "substring";   case .subsequence: "subsequence"
+            }
+        }
     }
 
     /// A subsequence match is only interesting when the letters stay near each
