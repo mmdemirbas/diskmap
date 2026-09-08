@@ -329,20 +329,40 @@ struct ScanProgressSnapshot: Equatable {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var phase: Phase = .idle
-    @Published var volumes: [VolumeInfo] = []
-    /// Kept only as the volume the capacity bar falls back to before anything
-    /// has been scanned. It is not a scan target; there is only one of those.
-    @Published var selectedVolumePath: String = "/System/Volumes/Data"
-    /// Everything to measure, as one total. A whole disk and a folder are the
-    /// same kind of thing here — a path to walk — so both live in this list and
-    /// any number of either can be chosen at once.
-    @Published var scanTargets: [String] = []
-    @Published var rejectedRoots: [RejectedRoot] = []
-    @Published var rootsSpanVolumes = false
-    @Published var volume: VolumeInfo?
-    @Published var reconciliation: Reconciliation?
-    @Published var stats: ScanStats?
+    /// The scan every module reads from, and the first piece of this object to
+    /// stop being this object's private business. Its changes are re-emitted
+    /// below as this object's own, so everything that reads `model.phase` and
+    /// the rest through the forwarding properties keeps working unchanged.
+    let session = ScanSession()
+    private var sessionRelay: AnyCancellable?
+
+    var phase: Phase {
+        get { session.phase } set { session.phase = newValue }
+    }
+    var volumes: [VolumeInfo] {
+        get { session.volumes } set { session.volumes = newValue }
+    }
+    var selectedVolumePath: String {
+        get { session.selectedVolumePath } set { session.selectedVolumePath = newValue }
+    }
+    var scanTargets: [String] {
+        get { session.scanTargets } set { session.scanTargets = newValue }
+    }
+    var rejectedRoots: [RejectedRoot] {
+        get { session.rejectedRoots } set { session.rejectedRoots = newValue }
+    }
+    var rootsSpanVolumes: Bool {
+        get { session.rootsSpanVolumes } set { session.rootsSpanVolumes = newValue }
+    }
+    var volume: VolumeInfo? {
+        get { session.volume } set { session.volume = newValue }
+    }
+    var reconciliation: Reconciliation? {
+        get { session.reconciliation } set { session.reconciliation = newValue }
+    }
+    var stats: ScanStats? {
+        get { session.stats } set { session.stats = newValue }
+    }
 
     @Published var currentDirectory: Int32 = 0
     /// Folders opened in place in the tree table, without navigating into them.
@@ -359,7 +379,9 @@ final class AppModel: ObservableObject {
     @Published var usePhysicalSize = true
     @Published var filterText = ""
 
-    @Published var liveActive = false
+    var liveActive: Bool {
+        get { session.liveActive } set { session.liveActive = newValue }
+    }
     @Published var toast: String?
     @Published var undoStack: [TrashBatch] = []
     /// Explicitly ticked for a bulk action. Kept apart from `selection`, which
@@ -559,7 +581,7 @@ final class AppModel: ObservableObject {
     /// Offscreen rendering has no async phase, so layout must run inline.
     var renderMode = false
 
-    private(set) var tree: LiveTree?
+    var tree: LiveTree? { session.tree }
     @Published private(set) var revision = 0
 
     private var activeScanner: DiskScanner?
@@ -576,6 +598,12 @@ final class AppModel: ObservableObject {
     private(set) var scanGeneration = 0
 
     init() {
+        // The session is a separate object, so its changes are separate events.
+        // Re-emitting them keeps every existing view — all of which observe
+        // this object — seeing the scan exactly as before.
+        sessionRelay = session.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
         volumes = VolumeInfo.mountedVolumes()
         if volumes.first(where: { $0.path == selectedVolumePath }) == nil {
             selectedVolumePath = volumes.first?.path ?? "/"
@@ -776,7 +804,7 @@ final class AppModel: ObservableObject {
         let targets = scanTargets
         let path = targets[0]
         tree?.stopWatching()
-        tree = nil
+        session.adopt(nil)
         liveActive = false
         layoutCache.set(TreemapLayout(key: "", cells: [], info: [:]))
         phase = .scanning(ScanProgressSnapshot(nodes: 0, directories: 0, bytes: 0, path: path, fraction: 0))
@@ -847,7 +875,7 @@ final class AppModel: ObservableObject {
     func newScan() {
         cancelScan()
         tree?.stopWatching()
-        tree = nil
+        session.adopt(nil)
         liveActive = false
         stats = nil
         reconciliation = nil
@@ -880,7 +908,7 @@ final class AppModel: ObservableObject {
     }
 
     func adopt(_ live: LiveTree) {
-        tree = live
+        session.adopt(live)
         stats = live.stats
         refreshVolume()
         if let v = volume {
