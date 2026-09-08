@@ -394,7 +394,37 @@ final class AppModel: ObservableObject {
     @Published private(set) var reviewPlan: TrashPlan?
     @Published private(set) var reviewRefusal: TrashRefusal?
     var suggestions: [CleanupSuggestion] { space.suggestions }
-    @Published var showCompare = false
+    // MARK: - Which tools are open
+
+    /// Open tools, left to right. The map is always the first and cannot be
+    /// closed: it is the scan itself rather than a tool over it.
+    @Published private(set) var openTabs: [ModuleTab] = [.map]
+    @Published var activeTab: ModuleTab = .map
+
+    /// Opens a tool, or brings it forward if it is already open. Opening one no
+    /// longer closes another, which is the entire reason these stopped being
+    /// sheets.
+    func open(_ tab: ModuleTab) {
+        if !openTabs.contains(tab) {
+            openTabs.append(tab)
+            openTabs.sort { ModuleTab.allCases.firstIndex(of: $0)! < ModuleTab.allCases.firstIndex(of: $1)! }
+        }
+        activeTab = tab
+    }
+
+    func close(_ tab: ModuleTab) {
+        guard tab.isClosable else { return }
+        // Whatever the tool had running stops with it, rather than carrying on
+        // against a screen nobody can see.
+        switch tab {
+        case .compare: compare.close()
+        case .search: search.clear()
+        default: break
+        }
+        openTabs.removeAll { $0 == tab }
+        if activeTab == tab { activeTab = openTabs.last ?? .map }
+    }
+
     @Published var showCompareIgnore = false
 
     /// Comparing two folders. The only module that needs no scan, which is why
@@ -474,7 +504,6 @@ final class AppModel: ObservableObject {
     private var compareCancel: CancelToken?
     private var compareGeneration = 0
 
-    @Published var showFind = false
     /// Finding one thing, and telling this scan apart from a stored one. Both
     /// re-emitted like the session, so their views did not have to be
     /// re-pointed for the move.
@@ -487,7 +516,6 @@ final class AppModel: ObservableObject {
     var findTotal: Int { search.total }
     var findSearching: Bool { search.searching }
     var suggestionsLoading: Bool { space.loading }
-    @Published var showCleanup = false
     /// Sizes below which a suggestion is not worth making. A field rather than
     /// a constant so a fixture can exercise the screen without a gigabyte of
     /// files, and so it can become a preference later.
@@ -549,7 +577,6 @@ final class AppModel: ObservableObject {
     private var changesRelay: AnyCancellable?
     /// What this scan looked like, kept so a comparison has a right-hand side
     /// without re-walking the tree.
-    @Published var showChanges = false
     var currentDigest: DiskDigest? {
         get { changes.current } set { changes.current = newValue }
     }
@@ -1486,7 +1513,7 @@ final class AppModel: ObservableObject {
     }
 
     func openChanges() {
-        showChanges = true
+        open(.changes)
         report { try changes.loadHistory(tree: tree) }
     }
 
@@ -1513,7 +1540,7 @@ final class AppModel: ObservableObject {
             FileActions.revealInFinder([URL(fileURLWithPath: change.path)])
             return
         }
-        showChanges = false
+        activeTab = .map
         enter(node)
     }
 
@@ -1521,7 +1548,7 @@ final class AppModel: ObservableObject {
 
     func openCleanup() {
         guard let tree else { return }
-        showCleanup = true
+        open(.space)
         space.load(tree: tree, root: currentDirectory,
                    cache: signatureCache, excluding: excludedPaths)
     }
@@ -1530,7 +1557,7 @@ final class AppModel: ObservableObject {
     /// same confirmation list a hand-made selection ends up in.
     func review(_ suggestion: CleanupSuggestion) {
         guard !suggestion.nodes.isEmpty else { return }
-        showCleanup = false
+        activeTab = .map
         checked = Set(suggestion.nodes)
         Telemetry.record("cleanup.review", ["kind": .text(suggestion.kind.rawValue),
                                             "items": .int(Int64(suggestion.itemCount)),
@@ -1545,7 +1572,7 @@ final class AppModel: ObservableObject {
     /// The filter box narrows the folder being browsed, which answers "what is
     /// in here". This answers "where is that", over the whole tree.
     func openFind() {
-        showFind = true
+        open(.search)
         if !findText.isEmpty { runFind() }
     }
 
@@ -1563,7 +1590,7 @@ final class AppModel: ObservableObject {
             guard item.node > 0, item.node < Int32(store.count) else { return 0 }
             return store.parent[Int(item.node)]
         }
-        showFind = false
+        activeTab = .map
         // A filter still in force would hide the very row being focused.
         if !filterText.isEmpty { filterText = "" }
         expanded.removeAll()
@@ -1772,7 +1799,7 @@ final class AppModel: ObservableObject {
     // MARK: - Comparing two folders
 
     func openCompare(left: String? = nil, right: String? = nil) {
-        showCompare = true
+        open(.compare)
         compare.openCompare(left: left, right: right)
     }
 
@@ -1791,7 +1818,7 @@ final class AppModel: ObservableObject {
         compareRight = ""
         compare.clearResult()
         comparePage = .diff
-        showCompare = true
+        open(.compare)
         compare.chooseCompareSide(.right)
     }
 
@@ -1826,8 +1853,7 @@ final class AppModel: ObservableObject {
     func revealTrashedBySync() { compare.revealTrashedBySync() }
 
     func closeCompare() {
-        compare.close()
-        showCompare = false
+        close(.compare)
     }
 
     /// Both planners need the sync roots and the never-touch list, which are

@@ -385,6 +385,8 @@ final class L10n: ObservableObject {
 
     enum K: String, CaseIterable {
         case appName, inUse, purgeable, free, why, capacityHelp
+        case tabMap, tabDuplicates, tabCompare, tabSearch, closeTab
+        case needsAScan, chooseWhatToScan
         case whereSpaceIs, whereSpaceIsSubtitle, capacity, used, freeReally, freeFinder
         case purgeableNote, writableNow, includesPurgeable
         case scanVsFilesystem, volumeReportsUsed, scanAttributed, unaccounted, done
@@ -456,6 +458,16 @@ final class L10n: ObservableObject {
 
     static let table: [K: (String, String)] = [
         .appName: ("Disk Map", "Disk Haritası"),
+        // Short forms, because these sit in a row of tabs rather than at the
+        // top of a sheet with the width to explain themselves.
+        .tabMap: ("Disk map", "Disk haritası"),
+        .tabDuplicates: ("Copies", "Kopyalar"),
+        .tabCompare: ("Compare", "Karşılaştır"),
+        .tabSearch: ("Find", "Bul"),
+        .closeTab: ("Close tab", "Sekmeyi kapat"),
+        .needsAScan: ("This tool reads a scan, and nothing has been scanned yet",
+                      "Bu araç bir tarama okur, henüz hiçbir şey taranmadı"),
+        .chooseWhatToScan: ("Choose what to scan", "Ne taranacağını seçin"),
         .inUse: ("In use", "Kullanımda"),
         .purgeable: ("Purgeable", "Temizlenebilir"),
         .free: ("Free", "Boş"),

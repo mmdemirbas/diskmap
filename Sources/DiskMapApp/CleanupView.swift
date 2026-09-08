@@ -68,6 +68,12 @@ struct CleanupView: View {
     @ObservedObject private var loc = L10n.shared
 
     var body: some View {
+        ReadableColumn { column }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var column: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
@@ -92,8 +98,6 @@ struct CleanupView: View {
             Divider()
             footer
         }
-        .frame(width: 660, height: 540)
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var total: Int64 {
@@ -167,7 +171,7 @@ struct CleanupView: View {
             Spacer()
             Button(loc[.exclusions]) { model.showExclusions = true }
                 .buttonStyle(.borderless).controlSize(.small)
-            Button(loc[.close]) { model.showCleanup = false }
+            Button(loc[.close]) { model.close(.space) }
                 .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 18).padding(.vertical, 14)

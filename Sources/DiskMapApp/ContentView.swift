@@ -1,36 +1,25 @@
 import DiskMapCore
 import SwiftUI
 
-/// The app's sheets in one place. Chained inline they grew past what the
-/// type-checker will attempt in one expression.
+/// What still belongs over the window rather than beside it.
+///
+/// The five tools became tabs, because opening one used to close another. Two
+/// things stayed sheets on purpose: the never-touch list is a settings dialog,
+/// and the confirmation before the Trash is a decision point — letting the
+/// tree move while that one is being read is the drift the safety review spent
+/// eight passes closing.
 private struct Sheets: ViewModifier {
     @ObservedObject var model: AppModel
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: Binding(get: { model.showChanges },
-                                        set: { model.showChanges = $0 })) {
-                ChangesView(model: model)
-            }
-            .sheet(isPresented: Binding(get: { model.showCleanup },
-                                        set: { model.showCleanup = $0 })) {
-                CleanupView(model: model)
-            }
             .sheet(isPresented: Binding(get: { model.showExclusions },
                                         set: { model.showExclusions = $0 })) {
                 ExclusionsView(model: model)
             }
-            .sheet(isPresented: Binding(get: { model.showFind },
-                                        set: { model.showFind = $0 })) {
-                FindView(model: model)
-            }
-            .sheet(isPresented: Binding(get: { model.showCompare },
-                                        set: { if !$0 { model.closeCompare() } })) {
-                CompareView(model: model)
-                    .sheet(isPresented: Binding(get: { model.showCompareIgnore },
-                                                set: { model.showCompareIgnore = $0 })) {
-                        CompareIgnoreView(model: model)
-                    }
+            .sheet(isPresented: Binding(get: { model.showCompareIgnore },
+                                        set: { model.showCompareIgnore = $0 })) {
+                CompareIgnoreView(model: model)
             }
             .sheet(isPresented: Binding(get: { model.reviewing != nil },
                                         set: { if !$0 { model.cancelBulkTrash() } })) {
@@ -53,12 +42,9 @@ struct ContentView: View {
                 CapacityBar(volume: v) { showReconciliation = true }
                 Divider()
             }
-            switch model.phase {
-            case .idle:            StartView(model: model)
-            case .scanning(let p): ScanningView(progress: p) { model.stopScanning() }
-            case .failed(let msg): failure(msg)
-            case .ready:           results
-            }
+            TabStrip(model: model)
+            Divider()
+            openTool
         }
         // The toolbar carries the breadcrumb plus five controls; below this the
         // breadcrumb is squeezed to nothing before anything else gives way.
@@ -96,6 +82,45 @@ struct ContentView: View {
             Button(loc[.tryAgain]) { model.scan() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Whichever tool is in front. Only the map waits for a scan — comparing
+    /// two folders reads them directly, so it opens from a cold launch.
+    @ViewBuilder private var openTool: some View {
+        switch model.activeTab {
+        case .map:        mapTab
+        case .space:      needsScan { CleanupView(model: model) }
+        case .compare:    CompareView(model: model)
+        case .search:     needsScan { FindView(model: model) }
+        case .changes:    needsScan { ChangesView(model: model) }
+        }
+    }
+
+    /// A tool that reads the scanned tree cannot show anything before there is
+    /// one. Saying so and offering to scan beats an empty screen that looks
+    /// like an answer.
+    @ViewBuilder private func needsScan<Content: View>(
+        @ViewBuilder _ content: () -> Content) -> some View {
+        if model.tree != nil {
+            content()
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "externaldrive.badge.questionmark")
+                    .font(.system(size: 26)).foregroundStyle(.tertiary)
+                Text(loc[.needsAScan]).foregroundStyle(.secondary)
+                Button(loc[.chooseWhatToScan]) { model.activeTab = .map }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder private var mapTab: some View {
+        switch model.phase {
+        case .idle:            StartView(model: model)
+        case .scanning(let p): ScanningView(progress: p) { model.stopScanning() }
+        case .failed(let msg): failure(msg)
+        case .ready:           results
+        }
     }
 
     private var results: some View {

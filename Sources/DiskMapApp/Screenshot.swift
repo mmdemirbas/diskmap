@@ -82,6 +82,24 @@ enum OffscreenRenderer {
         if let history = env["DISKMAP_HISTORY_DIR"] {
             model.snapshots = SnapshotStore(directory: URL(fileURLWithPath: history))
         }
+        // Which tool is in front. The tools became tabs, so checking one now
+        // means rendering the whole window rather than a sheet on its own.
+        if let t = env["DISKMAP_TAB"], let tab = ModuleTab(rawValue: t) {
+            model.open(tab)
+            if tab == .compare {
+                model.compareLeft = env["DISKMAP_COMPARE_LEFT"] ?? ""
+                model.compareRight = env["DISKMAP_COMPARE_RIGHT"] ?? ""
+                model.compare.compareSynchronously()
+            }
+            if tab == .space, let tree = model.tree {
+                model.space.loadSynchronously(tree: tree, root: model.currentDirectory,
+                                              cache: SignatureCache())
+            }
+            if tab == .search, let tree = model.tree {
+                model.findText = env["DISKMAP_FIND"] ?? ""
+                model.search.runSynchronously(in: tree)
+            }
+        }
         if env["DISKMAP_SHEET"] == "reconciliation", let v = model.volume {
             // The one screen whose whole job is to be understood at a glance,
             // and the one that cannot be seen through the window it sits over.
@@ -94,7 +112,8 @@ enum OffscreenRenderer {
         } else if env["DISKMAP_SHEET"] == "changes", let tree = model.tree {
             model.currentDigest = tree.withStore { DiskDigest.of(store: $0, stats: tree.stats) }
             model.openChanges()
-            view = AnyView(ChangesView(model: model).environment(\.colorScheme, scheme))
+            view = AnyView(ChangesView(model: model).environment(\.colorScheme, scheme)
+                .frame(width: width, height: height))
         } else if env["DISKMAP_SHEET"] == "find", let tree = model.tree {
             // Had no branch at all, so this sheet rendered as the main window
             // and the search screen could not be looked at.
@@ -105,7 +124,8 @@ enum OffscreenRenderer {
         } else if env["DISKMAP_SHEET"] == "cleanup" {
             model.space.loadSynchronously(tree: model.tree!, root: model.currentDirectory,
                                           cache: SignatureCache())
-            view = AnyView(CleanupView(model: model).environment(\.colorScheme, scheme))
+            view = AnyView(CleanupView(model: model).environment(\.colorScheme, scheme)
+                .frame(width: width, height: height))
         } else if env["DISKMAP_SHEET"] == "compare" {
             // Two folders on disk, walked for real. There is no fixture form of
             // this screen: what it shows is what the comparison found.

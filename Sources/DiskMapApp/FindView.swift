@@ -14,6 +14,12 @@ struct FindView: View {
     @FocusState private var focused: Bool
 
     var body: some View {
+        ReadableColumn { column }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var column: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
@@ -21,8 +27,6 @@ struct FindView: View {
             Divider()
             footer
         }
-        .frame(width: 700, height: 480)
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var header: some View {
@@ -108,7 +112,7 @@ struct FindView: View {
                  : loc.matchCount(model.findTotal))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Spacer()
-            Button(loc[.close]) { model.showFind = false }
+            Button(loc[.close]) { model.close(.search) }
                 .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
