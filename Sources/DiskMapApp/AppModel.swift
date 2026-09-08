@@ -599,6 +599,11 @@ final class AppModel: ObservableObject {
     /// warning nobody can render is a warning nobody has checked.
     var syncRoots = SyncRoots.detected()
     @Published var pendingTrash: PendingTrash?
+    /// Asked before throwing a scan away. Measuring a whole disk is minutes of
+    /// walking, every open tool goes with it, and so does the undo stack — the
+    /// part nobody expects, because the items are still in the Trash and this
+    /// was the only thing that knew where they came from.
+    @Published var pendingNewScan = false
     @Published var hasFullDiskAccess = FileActions.hasFullDiskAccess()
 
     @AppStorage("appearance") var appearance: Appearance = .system {
@@ -931,6 +936,11 @@ final class AppModel: ObservableObject {
     /// nothing across two scans, so a selection, a tick list or a set of
     /// findings carried over would point at whatever now happens to sit at
     /// that index — and the tick list is the one that feeds the Trash.
+    /// Nothing to lose before a scan exists, so nothing to ask about.
+    func requestNewScan() {
+        if tree == nil { newScan() } else { pendingNewScan = true }
+    }
+
     func newScan() {
         cancelScan()
         tree?.stopWatching()

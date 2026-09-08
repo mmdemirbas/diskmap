@@ -61,6 +61,18 @@ struct ContentView: View {
                     .preferredColorScheme(model.appearance.colorScheme)
             }
         }
+        .confirmationDialog(loc[.startOverTitle],
+                            isPresented: Binding(get: { model.pendingNewScan },
+                                                 set: { model.pendingNewScan = $0 }),
+                            titleVisibility: .visible) {
+            Button(loc[.startOverConfirm], role: .destructive) {
+                model.pendingNewScan = false
+                model.newScan()
+            }
+            Button(loc[.cancel], role: .cancel) { model.pendingNewScan = false }
+        } message: {
+            Text(loc[.startOverBody])
+        }
         .confirmationDialog(
             model.pendingTrash.map { loc.confirmTrashTitle($0.name) } ?? "",
             isPresented: Binding(get: { model.pendingTrash != nil },
@@ -262,7 +274,10 @@ struct ContentView: View {
             .help(loc[.sizeMetricHelp])
 
             HStack(spacing: 2) {
-                Button { model.newScan() } label: { Image(systemName: "plus.magnifyingglass") }
+                // Was a magnifier with a plus on it, which is the zoom-in
+                // glyph everywhere else. This button throws the scan away and
+                // goes back to the list of things to measure.
+                Button { model.requestNewScan() } label: { Image(systemName: "checklist") }
                     .help(loc[.newScanHelp])
                 Button { model.scan() } label: { Image(systemName: "arrow.clockwise") }
                     .help(loc[.rescan])

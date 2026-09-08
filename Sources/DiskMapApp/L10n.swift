@@ -387,6 +387,7 @@ final class L10n: ObservableObject {
         case appName, inUse, purgeable, free, why, capacityHelp
         case tabMap, tabDuplicates, tabCompare, tabSearch, closeTab
         case needsAScan, chooseWhatToScan, copiesSubtitle
+        case startOverTitle, startOverBody, startOverConfirm
         case whereSpaceIs, whereSpaceIsSubtitle, capacity, used, freeReally, freeFinder
         case purgeableNote, writableNow, includesPurgeable
         case scanVsFilesystem, volumeReportsUsed, scanAttributed, unaccounted, done
@@ -468,6 +469,10 @@ final class L10n: ObservableObject {
         .needsAScan: ("This tool reads a scan, and nothing has been scanned yet",
                       "Bu araç bir tarama okur, henüz hiçbir şey taranmadı"),
         .chooseWhatToScan: ("Choose what to scan", "Ne taranacağını seçin"),
+        .startOverTitle: ("Measure something else?", "Başka bir şey ölçülsün mü?"),
+        .startOverBody: ("This throws away the scan and everything open with it, including the list of what was moved to the Trash — those items stay in the Trash, but this app can no longer put them back.",
+                         "Bu, taramayı ve onunla birlikte açık olan her şeyi atar; Çöp Kutusu'na taşınanların listesi de buna dahildir — o öğeler Çöp Kutusu'nda kalır, ancak bu uygulama artık onları geri koyamaz."),
+        .startOverConfirm: ("Start over", "Baştan başla"),
         .copiesSubtitle: ("Folders and files that appear more than once. Nothing is removed from here — every row opens the full list first.",
                           "Birden fazla kez görünen klasörler ve dosyalar. Buradan hiçbir şey silinmez — her satır önce tam listeyi açar."),
         .inUse: ("In use", "Kullanımda"),
