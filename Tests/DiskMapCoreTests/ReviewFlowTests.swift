@@ -44,6 +44,33 @@ final class ReviewFlowTests: XCTestCase {
         })
     }
 
+    // MARK: - A report belongs to the tree that produced it
+
+    /// Measuring something else must take the copy report with it.
+    ///
+    /// A row in that report is a set of node ids, and node ids mean nothing
+    /// across two scans: the same index is a different file. Leaving the rows
+    /// on screen after the tree they describe has gone means the Copies tab
+    /// offers, tickable, a list of paths that were computed from a disk the app
+    /// is no longer looking at.
+    func testMeasuringSomethingElseTakesTheCopyReportWithIt() throws {
+        // Over the size floor the duplicate pass applies, or there is nothing
+        // to lose and the test passes without covering anything.
+        try write("one/a.bin", 2_000_000)
+        try write("two/a.bin", 2_000_000)
+        let model = ready()
+        model.open(.duplicates)
+        model.refreshSummarySync()
+        XCTAssertFalse(model.duplicates.isEmpty, "fixture produced no copies to lose")
+
+        model.newScan()
+
+        XCTAssertTrue(model.duplicates.isEmpty, "the copy report outlived its tree")
+        XCTAssertTrue(model.folderMatches.isEmpty, "the folder matches outlived their tree")
+        XCTAssertNil(model.summary)
+        XCTAssertTrue(model.matchGroups.isEmpty)
+    }
+
     // MARK: - Selecting
 
     func testTickingSomethingPutsItInThePlan() throws {

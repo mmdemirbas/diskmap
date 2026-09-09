@@ -630,11 +630,6 @@ final class AppModel: ObservableObject {
     var history: [SnapshotStore.Entry] { changes.history }
     var comparison: DigestDiff? { changes.comparison }
     var comparingTo: String? { changes.comparingTo }
-    /// Every set of things the app called copies of each other, so the planner
-    /// can refuse to empty one.
-    /// The copy groups the last report found. Internal rather than private so
-    /// the review-flow tests can set up a group without running the report.
-    var matchGroups: [[Int32]] = []
     /// The groups the open review is judged against — the panel's matches, or
     /// the ones a suggestion came from.
     private var reviewGroups: [[Int32]] = []
@@ -656,15 +651,42 @@ final class AppModel: ObservableObject {
     @Published var visualization: Visualization = .treemap
     @Published var colourMode: ColourMode = .type
     @Published var panel: PanelMode = .contents
-    @Published var summary: SubtreeSummary?
-    @Published var duplicates: [DuplicateEntry] = []
-    @Published var folderMatches: [FolderEntry] = []
-    @Published var verifications: [Int64: VerifyStatus] = [:]
-    @Published var openMatches: Set<Int64> = []
-    private var verifyTokens: [Int64: CancelToken] = [:]
+
+    /// What is in here, and what is in here twice. Re-emitted like the rest, so
+    /// the panels that read `model.duplicates` did not have to be re-pointed
+    /// for the move.
+    let reports = ReportsModule()
+    private var reportsRelay: AnyCancellable?
+
+    /// Shared with the space module rather than owned by either: it caches a
+    /// hash per folder against the tree's own revision, and two modules asking
+    /// the same question of the same tree should not pay for it twice.
     private let signatureCache = SignatureCache()
-    @Published var largeFiles: [LargeFile] = []
-    @Published var summarizing = false
+
+    var summary: SubtreeSummary? {
+        get { reports.summary } set { reports.summary = newValue }
+    }
+    var duplicates: [DuplicateEntry] {
+        get { reports.duplicates } set { reports.duplicates = newValue }
+    }
+    var folderMatches: [FolderEntry] {
+        get { reports.folderMatches } set { reports.folderMatches = newValue }
+    }
+    var largeFiles: [LargeFile] {
+        get { reports.largeFiles } set { reports.largeFiles = newValue }
+    }
+    var summarizing: Bool {
+        get { reports.summarizing } set { reports.summarizing = newValue }
+    }
+    var verifications: [Int64: VerifyStatus] {
+        get { reports.verifications } set { reports.verifications = newValue }
+    }
+    var openMatches: Set<Int64> {
+        get { reports.openMatches } set { reports.openMatches = newValue }
+    }
+    var matchGroups: [[Int32]] {
+        get { reports.matchGroups } set { reports.matchGroups = newValue }
+    }
 
     let layoutCache = LayoutStore<TreemapLayout>()
     let sunburstCache = LayoutStore<SunburstLayout>()
@@ -704,6 +726,15 @@ final class AppModel: ObservableObject {
         }
         filesRelay = files.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
+        }
+        reportsRelay = reports.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+        // A tick refers to a node in the report that produced it — unless a
+        // review is open, in which case it refers to a decision being made.
+        reports.onLoaded = { [weak self] in
+            guard let self, self.reviewing == nil else { return }
+            self.checked = []
         }
         changesRelay = changes.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
@@ -1050,9 +1081,7 @@ final class AppModel: ObservableObject {
         reviewing = nil
         space.clear()
         files.clear()
-        summary = nil
-        largeFiles = []
-        matchGroups = []
+        reports.clear()
         reviewGroups = []
         // Was `currentDigest = nil`, which left the comparison, the entry it
         // was against and the history list standing. `openChanges` only
@@ -1462,34 +1491,15 @@ final class AppModel: ObservableObject {
         layoutToken &+= 1
     }
 
-    /// Whole-subtree reports. Walking 11M nodes takes a moment, so it runs off
-    /// the main thread and only when a report panel is actually showing.
+    /// Whole-subtree reports. The walk lives in the reports module; what stays
+    /// here is the question only the app can answer — whether anything is
+    /// showing one, and whether copies are part of it.
     func refreshSummary() {
         guard let tree, wantsAReport else { return }
-        let root = currentDirectory
-        let physical = usePhysicalSize
-        let wantsDuplicates = wantsDuplicateReport
-        // Verdicts belong to the tree that produced them. Dropping the state
-        // without stopping the run would leave gigabytes of reading in flight
-        // for an answer nobody can see any more.
-        if wantsDuplicates { cancelAllVerifications() }
-        summarizing = true
-        let cache = signatureCache
-        // The tree's own counter, not the view's: retyping a filter must not
-        // throw away a hash pass that is still valid.
-        let revision = tree.changeCount
-        Task { [weak self] in
-            let computed = await Task.detached(priority: .userInitiated) {
-                Self.report(tree: tree, root: root, physical: physical,
-                            includeDuplicates: wantsDuplicates,
-                            cache: cache, revision: revision)
-            }.value
-            guard let self else { return }
-            self.apply(computed)
-        }
+        reports.load(tree: tree, root: currentDirectory, physical: usePhysicalSize,
+                     includeDuplicates: wantsDuplicateReport, cache: signatureCache)
     }
 
-    /// Blocking report used by the offscreen renderer, which has no async pass.
     /// Who is asking for a report, and whether copies are part of it.
     ///
     /// This used to read the map's side panel and nothing else, which was true
@@ -1504,67 +1514,13 @@ final class AppModel: ObservableObject {
         panel == .duplicates || openTabs.contains(.duplicates)
     }
 
+    /// Blocking report used by the offscreen renderer, which has no async pass.
     func refreshSummarySync() {
         guard let tree else { return }
-        apply(Self.report(tree: tree, root: currentDirectory, physical: usePhysicalSize,
-                          includeDuplicates: wantsDuplicateReport,
-                          cache: signatureCache, revision: tree.changeCount))
-    }
-
-    private func apply(_ computed: ReportData) {
-        summary = computed.summary
-        largeFiles = computed.largest
-        duplicates = computed.duplicates
-        folderMatches = computed.folders
-        matchGroups = computed.folders.map { $0.copies.map(\.id) }
-            + computed.duplicates.map { $0.copies.map(\.id) }
-        // A tick refers to a node in the report that produced it — unless a
-        // review is open, in which case it refers to a decision being made.
-        if reviewing == nil { checked = [] }
-        summarizing = false
-    }
-
-    /// Duplicate detection is a second walk, so it only runs for the panel that
-    /// shows it rather than on every report refresh.
-    nonisolated static func report(tree: LiveTree, root: Int32, physical: Bool,
-                                   includeDuplicates: Bool,
-                                   cache: SignatureCache, revision: Int) -> ReportData {
-        // One lock acquisition: the store must not escape it.
-        tree.withStore { store -> ReportData in
-            let summary = Aggregate.summarize(store: store, root: root, usePhysicalSize: physical)
-            let files = summary.largestFiles.map { id -> LargeFile in
-                let name = store.name(id)
-                return LargeFile(
-                    id: id, name: name, path: store.path(id),
-                    bytes: physical ? store.totalPhysical[Int(id)] : store.totalLogical[Int(id)],
-                    category: Categorizer.of(name: name, isDirectory: false),
-                    modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(id)])))
-            }
-            guard includeDuplicates else {
-                return ReportData(summary: summary, largest: files, duplicates: [], folders: [])
-            }
-            let matches = FolderMatches.find(store: store, root: root,
-                                             precomputed: cache.signatures(for: store,
-                                                                          revision: revision))
-            let folders = matches.map { match in
-                FolderEntry(id: matchKey(match.nodes), name: store.name(match.nodes[0]),
-                            bytes: match.bytes, reclaimable: match.reclaimable,
-                            exact: match.exact, sharedItems: match.sharedItems,
-                            comparedItems: match.comparedItems,
-                            readBytes: match.nodes.reduce(0) { $0 + store.totalPhysical[Int($1)] },
-                            copies: match.nodes.map { PathRef(id: $0, path: store.path($0)) })
-            }
-            let groups = Duplicates.find(store: store, root: root,
-                                         insideMatched: matches).map { group in
-                DuplicateEntry(id: matchKey(group.nodes), name: group.name, bytes: group.bytes,
-                               reclaimable: group.reclaimable,
-                               readBytes: group.bytes * Int64(group.nodes.count),
-                               copies: group.nodes
-                                   .map { PathRef(id: $0, path: store.path($0)) }
-                                   .sorted { $0.path < $1.path })
-            }
-            return ReportData(summary: summary, largest: files, duplicates: groups, folders: folders)
-        }
+        reports.loadSynchronously(tree: tree, root: currentDirectory,
+                                  physical: usePhysicalSize,
+                                  includeDuplicates: wantsDuplicateReport,
+                                  cache: signatureCache)
     }
 
     // MARK: - Choosing things to remove
@@ -1878,42 +1834,13 @@ final class AppModel: ObservableObject {
 
     // MARK: - Deep verification
 
-    /// Reads every file in the match and compares the contents, which is the
-    /// only way to answer "are these really the same". Off by default because
-    /// it costs the bytes; the button says how many before you press it.
     func verifyMatch(id: Int64, nodes: [Int32]) {
-        guard let tree, verifications[id]?.running != true else { return }
-        let plan = tree.withStore { DeepVerify.plan(store: $0, nodes: nodes) }
-        let token = CancelToken()
-        verifyTokens[id] = token
-        verifications[id] = VerifyStatus(read: 0, total: plan.bytes)
-
-        Task { [weak self] in
-            let outcome = await Task.detached(priority: .utility) { () -> VerifyOutcome in
-                DeepVerify.run(plan, cancel: token) { read in
-                    Task { @MainActor [weak self] in
-                        guard self?.verifications[id]?.running == true else { return }
-                        self?.verifications[id]?.read = read
-                    }
-                }
-            }.value
-            guard let self else { return }
-            self.verifyTokens[id] = nil
-            self.verifications[id]?.read = plan.bytes
-            self.verifications[id]?.outcome = outcome
-        }
+        guard let tree else { return }
+        reports.verifyMatch(id: id, nodes: nodes, tree: tree)
     }
 
-    func cancelVerify(id: Int64) {
-        verifyTokens[id]?.cancel()
-        verifyTokens[id] = nil
-    }
-
-    func cancelAllVerifications() {
-        for token in verifyTokens.values { token.cancel() }
-        verifyTokens.removeAll()
-        verifications.removeAll()
-    }
+    func cancelVerify(id: Int64) { reports.cancelVerify(id: id) }
+    func cancelAllVerifications() { reports.cancelAllVerifications() }
 
     /// Blocking scan used by the offscreen renderer.
     func scanSynchronously() {
