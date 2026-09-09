@@ -262,9 +262,21 @@ public enum CompareRefusal: Error, Sendable, Equatable {
 /// without changing its length reads as identical here. `verify` is the answer
 /// to that, and it reads every byte, so it only runs when asked.
 public enum FolderDiff {
+    /// A folder that has already been walked, if the caller has one.
+    ///
+    /// Comparing two folders needs each side as a store whose node 0 is that
+    /// folder. When the app has already measured them — which is the ordinary
+    /// case, since the folders being compared are usually on the disk being
+    /// looked at — walking them again is the same answer for the price of the
+    /// whole subtree in syscalls. The caller decides whether its copy is good
+    /// enough to stand in; this only asks.
+    public typealias Supplier = @Sendable (String) -> ScanResult?
+
     public static func compare(left rawLeft: String, right rawRight: String,
                                options: CompareOptions = CompareOptions(),
-                               cancel: CancelToken? = nil) -> Result<FolderComparison, CompareRefusal> {
+                               cancel: CancelToken? = nil,
+                               alreadyScanned: Supplier? = nil)
+        -> Result<FolderComparison, CompareRefusal> {
         let started = Date()
         let left = canonicalPath(rawLeft) ?? rawLeft
         let right = canonicalPath(rawRight) ?? rawRight
@@ -276,8 +288,8 @@ public enum FolderDiff {
         if isInside(right, left) { return .failure(.nested(inner: right, outer: left)) }
 
         let span = Telemetry.begin("compare")
-        let leftScan = scan(left, cancel: cancel)
-        let rightScan = scan(right, cancel: cancel)
+        let leftScan = alreadyScanned?(left) ?? scan(left, cancel: cancel)
+        let rightScan = alreadyScanned?(right) ?? scan(right, cancel: cancel)
         let ls = leftScan.store, rs = rightScan.store
 
         // Subtree hashes let a folder whose contents match all the way down be

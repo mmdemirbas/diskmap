@@ -89,6 +89,14 @@ final class CompareModule: ObservableObject {
 
     var canCompare: Bool { !compareLeft.isEmpty && !compareRight.isEmpty && !comparing }
 
+    /// Where an already-measured copy of a folder can be had.
+    ///
+    /// Set by the app whenever the tree it holds changes, and nil for the CLI
+    /// and the tests, which have no scan to share. It is asked from a
+    /// background thread, so it closes over the tree rather than over anything
+    /// belonging to a screen.
+    var alreadyScanned: FolderDiff.Supplier?
+
     func runComparison() {
         guard !compareLeft.isEmpty, !compareRight.isEmpty else { return }
         cancelComparison()
@@ -108,8 +116,10 @@ final class CompareModule: ObservableObject {
 
         let options = settings.options
         Task { [weak self] in
+            let reuse = self?.alreadyScanned
             let outcome = await Task.detached(priority: .userInitiated) {
-                FolderDiff.compare(left: left, right: right, options: options, cancel: token)
+                FolderDiff.compare(left: left, right: right, options: options, cancel: token,
+                                   alreadyScanned: reuse)
             }.value
             guard let self, self.compareGeneration == generation else { return }
             self.comparing = false
@@ -390,7 +400,8 @@ final class CompareModule: ObservableObject {
     /// slightly different screen from the one the app draws.
     func compareSynchronously() {
         guard case .success(let comparison) = FolderDiff.compare(
-            left: compareLeft, right: compareRight, options: settings.options) else { return }
+            left: compareLeft, right: compareRight, options: settings.options,
+            alreadyScanned: alreadyScanned) else { return }
         folderComparison = comparison
         openTheDifferences(comparison.tree)
         compareSkipped = []

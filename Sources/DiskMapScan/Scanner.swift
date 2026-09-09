@@ -65,6 +65,7 @@ public final class CancelToken: @unchecked Sendable {
 }
 
 public struct ScanStats: Sendable {
+    public init() {}
     public var directories = 0
     public var files = 0
     public var symlinks = 0
@@ -103,6 +104,14 @@ public struct ScanStats: Sendable {
 }
 
 public struct ScanResult: Sendable {
+    public init(store: NodeStore, stats: ScanStats, roots: [String],
+                rejectedRoots: [RejectedRoot]) {
+        self.store = store
+        self.stats = stats
+        self.roots = roots
+        self.rejectedRoots = rejectedRoots
+    }
+
     public let store: NodeStore
     public let stats: ScanStats
     public let roots: [String]

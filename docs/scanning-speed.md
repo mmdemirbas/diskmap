@@ -76,8 +76,45 @@ saying so. `Scripts/measurements/bulk-eof-cost.swift`.
 **Skipping empty directories** using the same attribute was dropped for a
 duller reason: 11,609 of 427,451 directories are empty here, 2.7%.
 
-## What is actually left
+## Not walking the same folder twice
 
-Not the walk. Not scanning the same folder twice — see the shared-scan work,
-which is where the wins that remain are: a comparison of two folders already
-inside the scan should read the scan, not the disk.
+The walk is at its floor. The saving left is not doing it.
+
+Comparing two folders walked both of them from disk, even when the app had
+already measured them — which is the ordinary case, because the folders being
+compared are usually on the disk being looked at. A comparison now asks the
+scan first. Measured on two folders of a few thousand nodes each:
+
+| | |
+|---|---|
+| Both sides walked | 0.93 s |
+| Both sides read from the scan | 0.10 s |
+| One side read, one walked | 0.66 s |
+
+Reproduce with `dmbench comparereuse <left> <right>`, which runs it both ways
+and checks the two answers against each other field by field.
+
+### When the scan is not good enough to stand in
+
+The saving is only worth having if the answer cannot change, so the offer is
+refused far more often than it strictly has to be.
+
+- **The tree is not being watched.** Then its age is unknown. The map is
+  allowed to be a little behind; a screen people delete from is not.
+- **Anything inside was not walked** — an excluded path, a mount point the scan
+  did not cross, a directory it could not open. The copy would be a folder full
+  of missing files, and every one of them would be reported as a difference.
+  Checked over the whole subtree, because the missing part can be ten levels
+  down.
+- **Anything inside is an extra link to an inode.** This is the subtle one. A
+  scan counts an inode's bytes once, at the first link it meets, and zeroes
+  every later one — right for the disk being measured, wrong for a folder
+  lifted out of it. If the first link was in some other folder, the copy
+  carries a zero where a walk of that folder alone carries the real size. It is
+  not recorded where the first link was, so any extra link is refused. This is
+  what refuses a folder in an rsync `--link-dest` backup set, and refusing is
+  the right answer there: the links are *between* the two folders being
+  compared, so a walk of each alone genuinely counts different bytes.
+
+A refused side is walked, which is what happened before. The check itself is a
+pass over the subtree in memory.

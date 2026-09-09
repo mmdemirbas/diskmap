@@ -175,6 +175,65 @@ func cmdDupes(_ paths: [String]) {
 
 /// End-to-end check of the deep path: plan two or more real folders, read every
 /// byte, and say whether they are the same.
+/// The same comparison twice: once walking both folders, once reading them out
+/// of a scan that already covers them. Prints both times and asserts the two
+/// answers agree, because a shared scan that is faster and different is worse
+/// than no sharing at all.
+func cmdCompareReuse(_ left: String, _ right: String) {
+    let parent = (left as NSString).deletingLastPathComponent
+    print("scanning \(parent) once ...")
+    let started = Date()
+    let scanned = DiskScanner().scan(ScanOptions(rootPath: parent))
+    print(String(format: "  scan          %6.2f s   %d nodes",
+                 Date().timeIntervalSince(started), scanned.store.count))
+
+    let store = scanned.store
+    for side in [left, right] {
+        switch ScanReuse.offer(store, folder: side, watching: true) {
+        case .success(let r): print("  offer \((side as NSString).lastPathComponent): \(r.store.count) nodes")
+        case .failure(let why): print("  offer \((side as NSString).lastPathComponent): refused, \(why.rawValue)")
+        }
+    }
+    let supplier: FolderDiff.Supplier = { folder in
+        try? ScanReuse.offer(store, folder: folder, watching: true).get()
+    }
+
+    func run(_ label: String, _ reuse: FolderDiff.Supplier?) -> FolderComparison? {
+        let t = Date()
+        guard case .success(let c) = FolderDiff.compare(left: left, right: right,
+                                                        alreadyScanned: reuse) else {
+            print("  \(label): refused"); return nil
+        }
+        print(String(format: "  %-13s %6.2f s   %d entries, %d identical, %d differing",
+                     (label as NSString).utf8String!, Date().timeIntervalSince(t),
+                     c.entries.count, c.summary.identical, c.summary.differing))
+        return c
+    }
+
+    let walked = run("from disk", nil)
+    let reused = run("from scan", supplier)
+    guard let walked, let reused else { return }
+    let a = walked.summary, b = reused.summary
+    var mismatches: [String] = []
+    func check(_ what: String, _ x: Int, _ y: Int) { if x != y { mismatches.append("\(what) \(x) vs \(y)") } }
+    func checkBytes(_ what: String, _ x: Int64, _ y: Int64) { if x != y { mismatches.append("\(what) \(x) vs \(y)") } }
+    check("identical", a.identical, b.identical)
+    check("differing", a.differing, b.differing)
+    check("onlyLeft", a.onlyLeft, b.onlyLeft)
+    check("onlyRight", a.onlyRight, b.onlyRight)
+    check("typeClashes", a.typeClashes, b.typeClashes)
+    check("dataless", a.datalessItems, b.datalessItems)
+    check("ignored", a.ignored, b.ignored)
+    checkBytes("identicalBytes", a.identicalBytes, b.identicalBytes)
+    checkBytes("differingBytes", a.differingBytes, b.differingBytes)
+    checkBytes("onlyLeftBytes", a.onlyLeftBytes, b.onlyLeftBytes)
+    checkBytes("onlyRightBytes", a.onlyRightBytes, b.onlyRightBytes)
+    if walked.entries.map(\.name) != reused.entries.map(\.name) { mismatches.append("entry names") }
+    if walked.entries.map(\.kind) != reused.entries.map(\.kind) { mismatches.append("entry kinds") }
+    print(mismatches.isEmpty ? "  answers agree"
+                             : "  ANSWERS DIFFER: " + mismatches.joined(separator: ", "))
+}
+
 func cmdVerify(_ paths: [String]) {
     guard paths.count > 1 else { print("usage: dmbench verify <path> <path> [path...]"); exit(1) }
     let parent = (paths[0] as NSString).deletingLastPathComponent
@@ -716,6 +775,7 @@ case "relistcost": cmdRelistCost(args.count > 2 ? (Int(args[2]) ?? 8) : 8,
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
 case "compare": cmdCompare(args.count > 3 ? args[2] : ".", args.count > 3 ? args[3] : ".",
                            verify: args.contains("--verify"))
+case "comparereuse": cmdCompareReuse(args.count > 3 ? args[2] : ".", args.count > 3 ? args[3] : ".")
 case "verify": cmdVerify(Array(args.dropFirst(2)))
 case "verifytop": cmdVerifyTop(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                                budget: args.count > 3 ? (Int64(args[3]) ?? 0) << 30 : 12 << 30)

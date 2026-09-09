@@ -145,6 +145,87 @@ public final class NodeStore {
         return id
     }
 
+    /// One subtree, copied into a store of its own.
+    ///
+    /// Exists so a folder that has already been walked is never walked again.
+    /// Comparing two folders needs each side as a store whose node 0 is that
+    /// folder; when both sides are already inside a scan, building those two
+    /// stores from memory costs a pass over the nodes instead of a pass over
+    /// the disk.
+    ///
+    /// Breadth-first, so the invariant every bottom-up pass relies on — a
+    /// child's index is greater than its parent's — holds in the copy as it
+    /// does here. Nodes a live update has marked removed are left behind, along
+    /// with everything under them.
+    ///
+    /// Rolled-up totals are copied rather than recomputed. A node's total
+    /// depends only on its descendants, and a subtree is closed under
+    /// descendants, so the numbers carry over exactly.
+    public func subtree(root: Int32) -> NodeStore {
+        let out = NodeStore()
+        guard root >= 0, root < Int32(count),
+              !NodeFlags(rawValue: flags[Int(root)]).contains(.removed) else { return out }
+        out.roots = [path(root)]
+
+        // Two passes rather than a dictionary: the first counts what will be
+        // copied so the arrays are sized once, the second copies. A hash lookup
+        // per node costs more than the extra walk on every tree measured.
+        var queue: [Int32] = [root]
+        var head = 0
+        while head < queue.count {
+            let node = queue[head]; head += 1
+            for child in kept(of: node) { queue.append(child) }
+        }
+        out.reserve(queue.count)
+        out.beginInterning(expectedNodes: queue.count)
+
+        // Where each copied node landed, so a child can name its parent. Sized
+        // to the source, which is one Int32 per node of the whole store and
+        // still far cheaper than walking the folder again.
+        var moved = [Int32](repeating: -1, count: count)
+        // A scan names its root node with the root's absolute path, and the
+        // copy has to do the same or it is not the same store: everything that
+        // reads a root — the path builder, the comparison's two headings —
+        // would show one folder name where a scan shows a location.
+        var rootName = Array(out.roots[0].utf8)
+        nameBytes.withUnsafeBufferPointer { blob in
+            let base = blob.baseAddress!
+            rootName.withUnsafeBufferPointer { rootBytes in
+                for node in queue {
+                    let i = Int(node)
+                    let isRoot = node == root
+                    let mapped = out.append(
+                        name: isRoot ? UnsafeRawPointer(rootBytes.baseAddress!)
+                                     : UnsafeRawPointer(base + Int(nameOffset[i])),
+                        nameLength: isRoot ? rootName.count : Int(nameLen[i]),
+                        parent: isRoot ? -1 : moved[Int(parent[i])],
+                        logical: totalLogical[i], physical: totalPhysical[i],
+                        mtime: mtime[i],
+                        flags: NodeFlags(rawValue: flags[i]))
+                    moved[i] = mapped
+                }
+            }
+        }
+        out.endInterning()
+        // The children kept for one parent were enqueued together and copied in
+        // that order, so they are contiguous in the copy — the span can be
+        // written from the same walk rather than sorted out afterwards.
+        for node in queue {
+            let survivors = kept(of: node)
+            guard let first = survivors.first else { continue }
+            out.firstChild[Int(moved[Int(node)])] = moved[Int(first)]
+            out.childCount[Int(moved[Int(node)])] = Int32(survivors.count)
+        }
+        return out
+    }
+
+    /// A node's children that a live update has not marked removed. The removed
+    /// ones are tombstones: still in the arrays so ids stay stable, and not
+    /// part of the tree any more.
+    private func kept(of node: Int32) -> [Int32] {
+        children(node).filter { !NodeFlags(rawValue: flags[Int($0)]).contains(.removed) }
+    }
+
     /// Where a node's interned name sits in the blob.
     ///
     /// For a comparison that would otherwise build a Swift String per node only

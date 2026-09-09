@@ -1150,6 +1150,9 @@ final class AppModel: ObservableObject {
         tree?.stopWatching()
         session.adopt(nil)
         liveActive = false
+        // The supplier closes over the tree. Left in place it would hold the
+        // old one in memory and go on answering comparisons from it.
+        compare.alreadyScanned = nil
         layoutCache.set(TreemapLayout(key: "", cells: [], info: [:]))
         phase = .scanning(ScanProgressSnapshot(nodes: 0, directories: 0, bytes: 0, path: path, fraction: 0))
 
@@ -1226,6 +1229,7 @@ final class AppModel: ObservableObject {
         tree?.stopWatching()
         session.adopt(nil)
         liveActive = false
+        compare.alreadyScanned = nil
         stats = nil
         reconciliation = nil
         rejectedRoots = []
@@ -1278,6 +1282,16 @@ final class AppModel: ObservableObject {
         recordDigest(of: live)
         live.startWatching()
         liveActive = live.liveUpdatesActive
+        // A comparison of two folders that are already in this scan can be
+        // answered from it. Wired here rather than asked for later, because the
+        // comparison runs off the main thread and must close over the tree
+        // rather than over anything on a screen.
+        compare.alreadyScanned = { path in
+            guard case .success(let reused) = live.withStore({
+                ScanReuse.offer($0, folder: path, watching: live.liveUpdatesActive)
+            }) else { return nil }
+            return reused
+        }
         hasFullDiskAccess = FileActions.hasFullDiskAccess()
         map.openAtTheRoot(of: live)
         // Everything that names a node from the tree being replaced, dropped
