@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// The document another program reads. Its job is to be honest about what it
 /// does and does not contain.

@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 final class ScannerTests: XCTestCase {
     /// Builds a known tree and asserts the aggregate equals the hand-computed sum.

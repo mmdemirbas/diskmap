@@ -1,6 +1,7 @@
 import CoreGraphics
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 final class SunburstTests: XCTestCase {
     private var root: URL!

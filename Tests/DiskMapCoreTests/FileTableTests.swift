@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// The flat table: every file at once, ordered by whichever property is being
 /// asked about, without walking down to any of them.

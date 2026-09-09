@@ -218,7 +218,7 @@ public final class DiskScanner {
         return current
     }
 
-    static func isVolumeRoot(_ path: String) -> Bool {
+    public static func isVolumeRoot(_ path: String) -> Bool {
         if path == "/" || path == "/System/Volumes/Data" { return true }
         var here = stat(), up = stat()
         guard lstat(path, &here) == 0, lstat(path + "/..", &up) == 0 else { return false }

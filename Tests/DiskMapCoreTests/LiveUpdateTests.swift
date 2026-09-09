@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// Regressions from the live-update path, where a relist re-points untouched
 /// subtrees at freshly appended parents.

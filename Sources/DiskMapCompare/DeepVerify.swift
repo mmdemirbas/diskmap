@@ -1,6 +1,8 @@
 import CryptoKit
 import Darwin
 import Foundation
+import DiskMapScan
+import DiskMapActions
 
 public struct VerifyFile: Sendable {
     public var path: String

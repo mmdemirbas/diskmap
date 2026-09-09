@@ -709,7 +709,7 @@ final class AppModel: ObservableObject {
         // Anything already ticked under it stops being a target.
         if let tree {
             let inside = tree.withStore { store in
-                checked.filter { TrashPlanner.isInside(store.path($0), path) }
+                checked.filter { RootSet.isInside(store.path($0), path) }
             }
             checked.subtract(inside)
         }
@@ -1007,7 +1007,7 @@ final class AppModel: ObservableObject {
     /// folder inside a ticked disk is absorbed by normalisation, so the row has
     /// to say it is covered rather than appear unticked while being measured.
     func coveringTarget(_ path: String) -> String? {
-        scanTargets.first { $0 != path && TrashPlanner.isInside(path, $0) }
+        scanTargets.first { $0 != path && RootSet.isInside(path, $0) }
     }
 
     func toggle(folder path: String) {
@@ -1300,7 +1300,7 @@ final class AppModel: ObservableObject {
     func isNeverTouch(_ node: Int32) -> Bool {
         guard let tree, !excludedPaths.isEmpty else { return false }
         let path = tree.withStore { $0.path(node) }
-        return excludedPaths.contains { TrashPlanner.isInside(path, $0) }
+        return excludedPaths.contains { RootSet.isInside(path, $0) }
     }
 
     /// Keeps exactly this copy and removes the others in its group. One click

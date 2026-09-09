@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 final class RootSetTests: XCTestCase {
     private var root: URL!

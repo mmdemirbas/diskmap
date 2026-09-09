@@ -1,4 +1,5 @@
 import Foundation
+import DiskMapScan
 
 public struct TrashCandidate: Sendable, Identifiable {
     public var id: Int32 { node }
@@ -103,9 +104,9 @@ public enum TrashPlanner {
             if rootForms.contains(path) { return .failure(.includesAScanRoot(path)) }
             // A path on the never-touch list is dropped rather than refused:
             // the rest of a selection is still perfectly actionable.
-            if excluded.contains(where: { isInside(path, $0) }) { plan.excluded += 1; continue }
+            if excluded.contains(where: { RootSet.isInside(path, $0) }) { plan.excluded += 1; continue }
             guard path.hasPrefix("/"), !path.contains("/../"),
-                  rootForms.contains(where: { isInside(path, $0) }) else {
+                  rootForms.contains(where: { RootSet.isInside(path, $0) }) else {
                 return .failure(.outsideTheScannedTree(path))
             }
             resolved.append((node, path))
@@ -116,7 +117,7 @@ public enum TrashPlanner {
         resolved.sort { $0.path.count == $1.path.count ? $0.path < $1.path : $0.path.count < $1.path.count }
         var keep: [(node: Int32, path: String)] = []
         for item in resolved {
-            if keep.contains(where: { isInside(item.path, $0.path) && item.path != $0.path }) {
+            if keep.contains(where: { RootSet.isInside(item.path, $0.path) && item.path != $0.path }) {
                 plan.coveredByAnAncestor += 1
                 continue
             }
@@ -133,7 +134,7 @@ public enum TrashPlanner {
                 guard member > 0, member < Int32(store.count),
                       !store.flagSet(member).contains(.removed) else { return false }
                 let memberPath = store.path(member)
-                return !keep.contains { isInside(memberPath, $0.path) }
+                return !keep.contains { RootSet.isInside(memberPath, $0.path) }
             }
             if survivors.isEmpty {
                 let name = group.first.map { store.name($0) } ?? ""
@@ -176,7 +177,7 @@ public enum TrashPlanner {
 
         for node in selected.sorted() where !accounted.contains(node) {
             guard let only = member(store, node, syncRoots),
-                  !excluded.contains(where: { isInside(only.path, $0) }) else { continue }
+                  !excluded.contains(where: { RootSet.isInside(only.path, $0) }) else { continue }
             out.append(ReviewGroup(id: key([node]), name: only.name,
                                    members: [only], isCopyGroup: false))
         }
@@ -210,9 +211,4 @@ public enum TrashPlanner {
         }
     }
 
-    /// Containment, on whole path components. Without the trailing separator
-    /// `/Users/md/dev` would appear to contain `/Users/md/development`.
-    public static func isInside(_ path: String, _ container: String) -> Bool {
-        path == container || path.hasPrefix(container == "/" ? "/" : container + "/")
-    }
 }

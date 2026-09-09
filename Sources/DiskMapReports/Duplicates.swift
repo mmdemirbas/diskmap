@@ -1,4 +1,5 @@
 import Foundation
+import DiskMapScan
 
 public struct DuplicateGroup: Sendable, Identifiable {
     public var id: Int32 { nodes.first ?? -1 }

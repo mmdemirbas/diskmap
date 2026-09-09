@@ -1,5 +1,6 @@
 import CoreServices
 import Foundation
+import DiskMapScan
 
 /// What a file says about itself once something has already read it.
 ///

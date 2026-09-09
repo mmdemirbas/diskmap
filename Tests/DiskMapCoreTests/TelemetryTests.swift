@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 final class TelemetryTests: XCTestCase {
     /// Recording during tests would bury months of real history under

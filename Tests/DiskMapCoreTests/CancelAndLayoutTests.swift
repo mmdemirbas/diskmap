@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 final class CancellationTests: XCTestCase {
     /// A token set before the scan starts must stop it immediately.

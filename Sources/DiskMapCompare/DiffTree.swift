@@ -1,5 +1,7 @@
 import Darwin
 import Foundation
+import DiskMapScan
+import DiskMapActions
 
 /// Which kinds appear at or below a node.
 ///

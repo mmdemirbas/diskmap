@@ -1,5 +1,7 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapReports
+@testable import DiskMapScan
 
 final class CleanupTests: XCTestCase {
     private var root: URL!

@@ -1,4 +1,5 @@
 import Foundation
+import DiskMapScan
 
 public struct CleanupSuggestion: Sendable, Identifiable {
     public enum Kind: String, Sendable {
@@ -105,7 +106,7 @@ public enum Cleanup {
             out = out.compactMap { suggestion in
                 var kept = suggestion
                 kept.nodes = suggestion.nodes.filter { node in
-                    !excluding.contains { TrashPlanner.isInside(store.path(node), $0) }
+                    !excluding.contains { RootSet.isInside(store.path(node), $0) }
                 }
                 guard kept.nodes.count != suggestion.nodes.count else { return suggestion }
                 guard !kept.nodes.isEmpty || suggestion.nodes.isEmpty else { return nil }

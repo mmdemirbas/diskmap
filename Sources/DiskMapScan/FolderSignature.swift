@@ -35,7 +35,7 @@ public struct FolderMatch: Sendable, Identifiable {
 public enum FolderMatches {
     /// splitmix64's finalizer. Cheap, and it avalanches well enough that
     /// summing children does not lose information.
-    @inline(__always) static func mix(_ x: UInt64) -> UInt64 {
+    @inline(__always) public static func mix(_ x: UInt64) -> UInt64 {
         var z = x &+ 0x9E37_79B9_7F4A_7C15
         z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
         z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
@@ -84,7 +84,7 @@ public enum FolderMatches {
     /// Shared with the folder comparison's own signatures, which differ from
     /// these in how they treat names, so that the two cannot drift apart on
     /// the one point where being wrong costs a file.
-    static func leafContent(_ store: NodeStore, _ id: Int32) -> UInt64 {
+    public static func leafContent(_ store: NodeStore, _ id: Int32) -> UInt64 {
         guard store.flagSet(id).contains(.symlink) else {
             return mix(UInt64(bitPattern: store.totalLogical[Int(id)]))
         }
@@ -97,7 +97,7 @@ public enum FolderMatches {
         return mix(hash ^ 0x5EED_C0DE_5EED_C0DE)
     }
 
-    static func linkTarget(_ store: NodeStore, _ node: Int32) -> String {
+    public static func linkTarget(_ store: NodeStore, _ node: Int32) -> String {
         (try? FileManager.default.destinationOfSymbolicLink(atPath: store.path(node))) ?? ""
     }
 

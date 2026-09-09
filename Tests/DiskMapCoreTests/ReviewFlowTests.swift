@@ -1,7 +1,8 @@
 import DiskMapCore
 import XCTest
 @testable import DiskMapApp
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// The path from ticking something to a plan on screen.
 ///

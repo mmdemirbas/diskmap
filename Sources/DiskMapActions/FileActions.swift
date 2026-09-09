@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import DiskMapScan
 
 public struct TrashedItem: Sendable, Identifiable {
     public let id = UUID()
@@ -7,6 +8,16 @@ public struct TrashedItem: Sendable, Identifiable {
     public let trashURL: URL?
     public let bytesFreed: Int64
     public let node: Int32
+
+    /// Spelled out rather than left to the memberwise one, which stops being
+    /// visible the moment this type is behind a target boundary: the sync
+    /// runner is in another target and builds these to report what it moved.
+    public init(originalURL: URL, trashURL: URL?, bytesFreed: Int64, node: Int32) {
+        self.originalURL = originalURL
+        self.trashURL = trashURL
+        self.bytesFreed = bytesFreed
+        self.node = node
+    }
 }
 
 public enum FileActionError: LocalizedError {

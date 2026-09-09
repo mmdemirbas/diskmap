@@ -1,5 +1,6 @@
 import CoreServices
 import Foundation
+import DiskMapScan
 
 /// Questions about what is *in* files, asked of the index rather than of the
 /// files.
@@ -111,70 +112,4 @@ public extension SpotlightQuery {
     static func isIndexed(_ root: String) -> Bool {
         !paths(matching: "kMDItemContentType == \"*\"", under: [root], limit: 1).isEmpty
     }
-}
-
-/// The answer to a content question, in a shape the tree walk can test cheaply.
-///
-/// The walk deliberately never builds a path — doing it for nine million nodes
-/// costs eighty-two seconds — so an intersection cannot simply compare paths.
-/// It compares *names* first, as a hash of the interned bytes, and only the
-/// handful of nodes whose name matches something pay for a path.
-public struct ContentMatches: Sendable, Equatable {
-    /// Compared by what was asked and how much came back, not by every path: a
-    /// filter is "the same filter" when it is the same answer, and two sets of
-    /// two hundred thousand strings are not worth walking to find that out.
-    public static func == (a: ContentMatches, b: ContentMatches) -> Bool {
-        a.token == b.token && a.count == b.count
-    }
-
-    /// What produced this answer, so two of them can be told apart.
-    public let token: String
-
-    /// Hashes of the matched basenames, folded to lower case.
-    let nameHashes: Set<UInt64>
-    /// The paths themselves, for the second test.
-    let paths: Set<String>
-    /// How many the index returned, before any intersection.
-    public let count: Int
-
-    public init(paths: [String], token: String = "") {
-        self.token = token
-        var hashes = Set<UInt64>()
-        hashes.reserveCapacity(paths.count)
-        for path in paths {
-            hashes.insert(Self.hash(name: (path as NSString).lastPathComponent))
-        }
-        self.nameHashes = hashes
-        self.paths = Set(paths)
-        self.count = paths.count
-    }
-
-    /// FNV-1a over the lower-cased bytes, the same fold the search uses, so a
-    /// name from the index and a name from the tree hash alike.
-    static func hash(name: String) -> UInt64 {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in name.utf8 {
-            let folded = byte >= 65 && byte <= 90 ? byte + 32 : byte
-            hash = (hash ^ UInt64(folded)) &* 0x100_0000_01b3
-        }
-        return hash
-    }
-
-    @inline(__always)
-    static func hash(bytes base: UnsafePointer<UInt8>, offset: Int, length: Int) -> UInt64 {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for i in 0..<length {
-            var byte = base[offset + i]
-            if byte >= 65 && byte <= 90 { byte += 32 }
-            hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
-        }
-        return hash
-    }
-
-    /// Cheap: does any match share this name?
-    @inline(__always)
-    func mightHold(nameHash: UInt64) -> Bool { nameHashes.contains(nameHash) }
-
-    /// Dear: is this exact file one of them?
-    public func holds(path: String) -> Bool { paths.contains(path) }
 }

@@ -1,7 +1,8 @@
 import DiskMapCore
 import XCTest
 @testable import DiskMapApp
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// Starting, cancelling and replacing a scan, and the state that has to go with
 /// each of those.

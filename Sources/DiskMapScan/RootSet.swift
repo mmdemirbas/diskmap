@@ -124,6 +124,17 @@ public enum RootSet {
         if parent == "/" { return path != "/" }
         return path.hasPrefix(parent + "/")
     }
+
+    /// Containment, on whole path components. Without the trailing separator
+    /// `/Users/md/dev` would appear to contain `/Users/md/development`.
+    ///
+    /// Lived on `TrashPlanner` until the core was split into targets, which is
+    /// where it became obvious that it is not a rule about deleting: it is a
+    /// fact about paths, and the copy report needs it without needing anything
+    /// that can delete.
+    public static func isInside(_ path: String, _ container: String) -> Bool {
+        path == container || path.hasPrefix(container == "/" ? "/" : container + "/")
+    }
 }
 
 

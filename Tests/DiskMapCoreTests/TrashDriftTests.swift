@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// What happens between the review screen appearing and the button being
 /// pressed. Everything here goes to the Trash, so nothing is unrecoverable —

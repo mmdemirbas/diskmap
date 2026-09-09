@@ -1,4 +1,5 @@
-import DiskMapCore
+import DiskMapReports
+import DiskMapScan
 import Foundation
 
 let filesUsage = """

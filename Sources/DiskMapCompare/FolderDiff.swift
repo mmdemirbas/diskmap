@@ -1,4 +1,6 @@
 import Foundation
+import DiskMapScan
+import DiskMapActions
 
 public enum Side: String, Sendable, CaseIterable {
     case left, right

@@ -1,4 +1,5 @@
-import DiskMapCore
+import DiskMapReports
+import DiskMapScan
 import Foundation
 
 /// Progress goes to stderr, the answer goes to stdout. That split is what lets

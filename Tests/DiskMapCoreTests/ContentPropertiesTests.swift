@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// Asking the index instead of opening the file, and remembering the answer
 /// only for as long as it is still the answer.

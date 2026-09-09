@@ -1,4 +1,6 @@
 import Foundation
+import DiskMapScan
+import DiskMapActions
 
 public enum SyncDirection: String, Sendable, CaseIterable, Identifiable {
     /// Make the right folder match the left one exactly: copy what is missing,

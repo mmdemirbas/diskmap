@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// Locating one thing in a tree, which is a different question from filtering
 /// the folder you happen to be looking at.

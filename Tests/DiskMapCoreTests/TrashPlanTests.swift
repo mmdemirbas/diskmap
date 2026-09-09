@@ -1,5 +1,6 @@
 import XCTest
-@testable import DiskMapCore
+import DiskMapCore
+@testable import DiskMapScan
 
 /// These tests never delete anything. The planner only decides; the deleting is
 /// a separate step, and every rule here exists so that step cannot be asked to
@@ -151,12 +152,12 @@ final class TrashPlanTests: XCTestCase {
     /// The containment rule the plan leans on, on its own. Getting this wrong
     /// is how a folder appears to swallow its neighbour.
     func testContainmentIsByWholePathComponents() {
-        XCTAssertTrue(TrashPlanner.isInside("/a/b", "/a/b"))
-        XCTAssertTrue(TrashPlanner.isInside("/a/b/c", "/a/b"))
-        XCTAssertTrue(TrashPlanner.isInside("/a", "/"))
-        XCTAssertFalse(TrashPlanner.isInside("/a/bc", "/a/b"))
-        XCTAssertFalse(TrashPlanner.isInside("/a/b", "/a/b/c"))
-        XCTAssertFalse(TrashPlanner.isInside("/other", "/a"))
+        XCTAssertTrue(RootSet.isInside("/a/b", "/a/b"))
+        XCTAssertTrue(RootSet.isInside("/a/b/c", "/a/b"))
+        XCTAssertTrue(RootSet.isInside("/a", "/"))
+        XCTAssertFalse(RootSet.isInside("/a/bc", "/a/b"))
+        XCTAssertFalse(RootSet.isInside("/a/b", "/a/b/c"))
+        XCTAssertFalse(RootSet.isInside("/other", "/a"))
     }
 
     // MARK: - Do not ask the filesystem to do the same work twice

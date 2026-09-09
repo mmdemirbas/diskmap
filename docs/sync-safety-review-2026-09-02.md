@@ -33,9 +33,9 @@ the live-update path feeds, which is the report cache and the undo stack. The
 ## What was reviewed, and what was not {#scope}
 
 The subject is the path from *choosing two folders* to *bytes moving on disk*:
-[FolderDiff.swift](#f/Sources/DiskMapCore/FolderDiff.swift),
-[DiffTree.swift](#f/Sources/DiskMapCore/DiffTree.swift) and
-[SyncPlan.swift](#f/Sources/DiskMapCore/SyncPlan.swift), plus the screen that
+[FolderDiff.swift](#f/Sources/DiskMapCompare/FolderDiff.swift),
+[DiffTree.swift](#f/Sources/DiskMapCompare/DiffTree.swift) and
+[SyncPlan.swift](#f/Sources/DiskMapCompare/SyncPlan.swift), plus the screen that
 presents them.
 
 ```mermaid

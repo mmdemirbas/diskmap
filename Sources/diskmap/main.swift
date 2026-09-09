@@ -1,4 +1,5 @@
-import DiskMapCore
+import DiskMapReports
+import DiskMapScan
 import Foundation
 
 /// The integration point: everything the app can answer, without the app.

@@ -496,18 +496,60 @@ final class SyncPlanTests: XCTestCase {
     /// Nothing that acts on a path the user chose may delete it. The only way
     /// out is the Trash, and this is the check that says so about the source
     /// rather than about one code path somebody remembered to read.
+    /// The command line cannot delete anything, and that is a fact about the
+    /// build rather than a promise in the documentation: `diskmap` links the
+    /// scan and the reports, and nothing that can move a file.
+    ///
+    /// Checked here because the enforcement is a line in Package.swift, and a
+    /// line in a manifest is exactly the kind of thing somebody widens while
+    /// making something else compile. `nm` on the built binary agrees: zero
+    /// symbols from the actions target, against 556 in the app.
+    func testTheCommandLineCannotReachAnythingThatDeletes() throws {
+        let manifest = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Package.swift")
+        let text = try String(contentsOf: manifest, encoding: .utf8)
+        let target = try XCTUnwrap(text.range(of: #"executableTarget(name: "diskmap""#))
+        let rest = text[target.upperBound...]
+        // Up to the next target, so this reads one declaration and not the one
+        // after it — `dmbench` next door does link the whole core.
+        let end = rest.range(of: ".executableTarget")?.lowerBound
+            ?? rest.range(of: ".testTarget")?.lowerBound ?? rest.endIndex
+        let declaration = String(rest[..<end])
+
+        for forbidden in ["DiskMapActions", "DiskMapCompare", "DiskMapCore"] {
+            XCTAssertFalse(declaration.contains(forbidden),
+                           "the command line now links \(forbidden), which can change the disk")
+        }
+    }
+
     func testNothingThatTouchesAChosenPathCanDelete() throws {
+        // Every source file, not a list of five. The list was written when the
+        // core was one target; splitting it moved three of the five and the
+        // test went looking for them at their old paths. A named list also
+        // never covers the file somebody adds tomorrow, which is the one this
+        // is meant to catch.
+        //
+        // Three places delete legitimately and none of them is on a path a user
+        // pointed at: the snapshot store pruning its own history, telemetry
+        // rotating its own log, and the benchmark tool clearing its own fixture.
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/DiskMapCore")
-        let guarded = ["SyncPlan.swift", "FolderDiff.swift", "TrashPlan.swift",
-                       "FileActions.swift", "Cleanup.swift"]
+            .appendingPathComponent("Sources")
+        let allowed = ["Snapshot.swift", "Telemetry.swift", "main.swift"]
 
         var offenders: [String] = []
-        for name in guarded {
-            let text = try String(contentsOf: sources.appendingPathComponent(name),
-                                  encoding: .utf8)
+        var checked = 0
+        let walker = FileManager.default.enumerator(at: sources,
+                                                    includingPropertiesForKeys: nil)
+        while let url = walker?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let name = url.lastPathComponent
+            guard !allowed.contains(name) else { continue }
+            checked += 1
+            let text = try String(contentsOf: url, encoding: .utf8)
             for (i, line) in text.components(separatedBy: "\n").enumerated() {
                 let code = line.trimmingCharacters(in: .whitespaces)
                 guard !code.hasPrefix("//") else { continue }
@@ -517,6 +559,7 @@ final class SyncPlanTests: XCTestCase {
                 }
             }
         }
+        XCTAssertGreaterThan(checked, 40, "the walk found almost nothing to check")
         XCTAssertTrue(offenders.isEmpty, """
             these must go through FileManager.trashItem, not delete:
             \(offenders.joined(separator: "\n"))

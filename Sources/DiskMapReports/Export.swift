@@ -1,4 +1,5 @@
 import Foundation
+import DiskMapScan
 
 /// A scan, in a form another program can read.
 ///
