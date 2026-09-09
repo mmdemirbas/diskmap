@@ -69,7 +69,7 @@ final class ServicesProvider: NSObject {
         }
         model.clearTargets()
         model.addTargets(folders)
-        model.activeTab = .map
+        model.open(.map)
         model.scan()
         NSApp.activate(ignoringOtherApps: true)
     }

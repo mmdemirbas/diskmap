@@ -66,9 +66,10 @@ final class ToolDockTests: XCTestCase {
         XCTAssertEqual(m.tools.leafHolding(.search), m.tools.leafHolding(.map))
     }
 
-    /// The map is the scan rather than a view of it, and home is where the
-    /// window lands. Both can be moved anywhere; neither can be taken away.
-    func testTheMapCanBeMovedButNotClosed() throws {
+    /// The map is a tool like the others and closes like the others. It was
+    /// pinned for a while on the grounds that it *was* the app, which is the
+    /// habit the home screen exists to break.
+    func testTheMapClosesLikeAnyOtherTool() throws {
         let m = scanned()
         m.openTool(.files)
         let filesLeaf = try XCTUnwrap(m.tools.leafHolding(.files))
@@ -77,9 +78,33 @@ final class ToolDockTests: XCTestCase {
         XCTAssertTrue(m.openTabs.contains(.map), "moving the map lost it")
 
         m.close(.map)
-        m.close(.home)
+        XCTAssertFalse(m.openTabs.contains(.map))
+    }
+
+    /// Home is the one that stays, and it is what makes closing the map safe:
+    /// the card that brings it back is on screen the moment it goes.
+    func testHomeStaysSoEverythingElseCanGo() {
+        let m = scanned()
+        for tool in ModuleTab.tools { m.close(tool) }
+
+        XCTAssertEqual(m.openTabs, [.home])
+        XCTAssertEqual(m.activeTab, .home)
+
+        m.openTool(.map)
         XCTAssertTrue(m.openTabs.contains(.map))
-        XCTAssertTrue(m.openTabs.contains(.home))
+    }
+
+    /// Showing a row in the map has to bring the map back, not quietly point at
+    /// a tool that is not on screen.
+    func testShowingSomethingInTheMapReopensIt() throws {
+        let m = scanned()
+        m.close(.map)
+        let node = try XCTUnwrap(m.tree?.withStore { $0.find(path: root.path) })
+
+        m.focus(node: node)
+
+        XCTAssertTrue(m.openTabs.contains(.map))
+        XCTAssertEqual(m.activeTab, .map)
     }
 
     /// A tool added from a group's `+` lands in that group — and is told to

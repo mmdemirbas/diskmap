@@ -55,7 +55,7 @@ struct ToolDockView: View {
                 Image(systemName: "externaldrive.badge.questionmark")
                     .font(.system(size: 26)).foregroundStyle(.tertiary)
                 Text(loc[.needsAScan]).foregroundStyle(.secondary)
-                Button(loc[.chooseWhatToScan]) { model.activeTab = .map }
+                Button(loc[.chooseWhatToScan]) { model.openTool(.map) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

@@ -98,7 +98,7 @@ enum OffscreenRenderer {
         // means rendering the whole window rather than a sheet on its own.
         // Without a tab named, the map: the renderer existed before the home
         // screen did, and every check written against it expects the map.
-        model.activeTab = .map
+        model.open(.map)
         if let t = env["DISKMAP_TAB"], let tab = ModuleTab(rawValue: t) {
             model.open(tab)
             if tab == .compare {

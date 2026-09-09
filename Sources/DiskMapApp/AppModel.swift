@@ -565,7 +565,7 @@ final class AppModel: ObservableObject {
         default: break
         }
         tools.remove(tab)
-        if activeTab == tab { activeTab = openTabs.last ?? .map }
+        if activeTab == tab { activeTab = openTabs.last ?? .home }
     }
 
     @Published var showCompareIgnore = false
@@ -1488,7 +1488,7 @@ final class AppModel: ObservableObject {
             FileActions.revealInFinder([URL(fileURLWithPath: change.path)])
             return
         }
-        activeTab = .map
+        open(.map)
         enter(node)
     }
 
@@ -1509,7 +1509,7 @@ final class AppModel: ObservableObject {
     /// same confirmation list a hand-made selection ends up in.
     func review(_ suggestion: CleanupSuggestion) {
         guard !suggestion.nodes.isEmpty else { return }
-        activeTab = .map
+        open(.map)
         checked = Set(suggestion.nodes)
         Telemetry.record("cleanup.review", ["kind": .text(suggestion.kind.rawValue),
                                             "items": .int(Int64(suggestion.itemCount)),
@@ -1539,7 +1539,7 @@ final class AppModel: ObservableObject {
     func focus(_ item: FoundItem) { focus(node: item.node) }
 
     func focus(node: Int32) {
-        activeTab = .map
+        open(.map)
         map.reveal(node)
     }
 

@@ -16,9 +16,10 @@ enum ModuleTab: String, Identifiable, Hashable, CaseIterable {
 
     var id: String { rawValue }
 
-    /// Home is the list of tools and the map is the scan itself. Everything
-    /// else is opened and closed.
-    var isClosable: Bool { self != .map && self != .home }
+    /// Only Home stays. It is the list of tools rather than one of them, so it
+    /// is what makes every other tool — the map included — safe to close: shut
+    /// anything and the card that brings it back is one click away.
+    var isClosable: Bool { self != .home }
 
     /// Compare walks the two folders it is given and reads nothing else, so it
     /// is the one tool that works before anything has been scanned. Home reads
