@@ -768,8 +768,15 @@ final class AppModel: ObservableObject {
     }
     /// Both settable so the offscreen renderer can point them at a fixture: a
     /// comparison screen that cannot be rendered is a screen nobody has checked.
-    var snapshots = SnapshotStore()
-    lazy var changes = ChangesModule(snapshots: snapshots)
+    let changes = ChangesModule(snapshots: SnapshotStore())
+
+    /// The module owns it. This was a stored property here with the module
+    /// reading it once at construction, which made every assignment after
+    /// launch a no-op.
+    var snapshots: SnapshotStore {
+        get { changes.snapshots }
+        set { changes.snapshots = newValue }
+    }
     private var changesRelay: AnyCancellable?
     /// What this scan looked like, kept so a comparison has a right-hand side
     /// without re-walking the tree.
@@ -1328,6 +1335,11 @@ final class AppModel: ObservableObject {
         refreshSummary()
         if openTabs.contains(.files) { files.reload(in: tree) }
         if openTabs.contains(.space) { reloadCleanup() }
+        // A result list that stopped following the tree is worse than an empty
+        // one: it looks like an answer. Both of these were left standing when
+        // the disk moved underneath them.
+        if openTabs.contains(.search), !findText.isEmpty { runFind() }
+        if openTabs.contains(.changes) { changes.refresh(tree) }
     }
 
     /// Whole-subtree reports. The walk lives in the reports module; what stays

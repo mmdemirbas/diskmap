@@ -16,7 +16,15 @@ final class ChangesModule: ObservableObject {
     @Published private(set) var comparison: DigestDiff?
     @Published private(set) var comparingTo: String?
 
-    private let snapshots: SnapshotStore
+    /// Where the digests are kept. Settable because the offscreen renderer and
+    /// the tests point it at a directory of their own, and it used to be a
+    /// `let` behind a forwarding property on `AppModel` that was assigned after
+    /// this object already existed — so both overrides were silently ignored
+    /// and both were reading the real history.
+    var snapshots: SnapshotStore
+    /// The refresh in flight. FSEvents arrives in bursts and each one would
+    /// otherwise start a whole-tree digest that the next one throws away.
+    private var refreshTask: Task<Void, Never>?
 
     init(snapshots: SnapshotStore) {
         self.snapshots = snapshots
@@ -39,6 +47,36 @@ final class ChangesModule: ObservableObject {
                 }
             }.value
             Telemetry.record("snapshot.write", ["folders": .int(Int64(digest.folders.count))])
+        }
+    }
+
+    /// Brings "what changed since last time" up to date with a tree that has
+    /// moved since it was answered.
+    ///
+    /// Recomputes this scan's own digest, and deliberately does not store it: a
+    /// snapshot is the record of a scan, and writing one every time a watched
+    /// folder twitches would fill the history with entries nobody asked for and
+    /// leave the list comparing against itself.
+    ///
+    /// A stored digest that has become unreadable leaves the previous answer
+    /// standing rather than blanking the screen. It was readable a moment ago,
+    /// so the interesting case is a disk problem, not a stale comparison.
+    func refresh(_ live: LiveTree) {
+        guard comparingTo != nil else { return }
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            let digest = await Task.detached(priority: .utility) {
+                live.withStore { DiskDigest.of(store: $0, stats: live.stats) }
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.current = digest
+            guard let id = self.comparingTo,
+                  let entry = self.history.first(where: { $0.id == id }) else { return }
+            do {
+                try self.compare(with: entry, tree: live)
+            } catch {
+                Telemetry.problem("snapshot.refresh", error.localizedDescription)
+            }
         }
     }
 
@@ -74,6 +112,7 @@ final class ChangesModule: ObservableObject {
     /// Dropped when the tree underneath is replaced: a comparison is against a
     /// scan that no longer exists.
     func clear() {
+        refreshTask?.cancel()
         current = nil
         comparison = nil
         comparingTo = nil
