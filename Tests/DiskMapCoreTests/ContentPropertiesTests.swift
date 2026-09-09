@@ -123,6 +123,19 @@ final class ContentCacheTests: XCTestCase {
         XCTAssertTrue(SpotlightQuery.paths(matching: "kMDItemPixelWidth > 0", under: []).isEmpty)
     }
 
+    /// The probe that tells "nothing matched" from "nothing to match against"
+    /// is a query of its own, and a query with a predicate the index rejects
+    /// would answer "not indexed" for every folder on the machine — turning a
+    /// true empty answer into a false explanation.
+    func testTheIndexProbeAgreesWithTheIndex() throws {
+        let known = "/System/Library/CoreServices/Finder.app"
+        guard Spotlight.properties(ofFile: known).indexed else {
+            throw XCTSkip("this volume is not indexed, so there is nothing to agree with")
+        }
+        XCTAssertTrue(SpotlightQuery.isIndexed("/System/Library/CoreServices"),
+                      "the probe says an indexed folder is not indexed")
+    }
+
     /// The real index, on whatever machine this runs on. Not an assertion about
     /// what it knows — that is the machine's business — only that asking it
     /// costs what the design assumed. Skipped rather than failed where the
