@@ -40,22 +40,28 @@ final class ServicesProvider: NSObject {
         sessions.first { $0.model != nil }?.model
     }
 
-    /// Compares the two selected folders.
+    /// Compares folders, however many arrive and however they were picked.
     ///
-    /// Finder allows the service on any number of folders; two is the only
-    /// count that means anything here, so one is filled into the left side and
-    /// left waiting, and more than two takes the first two rather than refusing
-    /// a selection the user has already made.
+    /// Two selected at once is the easy case and means exactly what it says.
+    /// The case that matters is one at a time: two folders in different places
+    /// cannot be selected together in the Finder, so they arrive as two
+    /// separate right-clicks and the app remembers the first until the second
+    /// turns up. What each pick means is decided in one place, `offerToCompare`,
+    /// so the Finder route and the drag route cannot drift apart.
     @objc func compareFolders(_ pasteboard: NSPasteboard, userData: String?,
                               error: AutoreleasingUnsafeMutablePointer<NSString>) {
         let folders = self.folders(on: pasteboard)
         guard let model, !folders.isEmpty else {
-            error.pointee = "Select one or two items." as NSString
+            error.pointee = "Select a file or a folder." as NSString
             return
         }
-        model.setCompareSide(.left, folders[0])
-        if folders.count > 1 { model.setCompareSide(.right, folders[1]) }
         model.open(.compare)
+        if folders.count > 1 {
+            model.setCompareSide(.left, folders[0])
+            model.setCompareSide(.right, folders[1])
+        } else {
+            model.offerToCompare(folders[0])
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 

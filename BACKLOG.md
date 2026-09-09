@@ -65,7 +65,7 @@ nine days of work sat in `build/` unseen.
 
 | # | Request | Status | Notes |
 |---|---|---|---|
-| 22 | Compare two items picked **one at a time**, from different folders: right-click one, right-click the other | open | The Finder menu offers Compare only on a selection of exactly two, so two folders in different places cannot be picked. |
+| 22 | Compare two items picked **one at a time**, from different folders: right-click one, right-click the other | done | `AppModel.offerToCompare`; the Finder item is offered on any selection now. |
 | 23 | Finish the partials: 2d and 12 | open | Find and the change history do not follow the tree; the flat table and the copies list take no drags. |
 | 24 | Share scan data between tools, so one folder is never walked twice | open | Comparing re-walks both sides from disk even when both are already in the scanned tree. |
 | 25 | Faster scanning, still precise and correct | open | Measure first. |

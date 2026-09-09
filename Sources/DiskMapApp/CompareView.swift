@@ -106,7 +106,12 @@ struct CompareView: View {
                 Button(loc[.compareChoose]) { model.chooseCompareSide(side) }
                     .controlSize(.small)
             }
-            Text(path.isEmpty ? loc[.comparePickBoth] : path)
+            // Once one side is filled, the empty one says how to fill it —
+            // which is the moment the two-right-clicks route is worth
+            // explaining, and the only moment anybody is looking here.
+            Text(path.isEmpty
+                 ? loc[model.oneSideIsWaiting ? .compareWaitingForTheOther : .comparePickBoth]
+                 : path)
                 .font(.system(size: 11))
                 .foregroundStyle(path.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
                 .lineLimit(1).truncationMode(.head)

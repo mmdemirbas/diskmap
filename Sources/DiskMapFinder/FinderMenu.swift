@@ -34,14 +34,13 @@ final class FinderMenu: FIFinderSync {
             return nil
         }
         let menu = NSMenu(title: "")
-        let selected = FIFinderSyncController.default().selectedItemURLs() ?? []
-
-        // Two folders is the only count a comparison means something for, so
-        // the item is there when it can act and absent when it cannot — rather
-        // than present and refusing after the click.
-        if selected.count == 2 {
-            menu.addItem(item("Compare in Disk Map", #selector(compare(_:))))
-        }
+        // Always offered, not only on a selection of two. Two folders in
+        // different places cannot be selected together in the Finder, so the
+        // way to compare them is one right-click each: the first is remembered
+        // and the second starts the comparison. An item that appeared only on
+        // exactly two selected made that impossible to discover, and impossible
+        // to do.
+        menu.addItem(item("Compare in Disk Map", #selector(compare(_:))))
         menu.addItem(item("Measure in Disk Map", #selector(measure(_:))))
         return menu
     }

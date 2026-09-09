@@ -1744,17 +1744,55 @@ final class AppModel: ObservableObject {
     /// A file resolves to the folder holding it. Dropping a file on a folder
     /// comparison is a near miss rather than a mistake, and refusing it teaches
     /// nothing.
-    func setCompareSide(_ side: Side, _ url: URL) {
+    /// Takes one folder as the next side of a comparison, whichever side that
+    /// turns out to be.
+    ///
+    /// The Finder can only hand over what is selected, and two folders in
+    /// different places cannot be selected together. So they arrive one at a
+    /// time and this decides what each one means: the first fills the left
+    /// side and waits, the second fills the right and runs. A third starts
+    /// over — two folders are already being compared, so the next pick is the
+    /// beginning of the next question rather than a third answer to this one.
+    ///
+    /// The same folder twice is not a mistake worth refusing; it is a slip,
+    /// and it leaves the side it was already on alone.
+    @discardableResult
+    func offerToCompare(_ url: URL) -> Side? {
+        guard let path = folderPath(of: url) else { return nil }
+        if compareLeft.isEmpty {
+            setCompareSide(.left, url)
+            return .left
+        }
+        if path == compareLeft { return .left }
+        if compareRight.isEmpty || path == compareRight {
+            setCompareSide(.right, url)
+            return .right
+        }
+        compare.compareRight = ""
+        setCompareSide(.left, url)
+        return .left
+    }
+
+    /// The folder a chosen item means. A file is taken as the folder holding
+    /// it, the same way a file dropped onto a comparison well is.
+    private func folderPath(of url: URL) -> String? {
         var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: url.path,
-                                                    isDirectory: &isDirectory)
-        guard exists else { return }
-        let path = isDirectory.boolValue ? url.path : url.deletingLastPathComponent().path
+        guard FileManager.default.fileExists(atPath: url.path,
+                                             isDirectory: &isDirectory) else { return nil }
+        return isDirectory.boolValue ? url.path : url.deletingLastPathComponent().path
+    }
+
+    func setCompareSide(_ side: Side, _ url: URL) {
+        guard let path = folderPath(of: url) else { return }
         if side == .left { compareLeft = path } else { compareRight = path }
         compare.clearResult()
         if canCompare { runComparison() }
     }
     func swapCompareSides() { compare.swapCompareSides() }
+
+    /// One side chosen and the other still empty, which is what picking two
+    /// folders one right-click at a time looks like halfway through.
+    var oneSideIsWaiting: Bool { compareLeft.isEmpty != compareRight.isEmpty }
     func rebuildCompareRows() { compare.rebuildCompareRows() }
     func openTheDifferences(_ tree: DiffTree) { compare.openTheDifferences(tree) }
     func compareCount(_ filter: CompareFilter) -> Int? { compare.compareCount(filter) }

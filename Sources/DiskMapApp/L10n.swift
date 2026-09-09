@@ -506,6 +506,7 @@ final class L10n: ObservableObject {
         case clearTargets, addMore, skippedTargets, multipleVolumesNote, targetsHeader
         case compareTitle, compareSubtitle, compareChoose, compareChooseMessage, compareWith
         case compareRun, compareLeftSide, compareRightSide, compareSwap, comparePickBoth
+        case compareWaitingForTheOther
         case compareInSync, compareWorking
         case diffIdentical, diffDiffers, diffOnlyLeft, diffOnlyRight, diffClash
         case compareVerifyContents, compareVerified
@@ -874,6 +875,9 @@ final class L10n: ObservableObject {
         .compareRightSide: ("Right", "Sağ"),
         .compareSwap: ("Swap sides", "Tarafları değiştir"),
         .comparePickBoth: ("Pick two folders", "İki klasör seçin"),
+        .compareWaitingForTheOther: (
+            "Drop one here, or right-click it in the Finder \u{2192} Compare in Disk Map",
+            "Buraya sürükleyin ya da Finder'da sağ tıklayıp \u{2192} Disk Map ile karşılaştır"),
         .compareInSync: ("Both folders hold the same thing", "İki klasör de aynı şeyi tutuyor"),
         .compareWorking: ("Reading both folders…", "İki klasör de okunuyor…"),
         .diffIdentical: ("Same", "Aynı"),
