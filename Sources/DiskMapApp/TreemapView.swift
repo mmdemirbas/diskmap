@@ -24,12 +24,12 @@ struct TreemapView: View {
             .background(Color(nsColor: .underPageBackgroundColor))
             .onAppear { canvasSize = geo.size }
             .onChange(of: geo.size) { _, new in canvasSize = new }
-            .task(id: model.layoutKey(size: geo.size)) {
+            .task(id: model.layoutKey(.treemap, size: geo.size)) {
                 // Debounce: a window drag emits a size on every frame, and each
                 // one would otherwise start a full layout.
                 try? await Task.sleep(nanoseconds: 60_000_000)
                 guard !Task.isCancelled else { return }
-                await model.relayout(size: geo.size)
+                await model.relayout(.treemap, size: geo.size)
             }
             .onContinuousHover { phase in
                 switch phase {

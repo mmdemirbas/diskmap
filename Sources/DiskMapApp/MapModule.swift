@@ -296,11 +296,20 @@ final class MapModule: ObservableObject {
 
     // MARK: - Treemap layout
 
-    func layoutKey(size: CGSize) -> String {
-        "\(visualization.rawValue)-\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)"
+    /// Which picture, at which size, of what.
+    ///
+    /// The kind is a parameter rather than `self.visualization`, and that is
+    /// the whole difference between three views that take turns and three
+    /// views that can be on screen at once. While it was read from the model,
+    /// asking for a sunburst layout while the treemap was the chosen one
+    /// computed a treemap and filed it under the sunburst's name.
+    func layoutKey(_ kind: Visualization, size: CGSize) -> String {
+        "\(kind.rawValue)-\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)"
     }
 
-    func cachedLayout(for size: CGSize) -> TreemapLayout? { layoutCache.get(layoutKey(size: size)) }
+    func cachedLayout(for size: CGSize) -> TreemapLayout? {
+        layoutCache.get(layoutKey(.treemap, size: size))
+    }
 
     nonisolated static func compute(tree: LiveTree, root: Int32, size: CGSize,
                                     physical: Bool, filter: String, key: String,
@@ -382,26 +391,30 @@ final class MapModule: ObservableObject {
         }
     }
 
-    func cachedIcicle(for size: CGSize) -> IcicleLayout? { icicleCache.get(layoutKey(size: size)) }
+    func cachedIcicle(for size: CGSize) -> IcicleLayout? {
+        icicleCache.get(layoutKey(.icicle, size: size))
+    }
 
     @discardableResult
     func computeIcicleSync(size: CGSize) -> IcicleLayout? {
         guard let tree, size.width > 16, size.height > 16 else { return nil }
         let layout = Self.computeIcicle(tree: tree, root: currentDirectory, size: size,
                                         physical: usePhysicalSize, filter: filterText,
-                                        key: layoutKey(size: size), rootNames: rootNames)
+                                        key: layoutKey(.icicle, size: size), rootNames: rootNames)
         icicleCache.set(layout)
         return layout
     }
 
-    func cachedSunburst(for size: CGSize) -> SunburstLayout? { sunburstCache.get(layoutKey(size: size)) }
+    func cachedSunburst(for size: CGSize) -> SunburstLayout? {
+        sunburstCache.get(layoutKey(.sunburst, size: size))
+    }
 
     @discardableResult
     func computeSunburstSync(size: CGSize) -> SunburstLayout? {
         guard let tree, size.width > 16, size.height > 16 else { return nil }
         let layout = Self.computeSunburst(tree: tree, root: currentDirectory, size: size,
                                           physical: usePhysicalSize, filter: filterText,
-                                          key: layoutKey(size: size), rootNames: rootNames)
+                                          key: layoutKey(.sunburst, size: size), rootNames: rootNames)
         sunburstCache.set(layout)
         return layout
     }
@@ -411,19 +424,21 @@ final class MapModule: ObservableObject {
         guard let tree, size.width > 8, size.height > 8 else { return nil }
         let l = Self.compute(tree: tree, root: currentDirectory, size: size,
                              physical: usePhysicalSize, filter: filterText,
-                             key: layoutKey(size: size), rootNames: rootNames)
+                             key: layoutKey(.treemap, size: size), rootNames: rootNames)
         layoutCache.set(l)
         return l
     }
 
-    func relayout(size: CGSize) async {
+    /// Lays out one picture, which is the one asked for rather than the one
+    /// the model happens to consider current.
+    func relayout(_ kind: Visualization, size: CGSize) async {
         guard let tree, size.width > 8, size.height > 8 else { return }
-        let key = layoutKey(size: size)
+        let key = layoutKey(kind, size: size)
         let root = currentDirectory
         let physical = usePhysicalSize
         let filter = filterText
         let names = rootNames
-        switch visualization {
+        switch kind {
         case .treemap:
             if layoutCache.get(key) != nil { return }
             let layout = await Task.detached(priority: .userInitiated) {

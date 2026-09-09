@@ -419,7 +419,9 @@ final class AppModel: ObservableObject {
     func toggleExpanded(_ node: Int32) { map.toggleExpanded(node) }
     func select(_ node: Int32?) { map.select(node) }
     func rebuild() { map.rebuild() }
-    func layoutKey(size: CGSize) -> String { map.layoutKey(size: size) }
+    func layoutKey(_ kind: Visualization, size: CGSize) -> String {
+        map.layoutKey(kind, size: size)
+    }
     func cachedLayout(for size: CGSize) -> TreemapLayout? { map.cachedLayout(for: size) }
     func cachedSunburst(for size: CGSize) -> SunburstLayout? { map.cachedSunburst(for: size) }
     func cachedIcicle(for size: CGSize) -> IcicleLayout? { map.cachedIcicle(for: size) }
@@ -429,7 +431,9 @@ final class AppModel: ObservableObject {
     func computeSunburstSync(size: CGSize) -> SunburstLayout? { map.computeSunburstSync(size: size) }
     @discardableResult
     func computeIcicleSync(size: CGSize) -> IcicleLayout? { map.computeIcicleSync(size: size) }
-    func relayout(size: CGSize) async { await map.relayout(size: size) }
+    func relayout(_ kind: Visualization, size: CGSize) async {
+        await map.relayout(kind, size: size)
+    }
 
     /// The name to show for a node, which for a root is its disk.
     func displayName(_ raw: String) -> String { session.displayName(raw) }

@@ -27,10 +27,10 @@ struct IcicleView: View {
             .background(Color(nsColor: .underPageBackgroundColor))
             .onAppear { canvasSize = geo.size }
             .onChange(of: geo.size) { _, new in canvasSize = new }
-            .task(id: model.layoutKey(size: geo.size)) {
+            .task(id: model.layoutKey(.icicle, size: geo.size)) {
                 try? await Task.sleep(nanoseconds: 60_000_000)
                 guard !Task.isCancelled else { return }
-                await model.relayout(size: geo.size)
+                await model.relayout(.icicle, size: geo.size)
             }
             .onContinuousHover { phase in
                 switch phase {
