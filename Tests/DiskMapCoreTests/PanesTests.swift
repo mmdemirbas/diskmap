@@ -24,6 +24,10 @@ final class PanesTests: XCTestCase {
                                withIntermediateDirectories: true)
         try Data(count: 800_000).write(to: root.appendingPathComponent("a/one.bin"))
         try Data(count: 300_000).write(to: root.appendingPathComponent("two.bin"))
+        // Two copies over the duplicate pass's size floor, so the expensive
+        // half of a report has something to find when it is asked for.
+        try Data(count: 2_000_000).write(to: root.appendingPathComponent("a/copy.bin"))
+        try Data(count: 2_000_000).write(to: root.appendingPathComponent("copy.bin"))
     }
     override func tearDownWithError() throws { if let root { try? fm.removeItem(at: root) } }
 
@@ -47,6 +51,38 @@ final class PanesTests: XCTestCase {
         XCTAssertNotNil(model.cachedLayout(for: size), "no treemap")
         XCTAssertNotNil(model.cachedSunburst(for: size), "no ring chart")
         XCTAssertNotNil(model.cachedIcicle(for: size), "no layer chart")
+    }
+
+    /// A pane in a background tab is not being looked at, and the copy pass is
+    /// the most expensive thing in the app — a signature per folder over the
+    /// whole tree. Whether it runs has to follow what is in front, which is
+    /// what the segmented picker used to decide.
+    func testOnlyThePaneInFrontAsksForTheExpensiveWalk() throws {
+        let model = ready()
+
+        model.showPane(.contents)
+        model.refreshSummarySync()
+        XCTAssertTrue(model.duplicates.isEmpty,
+                      "the copy pass ran for a pane nobody is looking at")
+        XCTAssertNotNil(model.summary, "the cheap half of the report should still run")
+
+        model.showPane(.copies)
+        model.refreshSummarySync()
+        XCTAssertFalse(model.duplicates.isEmpty,
+                       "the copy pass did not run for the pane that shows copies")
+    }
+
+    /// Closing a pane stops it costing anything, which is half the reason to be
+    /// able to close one.
+    func testClosingTheCopiesPaneStopsTheWalkThatFeedsIt() throws {
+        let model = ready()
+        model.showPane(.copies)
+        model.refreshSummarySync()
+        XCTAssertFalse(model.duplicates.isEmpty)
+
+        model.closePane(.copies)
+        model.refreshSummarySync()
+        XCTAssertTrue(model.duplicates.isEmpty)
     }
 
     /// Each picture is cached under its own name, so one does not answer for
@@ -241,6 +277,49 @@ final class DockLayoutTests: XCTestCase {
             XCTAssertEqual(layout.panes, DockLayout.standard.panes, stored)
             XCTAssertEqual(layout.leaves.count, 2, stored)
         }
+    }
+
+    // MARK: - Where a drop lands
+
+    /// The middle is the easiest thing to hit, because joining a group is the
+    /// commonest thing to want.
+    func testTheMiddleOfAPaneMeansJoinItsTabs() {
+        let rect = CGRect(x: 0, y: 0, width: 400, height: 300)
+        XCTAssertNil(DockGeometry.edge(in: rect, at: CGPoint(x: 200, y: 150)))
+    }
+
+    func testEachSideOfAPaneMeansThatSide() {
+        let rect = CGRect(x: 100, y: 50, width: 400, height: 300)
+        XCTAssertEqual(DockGeometry.edge(in: rect, at: CGPoint(x: 110, y: 200)), .leading)
+        XCTAssertEqual(DockGeometry.edge(in: rect, at: CGPoint(x: 490, y: 200)), .trailing)
+        XCTAssertEqual(DockGeometry.edge(in: rect, at: CGPoint(x: 300, y: 60)), .top)
+        XCTAssertEqual(DockGeometry.edge(in: rect, at: CGPoint(x: 300, y: 340)), .bottom)
+    }
+
+    /// A corner belongs to whichever edge it is closer to, rather than to
+    /// whichever was tested first.
+    func testACornerGoesToTheNearerEdge() {
+        let rect = CGRect(x: 0, y: 0, width: 400, height: 200)
+        // 10pt from the left, 20pt from the top: in fractions that is 0.025
+        // across and 0.1 down, so the left edge is nearer.
+        XCTAssertEqual(DockGeometry.edge(in: rect, at: CGPoint(x: 10, y: 20)), .leading)
+        XCTAssertEqual(DockGeometry.edge(in: rect, at: CGPoint(x: 60, y: 4)), .top)
+    }
+
+    /// What the preview covers is what the pane will take.
+    func testThePreviewShowsTheHalfThePaneWouldTake() {
+        let rect = CGRect(x: 0, y: 0, width: 400, height: 200)
+        XCTAssertEqual(DockGeometry.preview(in: rect, edge: nil), rect)
+        XCTAssertEqual(DockGeometry.preview(in: rect, edge: .leading),
+                       CGRect(x: 0, y: 0, width: 200, height: 200))
+        XCTAssertEqual(DockGeometry.preview(in: rect, edge: .bottom),
+                       CGRect(x: 0, y: 100, width: 400, height: 100))
+    }
+
+    /// A rectangle with no area cannot say where a point is in it, and a drop
+    /// there must mean nothing rather than an arbitrary edge.
+    func testAnEmptyRectangleHasNoEdges() {
+        XCTAssertNil(DockGeometry.edge(in: .zero, at: .zero))
     }
 
     /// A stored layout is just a string in the preferences, and an older

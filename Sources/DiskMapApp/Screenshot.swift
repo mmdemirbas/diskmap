@@ -23,6 +23,11 @@ enum OffscreenRenderer {
 
         let model = AppModel()
         model.renderMode = true
+        // A screenshot must not rearrange the window of whoever took it, and it
+        // starts from the standard arrangement rather than from whatever that
+        // person happens to have dragged their panes into.
+        dockLayoutPersists = false
+        model.map.dock = .standard
         if parts.count >= 6, let mode = Appearance(rawValue: parts[5]) { model.appearance = mode }
         if parts.count >= 7, let lang = L10n.Language(rawValue: parts[6]) {
             L10n.shared.preference = lang
@@ -37,6 +42,10 @@ enum OffscreenRenderer {
         if let first = paths.first { model.selectedVolumePath = first }
         model.refreshVolume()
         if !startOnly { model.scanSynchronously() }
+        // Adopting a tree asks for a report, and asking is asynchronous. There
+        // is no async phase here, so without this a report pane is captured
+        // showing its spinner.
+        if model.tree != nil { model.refreshSummarySync() }
 
         if parts.count >= 5, !parts[4].isEmpty, let tree = model.tree {
             // Accept either a path relative to the first root or an absolute one.

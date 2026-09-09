@@ -141,19 +141,26 @@ struct ContentView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            // HSplitView is AppKit-backed and cannot be drawn by ImageRenderer,
-            // so offscreen rendering uses a fixed split instead.
-            if model.renderMode {
-                HStack(spacing: 0) {
-                    visualization
-                    Divider()
-                    sidePanel.frame(width: 470)
-                }
-            } else {
-                HSplitView {
-                    visualization.frame(minWidth: 420)
-                    sidePanel.frame(minWidth: 340, idealWidth: 470, maxWidth: 680)
-                }
+            // Was a fixed split: one picture on the left, one table on the
+            // right, each chosen from a segmented picker. Those seven views are
+            // not alternatives to each other, so the area is now divided the
+            // way the user divided it.
+            //
+            // The details panel stays outside the dock. It describes whatever
+            // is selected, wherever that selection was made, so it belongs to
+            // the window rather than to one pane — and it is the panel the
+            // no-drift work pinned to a fixed height.
+            HStack(spacing: 0) {
+                DockView(model: model)
+                Divider()
+                // An inspector: fixed width, pinned to the top, its own
+                // background. The space below it is empty because there is
+                // nothing else to say about one selection — the same shape
+                // every inspector on this platform has.
+                DetailsPanel(model: model)
+                    .frame(width: 320, alignment: .top)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .background(Color(nsColor: .controlBackgroundColor))
             }
             Divider()
             statusBar
@@ -163,40 +170,6 @@ struct ContentView: View {
             model.scan()
             return true
         }
-    }
-
-    private var visualization: some View {
-        VStack(spacing: 0) {
-            switch model.visualization {
-            case .treemap: TreemapView(model: model)
-            case .sunburst: SunburstView(model: model)
-            case .icicle: IcicleView(model: model)
-            }
-            Divider()
-            // Under the picture it explains, not in a help topic.
-            Legend(mode: model.colourMode, renderMode: model.renderMode)
-        }
-    }
-
-    private var sidePanel: some View {
-        VStack(spacing: 0) {
-            DetailsPanel(model: model)
-            Divider()
-            Picker("", selection: $model.panel) {
-                ForEach(PanelMode.allCases) { mode in Text(loc[mode.key]).tag(mode) }
-            }
-            .pickerStyle(.segmented).labelsHidden()
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .onChange(of: model.panel) { _, _ in model.refreshSummary() }
-            Divider()
-            switch model.panel {
-            case .contents: ContentsList(model: model)
-            case .largest: LargestFilesView(model: model)
-            case .types: TypeBreakdownView(model: model)
-            case .duplicates: DuplicatesView(model: model)
-            }
-        }
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var toolbar: some View {
@@ -252,13 +225,6 @@ struct ContentView: View {
                 Label(loc[.freeUpSpace], systemImage: "sparkles")
             }
             .help(loc[.freeUpSpace])
-
-            Picker("", selection: $model.visualization) {
-                ForEach(Visualization.allCases) { v in
-                    Image(systemName: v.symbol).tag(v).help(loc[v.key])
-                }
-            }
-            .pickerStyle(.segmented).frame(width: 112).labelsHidden()
 
             Picker("", selection: $model.colourMode) {
                 ForEach(ColourMode.allCases) { c in Text(loc[c.shortKey]).tag(c) }

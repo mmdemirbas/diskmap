@@ -416,6 +416,7 @@ final class L10n: ObservableObject {
         case anySize, underOneMB, atLeast1MB, atLeast10MB, atLeast100MB, atLeast1GB
         case anyTime, lastWeek, lastMonth, lastYear, olderThanAYear, olderThanTwoYears
         case hardlinkMark, symlinkMark, compressedMark, unreadableMark
+        case closePane, addPane, dragToRearrange
         case needsAScan, chooseWhatToScan, copiesSubtitle
         case startOverTitle, startOverBody, startOverConfirm
         case alreadyCovered, forgetFolder
@@ -530,6 +531,10 @@ final class L10n: ObservableObject {
         .compressedMark: ("Stored compressed by the filesystem",
                           "Dosya sistemi tarafından sıkıştırılmış olarak saklanıyor"),
         .unreadableMark: ("Could not be read", "Okunamadı"),
+        .closePane: ("Close this view", "Bu görünümü kapat"),
+        .addPane: ("Add a view here", "Buraya bir görünüm ekle"),
+        .dragToRearrange: ("Drag onto another view to place it beside or behind it",
+                           "Yerleştirmek için başka bir görünümün üzerine sürükleyin"),
         .tabCompare: ("Compare", "Karşılaştır"),
         .tabSearch: ("Find", "Bul"),
         .closeTab: ("Close tab", "Sekmeyi kapat"),

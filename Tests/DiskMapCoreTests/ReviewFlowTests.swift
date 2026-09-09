@@ -84,8 +84,10 @@ final class ReviewFlowTests: XCTestCase {
         try write("two/a.bin", 2_000_000)
         let model = ready()
         model.open(.duplicates)
-        model.refreshSummarySync()
+        // Bringing the contents pane forward is itself a reason to recompute,
+        // so settle afterwards: the point of the test is what the *trash* does.
         model.panel = .contents
+        model.refreshSummarySync()
         XCTAssertFalse(model.summarizing)
 
         let victim = try node(model, "one/a.bin")

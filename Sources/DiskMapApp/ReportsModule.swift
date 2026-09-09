@@ -69,8 +69,10 @@ final class ReportsModule: ObservableObject {
     }
 
     /// Blocking report used by the offscreen renderer, which has no async pass.
+    /// Takes over from anything already running: this answer is the newer one.
     func loadSynchronously(tree: LiveTree, root: Int32, physical: Bool,
                            includeDuplicates: Bool, cache: SignatureCache) {
+        task?.cancel()
         apply(Self.report(tree: tree, root: root, physical: physical,
                           includeDuplicates: includeDuplicates,
                           cache: cache, revision: tree.changeCount))

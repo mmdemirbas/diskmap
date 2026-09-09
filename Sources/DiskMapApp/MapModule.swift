@@ -19,6 +19,13 @@ import SwiftUI
 /// folder has to refresh one, and *that* is a fact about which panels are open,
 /// which is the app's business. So it announces where it went and lets the app
 /// decide what follows.
+private let dockStorageKey = "dockLayout"
+
+/// Offscreen rendering drives the app for a screenshot and then exits. It sets
+/// which pane is in front, which is a change to the layout — and writing that
+/// down would rearrange the window of whoever ran the render.
+@MainActor var dockLayoutPersists = true
+
 @MainActor
 final class MapModule: ObservableObject {
     private let session: ScanSession
@@ -49,9 +56,36 @@ final class MapModule: ObservableObject {
     @Published var usePhysicalSize = true
     @Published var filterText = ""
 
-    @Published var visualization: Visualization = .treemap
     @Published var colourMode: ColourMode = .type
-    @Published var panel: PanelMode = .contents
+
+    /// How the map's area is divided up, and which pane is in front of each
+    /// group. This replaced two segmented pickers — one choosing the picture,
+    /// one choosing the table — which is what made those seven views
+    /// alternatives to each other.
+    ///
+    /// Written down as it changes: a layout you have to rebuild every morning
+    /// is a layout nobody builds.
+    @Published var dock = DockLayout.decoded(
+        from: UserDefaults.standard.string(forKey: dockStorageKey) ?? "") {
+        didSet {
+            guard dockLayoutPersists else { return }
+            UserDefaults.standard.set(dock.encoded, forKey: dockStorageKey)
+        }
+    }
+
+    /// What is actually on screen: one pane per group, the one in front.
+    ///
+    /// The distinction matters for anything expensive. A copy report sitting in
+    /// a background tab is not being looked at, and computing one costs a
+    /// signature per folder over the whole tree.
+    var visiblePanes: [PaneKind] { dock.leaves.map(\.active) }
+
+    /// Puts a pane in front, adding it back to the layout if it had been
+    /// closed. The one entry point for "show me this", so a menu item and a
+    /// tab click cannot disagree about what showing means.
+    func show(_ kind: PaneKind) {
+        if dock.contains(kind) { dock.activate(kind) } else { dock.add(kind) }
+    }
 
     let layoutCache = LayoutStore<TreemapLayout>()
     let sunburstCache = LayoutStore<SunburstLayout>()

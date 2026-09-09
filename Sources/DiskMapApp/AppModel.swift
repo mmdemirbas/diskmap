@@ -391,14 +391,52 @@ final class AppModel: ObservableObject {
     var filterText: String {
         get { map.filterText } set { map.filterText = newValue }
     }
+    /// Which picture is in front, and which table.
+    ///
+    /// Both were stored choices and are now questions about the layout: there
+    /// is no single current picture when three of them can be on screen at
+    /// once. Kept in the old vocabulary because "show me the ring chart" is
+    /// still a thing to say — from a menu, from the offscreen renderer, from a
+    /// test — and it still means put that one in front.
     var visualization: Visualization {
-        get { map.visualization } set { map.visualization = newValue }
+        get { map.visiblePanes.compactMap(\.visualization).first ?? .treemap }
+        set { showPane(PaneKind(newValue)) }
     }
     var colourMode: ColourMode {
         get { map.colourMode } set { map.colourMode = newValue }
     }
     var panel: PanelMode {
-        get { map.panel } set { map.panel = newValue }
+        get { map.visiblePanes.compactMap(\.panel).first ?? .contents }
+        set { showPane(PaneKind(newValue)) }
+    }
+
+    // MARK: - Arranging the panes
+
+    /// Every change to the layout goes through one of these, so a click on a
+    /// tab and a choice in a menu cannot disagree, and so the one thing the
+    /// layout does not know about — that a report has to be recomputed when a
+    /// different pane comes forward — is decided in one place.
+    func showPane(_ kind: PaneKind) {
+        map.show(kind)
+        refreshSummary()
+    }
+
+    func addPane(_ kind: PaneKind, to leaf: UUID) {
+        map.dock.insert(kind, into: leaf, edge: nil)
+        refreshSummary()
+    }
+
+    func closePane(_ kind: PaneKind) {
+        map.dock.remove(kind)
+    }
+
+    func movePane(_ kind: PaneKind, to leaf: UUID, edge: DockEdge?) {
+        map.dock.move(kind, to: leaf, edge: edge)
+        refreshSummary()
+    }
+
+    func setDockRatio(_ split: UUID, _ ratio: Double) {
+        map.dock.setRatio(split, ratio)
     }
     /// The row the list should bring into view. Cleared once it has.
     var scrollTo: Int32? {
@@ -1147,6 +1185,11 @@ final class AppModel: ObservableObject {
         map.openAtTheRoot(of: live)
         phase = .ready
         rebuild()
+        // The layout is restored from the last run, so a report pane can be in
+        // front before anything has been clicked. Without this the app opens on
+        // an empty "Largest" or "Types" and only fills it once the user touches
+        // something — which reads as the scan having found nothing.
+        refreshSummary()
     }
 
     private func treeChanged() {
@@ -1202,12 +1245,17 @@ final class AppModel: ObservableObject {
     /// while the copy report only existed as one of that panel's four views.
     /// It is a tool of its own now, so the panel is one of two things that can
     /// want the answer.
+    /// A pane in a background tab is not being looked at, so it does not get a
+    /// walk of the whole subtree computed for it. `visiblePanes` is one per
+    /// group — the one in front — which is exactly what the two segmented
+    /// pickers used to mean.
     private var wantsAReport: Bool {
-        panel != .contents || openTabs.contains(.duplicates)
+        map.visiblePanes.contains { $0 != .contents && $0.panel != nil }
+            || openTabs.contains(.duplicates)
     }
 
     private var wantsDuplicateReport: Bool {
-        panel == .duplicates || openTabs.contains(.duplicates)
+        map.visiblePanes.contains(.copies) || openTabs.contains(.duplicates)
     }
 
     /// Blocking report used by the offscreen renderer, which has no async pass.

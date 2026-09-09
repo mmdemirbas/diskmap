@@ -21,6 +21,23 @@ enum PaneKind: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    init(_ visualization: Visualization) {
+        switch visualization {
+        case .treemap: self = .treemap
+        case .sunburst: self = .sunburst
+        case .icicle: self = .icicle
+        }
+    }
+
+    init(_ panel: PanelMode) {
+        switch panel {
+        case .contents: self = .contents
+        case .largest: self = .largest
+        case .types: self = .types
+        case .duplicates: self = .copies
+        }
+    }
+
     /// The picture this pane draws, for the three that draw one.
     var visualization: Visualization? {
         switch self {
@@ -298,5 +315,46 @@ struct DockLayout: Codable, Equatable {
     var encoded: String {
         guard let data = try? JSONEncoder().encode(root) else { return "" }
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Where a drop lands, worked out from a rectangle and a point.
+///
+/// Separate from the gesture that produces the point, because "which quarter of
+/// this pane is the pointer in" is arithmetic and arithmetic can be tested. The
+/// gesture is not.
+enum DockGeometry {
+    /// How far into the pane an edge zone reaches. Under a third, so the middle
+    /// — join this group as a tab — stays the easiest thing to hit, and a pane
+    /// dropped near a border still means "put it beside this one".
+    static let margin = 0.28
+
+    /// The edge nearest the point, or nil for the middle.
+    static func edge(in rect: CGRect, at point: CGPoint) -> DockEdge? {
+        guard rect.width > 1, rect.height > 1 else { return nil }
+        let x = (point.x - rect.minX) / rect.width
+        let y = (point.y - rect.minY) / rect.height
+        let distances: [(DockEdge, Double)] = [
+            (.leading, x), (.trailing, 1 - x), (.top, y), (.bottom, 1 - y),
+        ]
+        guard let nearest = distances.min(by: { $0.1 < $1.1 }),
+              nearest.1 < margin else { return nil }
+        return nearest.0
+    }
+
+    /// The area the pane would take, so the drop can be shown before it
+    /// happens rather than explained afterwards.
+    static func preview(in rect: CGRect, edge: DockEdge?) -> CGRect {
+        guard let edge else { return rect }
+        switch edge {
+        case .leading:  return CGRect(x: rect.minX, y: rect.minY,
+                                      width: rect.width / 2, height: rect.height)
+        case .trailing: return CGRect(x: rect.midX, y: rect.minY,
+                                      width: rect.width / 2, height: rect.height)
+        case .top:      return CGRect(x: rect.minX, y: rect.minY,
+                                      width: rect.width, height: rect.height / 2)
+        case .bottom:   return CGRect(x: rect.minX, y: rect.midY,
+                                      width: rect.width, height: rect.height / 2)
+        }
     }
 }
