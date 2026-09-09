@@ -221,6 +221,54 @@ final class MapModule: ObservableObject {
     func select(_ node: Int32?) {
         selection = node
         selectedInfo = node.flatMap(info(for:))
+        lookUpContent()
+    }
+
+    // MARK: - What the file says about itself
+
+    /// Pixel dimensions, how long a recording runs, when a photo was taken.
+    /// None of it is in directory metadata, and the scan never opens a file —
+    /// so it is asked of the index, for the one thing that is selected, after
+    /// the selection has already been drawn.
+    /// Settable rather than read-only so the no-drift test can put a
+    /// deliberately absurd answer in it. The panel must be the same height
+    /// with a four-codec ten-hour video as with nothing selected, and that is
+    /// not checkable if the only way in is a real file on an indexed volume.
+    @Published var selectedContent: ContentProperties?
+    private let contentCache = ContentCache()
+    private var contentTask: Task<Void, Never>?
+    /// Path and modification time together: the same path can be a different
+    /// file, and the same file can have been rewritten.
+    private var contentKey: String?
+
+    private func lookUpContent() {
+        guard let item = selectedInfo, !item.isDirectory else {
+            contentTask?.cancel()
+            contentKey = nil
+            selectedContent = nil
+            return
+        }
+        let key = "\(item.path)|\(item.modified.timeIntervalSince1970)"
+        guard key != contentKey else { return }
+        contentKey = key
+        selectedContent = nil
+        contentTask?.cancel()
+        let path = item.path
+        let cache = contentCache
+        contentTask = Task { [weak self] in
+            let found = await Task.detached(priority: .userInitiated) {
+                cache.properties(ofFile: path)
+            }.value
+            guard !Task.isCancelled, let self, self.contentKey == key else { return }
+            self.selectedContent = found
+        }
+    }
+
+    /// The offscreen renderer has no async phase, so it asks in one call rather
+    /// than drawing the line before the answer arrives.
+    func lookUpContentSynchronously() {
+        guard let item = selectedInfo, !item.isDirectory else { return }
+        selectedContent = contentCache.properties(ofFile: item.path)
     }
 
     private func info(for node: Int32) -> ItemInfo? {
@@ -273,6 +321,7 @@ final class MapModule: ObservableObject {
         breadcrumb = crumbs.map { (id: $0.0, name: $0.1) }
         selectedInfo = selection.flatMap(info(for:))
         if selectedInfo == nil { selection = nil }
+        lookUpContent()
         revision &+= 1
     }
 

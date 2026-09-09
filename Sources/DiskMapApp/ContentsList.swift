@@ -232,7 +232,7 @@ struct DetailsPanel: View {
     /// jumping under the pointer. The height is therefore fixed outright, and
     /// `testNothingIsClipped` is what keeps the number honest: it fails if any
     /// selection, in any language, needs more room than this.
-    static let height: CGFloat = 168
+    static let height: CGFloat = 192
 
     var body: some View {
         content
@@ -248,6 +248,7 @@ struct DetailsPanel: View {
             heading(item)
             subtitle(item)
             figures(item)
+            fromTheIndex(item)
             actions(item)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -292,6 +293,39 @@ struct DetailsPanel: View {
             figure(loc[.ofVolume], item.map { percentString($0.fractionOfVolume) })
             Spacer(minLength: 0)
         }
+    }
+
+    /// What the file says about itself: how wide a picture is, how long a
+    /// recording runs, when the content was made.
+    ///
+    /// One line, always present, whatever is or is not known — a row that
+    /// appears when an answer arrives would move everything under it at the
+    /// moment the answer arrives, which is the drift this panel is pinned
+    /// against. Blank while the question is still out.
+    private func fromTheIndex(_ item: ItemInfo?) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+                .opacity(indexLine(item).isEmpty ? 0 : 1)
+            Text(indexLine(item))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1, reservesSpace: true)
+                .truncationMode(.tail)
+                .help(model.selectedContent?.indexed == false ? loc[.notIndexedHelp] : "")
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func indexLine(_ item: ItemInfo?) -> String {
+        guard let item, !item.isDirectory else { return "" }
+        // Nothing yet is not an answer, and saying so would be a line that
+        // changes twice for one selection.
+        guard let content = model.selectedContent else { return "" }
+        if !content.indexed { return loc[.notIndexed] }
+        if content.isEmpty { return loc[.noExtraDetails] }
+        return loc.contentSummary(content)
     }
 
     private func figure(_ label: String, _ value: String?, flagged: Bool = false) -> some View {

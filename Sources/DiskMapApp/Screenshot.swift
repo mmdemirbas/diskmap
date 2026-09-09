@@ -75,6 +75,9 @@ enum OffscreenRenderer {
             }
         }
         if let biggest = model.rows.first { model.select(biggest.id) }
+        // The line that comes from Spotlight arrives asynchronously in the app.
+        // Here there is no later, so it is asked for now.
+        model.map.lookUpContentSynchronously()
 
         let scheme: ColorScheme = model.appearance == .dark ? .dark : .light
 

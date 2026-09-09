@@ -442,6 +442,7 @@ final class AppModel: ObservableObject {
     var scrollTo: Int32? {
         get { map.scrollTo } set { map.scrollTo = newValue }
     }
+    var selectedContent: ContentProperties? { map.selectedContent }
     var revision: Int { map.revision }
     var layoutToken: Int { map.layoutToken }
     var layoutCache: LayoutStore<TreemapLayout> { map.layoutCache }

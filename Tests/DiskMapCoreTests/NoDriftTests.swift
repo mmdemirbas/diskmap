@@ -113,6 +113,35 @@ final class NoDriftTests: XCTestCase {
             """)
     }
 
+    /// The line that says what the file is — dimensions, length, when it was
+    /// taken — arrives after the panel has already been drawn, because it comes
+    /// from Spotlight rather than from the scan. A row that appears when the
+    /// answer arrives would move everything under it at that moment, which is
+    /// the worst possible time for the panel to move.
+    func testTheIndexLineNeverChangesThePanelsHeight() throws {
+        let m = model()
+        let file = try XCTUnwrap(allNodes(m).first { node in
+            m.select(node)
+            return m.selectedInfo?.isDirectory == false
+        })
+        m.select(file)
+        let waiting = panelHeight(m)
+
+        var absurd = ContentProperties()
+        absurd.indexed = true
+        absurd.contentType = "com.apple.quicktime-movie"
+        absurd.pixelWidth = 999_999
+        absurd.pixelHeight = 999_999
+        absurd.durationSeconds = 36_000
+        absurd.created = Date()
+        absurd.codecs = ["H.264", "AAC", "ProRes 4444 XQ", "something with a very long name"]
+        m.map.selectedContent = absurd
+
+        XCTAssertEqual(panelHeight(m), waiting, "the panel moved when the answer arrived")
+        XCTAssertLessThanOrEqual(naturalHeight(m), DetailsPanel.height,
+                                 "the line is being cut off rather than fitting")
+    }
+
     /// The sparse file is the one that used to add a whole row to the panel.
     /// If the fixture stops being sparse the test above still passes while
     /// having quietly stopped covering the case that caused the bug.

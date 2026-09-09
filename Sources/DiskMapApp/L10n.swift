@@ -216,6 +216,32 @@ final class L10n: ObservableObject {
             ? "Bu klasörde \(fmt(items)) öğe var, toplam \(size). Çöp Kutusu'ndan ya da Geri Al ile döndürebilirsiniz."
             : "This folder holds \(fmt(items)) items totalling \(size). You can put it back from the Trash or with Undo."
     }
+    /// What the index knows about a file, on one line.
+    ///
+    /// Ordered by what tells you most about the file you are looking at:
+    /// shape, then length, then when the content was made. The kind comes last
+    /// and only when nothing else was known, because "public.jpeg" beside a
+    /// name ending in .jpg says nothing new.
+    func contentSummary(_ p: ContentProperties) -> String {
+        var parts: [String] = []
+        if let w = p.pixelWidth, let h = p.pixelHeight { parts.append("\(w) × \(h)") }
+        if let seconds = p.durationSeconds, seconds > 0 { parts.append(duration(seconds)) }
+        if let created = p.created {
+            parts.append(active == .tr ? "çekim \(dateTime(created))" : "made \(dateTime(created))")
+        }
+        if !p.codecs.isEmpty { parts.append(p.codecs.joined(separator: ", ")) }
+        if parts.isEmpty, let type = p.contentType { parts.append(type) }
+        return parts.joined(separator: " · ")
+    }
+
+    func duration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60)
+        return h > 0
+            ? String(format: "%d:%02d:%02d", h, m, s)
+            : String(format: "%d:%02d", m, s)
+    }
+
     /// One file says its size; a folder says how many things are inside it,
     /// because that is the part you cannot see from its name.
     func confirmTrashFileBody(_ size: String) -> String {
@@ -424,6 +450,7 @@ final class L10n: ObservableObject {
         case anyTime, lastWeek, lastMonth, lastYear, olderThanAYear, olderThanTwoYears
         case hardlinkMark, symlinkMark, compressedMark, unreadableMark
         case closePane, addPane, dragToRearrange
+        case noExtraDetails, notIndexed, notIndexedHelp
         case needsAScan, chooseWhatToScan, copiesSubtitle
         case startOverTitle, startOverBody, startOverConfirm
         case alreadyCovered, forgetFolder
@@ -538,6 +565,10 @@ final class L10n: ObservableObject {
         .compressedMark: ("Stored compressed by the filesystem",
                           "Dosya sistemi tarafından sıkıştırılmış olarak saklanıyor"),
         .unreadableMark: ("Could not be read", "Okunamadı"),
+        .noExtraDetails: ("Nothing further about this file", "Bu dosya hakkında başka bilgi yok"),
+        .notIndexed: ("Not in Spotlight's index", "Spotlight dizininde yok"),
+        .notIndexedHelp: ("Dimensions, length and capture dates come from Spotlight. This volume, or this folder, is not indexed — so there is nothing to read rather than nothing to say.",
+                          "Boyut, süre ve çekim tarihi Spotlight'tan gelir. Bu birim ya da bu klasör dizine alınmamış; yani söylenecek bir şey yok değil, okunacak bir şey yok."),
         .closePane: ("Close this view", "Bu görünümü kapat"),
         .addPane: ("Add a view here", "Buraya bir görünüm ekle"),
         .dragToRearrange: ("Drag onto another view to place it beside or behind it",
