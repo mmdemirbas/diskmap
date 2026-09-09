@@ -137,6 +137,10 @@ final class L10n: ObservableObject {
     func shrankBy(_ size: String) -> String {
         active == .tr ? "\(size) küçüldü" : "Shrank by \(size)"
     }
+    func passProgress(_ done: Int, _ total: Int) -> String {
+        active == .tr ? "\(fmt(total)) öğenin \(fmt(done)) tanesi"
+                      : "\(fmt(done)) of \(fmt(total))"
+    }
     func couldFreeAbout(_ size: String) -> String {
         active == .tr ? "Yaklaşık \(size) boşaltılabilir" : "About \(size) could be freed"
     }
@@ -491,6 +495,7 @@ final class L10n: ObservableObject {
         case measuredByScan, notAttributed, whatTheScanReached, theNumbers
         case inUseNotPurgeable, finderCountsAsFree
         case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
+        case phaseMeasuring, phaseSigning, phaseFolders, phaseFiles
         case duplicatesNote, duplicatesEmpty, reclaimable, sectionFolders, sectionFiles
         case matchExact, verify, verifyAgain, verifyIdentical, verifyStopped
         case ageWeek, ageMonth, ageHalfYear, ageYear, ageTwoYears, ageOlder, staleNote
@@ -804,6 +809,10 @@ final class L10n: ObservableObject {
         .verifyStopped: ("stopped", "durduruldu"),
         .reclaimable: ("could be freed", "boşaltılabilir"),
         .computing: ("Working…", "Hesaplanıyor…"),
+        .phaseMeasuring: ("Adding up the folder", "Klasör toplamı çıkarılıyor"),
+        .phaseSigning: ("Fingerprinting folders", "Klasörlerin parmak izi alınıyor"),
+        .phaseFolders: ("Matching folders", "Klasörler eşleştiriliyor"),
+        .phaseFiles: ("Matching files", "Dosyalar eşleştiriliyor"),
         .ofSubtree: ("everything below this folder", "bu klasörün altındaki her şey"),
         .ageWeek: ("This week", "Bu hafta"),
         .ageMonth: ("This month", "Bu ay"),

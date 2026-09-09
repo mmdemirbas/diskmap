@@ -56,7 +56,7 @@ nine days of work sat in `build/` unseen.
 | 17 | A home screen showing every tool equally, so tools are not discovered by browsing menus | open | |
 | 18 | Capacity bars only in the disk map, not above every tool | done | `ContentView`, bars moved inside the map's ready state |
 | 19 | Finder drift as an exclamation beside "free", click for the breakdown; volumes never mixed | done | Per-volume reconciliation: `Aggregate.totals`, `AppModel.reconciliation(for:)` |
-| 20 | Duplicate detection must show progress, not a blind wait | open | |
+| 20 | Duplicate detection must show progress, not a blind wait | done | The three passes report through: `MatchProgress`, `MatchProgressView` |
 | 21 | Right-click a file or folder → compare / measure | done | `d8fbdb4`. Was asked for on 08-09 as 1b and deferred twice before being built. |
 
 ---

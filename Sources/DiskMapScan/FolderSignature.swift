@@ -101,17 +101,27 @@ public enum FolderMatches {
         (try? FileManager.default.destinationOfSymbolicLink(atPath: store.path(node))) ?? ""
     }
 
-    public static func signatures(_ store: NodeStore) -> [UInt64] {
+    public static func signatures(_ store: NodeStore,
+                                  onProgress: MatchProgress.Report? = nil) -> [UInt64] {
         let span = Telemetry.begin("match.hash")
         defer { span.end(["nodes": .int(Int64(store.count))]) }
         var sig = [UInt64](repeating: 0, count: store.count)
         guard store.count > 0 else { return sig }
         let order = evaluationOrder(store)
+        onProgress?(MatchProgress(phase: .signing, done: 0, total: order.count))
         store.nameBytes.withUnsafeBufferPointer { names in
             sig.withUnsafeMutableBufferPointer { out in
                 for index in stride(from: order.count - 1, through: 0, by: -1) {
                     let id = order[index]
                     let i = Int(id)
+                    // Every so often, not every node: this loop runs ten
+                    // million times and a message per turn would cost more
+                    // than the work it reports on.
+                    if let onProgress, index & MatchProgress.every == 0 {
+                        onProgress(MatchProgress(phase: .signing,
+                                                 done: order.count - index,
+                                                 total: order.count))
+                    }
                     if store.isDirectory(id) {
                         var acc: UInt64 = 0
                         var kids: UInt64 = 0
@@ -138,10 +148,12 @@ public enum FolderMatches {
                             minimumSize: Int64 = 50_000_000,
                             similarity: Double = 0.6,
                             limit: Int = 200,
-                            precomputed: [UInt64]? = nil) -> [FolderMatch] {
+                            precomputed: [UInt64]? = nil,
+                            onProgress: MatchProgress.Report? = nil) -> [FolderMatch] {
         let span = Telemetry.begin("match.folders")
         let reused = precomputed?.count == store.count
-        let sig = reused ? precomputed! : signatures(store)
+        let sig = reused ? precomputed! : signatures(store, onProgress: onProgress)
+        onProgress?(MatchProgress(phase: .folders, done: 0, total: 0))
 
         // Only folders big enough to be worth a decision are candidates. That
         // also drops the endless empty and near-empty directories, which would
@@ -307,5 +319,47 @@ public enum FolderMatches {
             }
         }
         return (items, bytes)
+    }
+}
+
+/// How far along a copy hunt is.
+///
+/// Finding copies is three passes over the whole tree and it takes as long as
+/// it takes; what it should never do is take that long behind a spinner that
+/// says nothing. A phase and a count is the difference between waiting and
+/// waiting blindly.
+public struct MatchProgress: Sendable, Equatable {
+    public typealias Report = @Sendable (MatchProgress) -> Void
+
+    public enum Phase: String, Sendable {
+        /// Adding up the subtree, before any copy hunting starts.
+        case measuring
+        /// Hashing every folder's contents, the long one.
+        case signing
+        /// Grouping folders that hashed alike, and comparing the near misses.
+        case folders
+        /// The same question for individual files.
+        case files
+    }
+
+    /// Report on one node in this many, as a mask. A message per node would
+    /// cost more than the work being reported on.
+    public static let every = 0xFFFF
+
+    public var phase: Phase
+    public var done: Int
+    public var total: Int
+
+    public init(phase: Phase, done: Int, total: Int) {
+        self.phase = phase
+        self.done = done
+        self.total = total
+    }
+
+    /// Nil when the pass cannot say how much there is — which is honest, and
+    /// draws as a bar that moves rather than one that fills.
+    public var fraction: Double? {
+        guard total > 0 else { return nil }
+        return min(1, max(0, Double(done) / Double(total)))
     }
 }

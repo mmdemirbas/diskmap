@@ -34,8 +34,11 @@ public enum Duplicates {
     public static func find(store: NodeStore, root: Int32,
                             minimumSize: Int64 = 1_000_000,
                             limit: Int = 200,
-                            insideMatched: [FolderMatch] = []) -> [DuplicateGroup] {
+                            insideMatched: [FolderMatch] = [],
+                            onProgress: MatchProgress.Report? = nil) -> [DuplicateGroup] {
         let span = Telemetry.begin("match.files")
+        onProgress?(MatchProgress(phase: .files, done: 0, total: store.count))
+        var seen = 0
         struct Key: Hashable { let name: String; let size: Int64 }
         var groups: [Key: [Int32]] = [:]
         var stack: [Int32] = [root]
@@ -44,6 +47,10 @@ public enum Duplicates {
             for child in store.children(node) {
                 let flags = store.flagSet(child)
                 if flags.contains(.removed) { continue }
+                seen += 1
+                if let onProgress, seen & MatchProgress.every == 0 {
+                    onProgress(MatchProgress(phase: .files, done: seen, total: store.count))
+                }
                 if store.isDirectory(child) { stack.append(child); continue }
                 // Hard links share bytes already; placeholders hold none here.
                 if flags.contains(.hardlinkDuplicate) || flags.contains(.dataless) { continue }

@@ -18,11 +18,8 @@ struct DuplicatesView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.summarizing {
-                VStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text(loc[.computing]).font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                MatchProgressView(progress: model.reportProgress,
+                                  phases: [.measuring, .signing, .folders, .files])
             } else if model.folderMatches.isEmpty && model.duplicates.isEmpty {
                 Text(loc[.duplicatesEmpty]).font(.callout).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding(20)

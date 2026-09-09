@@ -22,6 +22,12 @@ final class ReportsModule: ObservableObject {
     @Published var duplicates: [DuplicateEntry] = []
     @Published var folderMatches: [FolderEntry] = []
     @Published var summarizing = false
+
+    /// What the walk is doing right now, or nil when nothing is walking.
+    ///
+    /// Copies take minutes on a large disk and the screen used to say "Working…"
+    /// for all of them, which is the same thing a hang says.
+    @Published private(set) var progress: MatchProgress?
     @Published var openMatches: Set<Int64> = []
 
     /// Deep verification, per match: reading every byte to answer "are these
@@ -53,15 +59,25 @@ final class ReportsModule: ObservableObject {
         // for an answer nobody can see any more.
         if includeDuplicates { cancelAllVerifications() }
         summarizing = true
+        progress = MatchProgress(phase: .measuring, done: 0, total: 0)
         // The tree's own counter, not the view's: retyping a filter must not
         // throw away a hash pass that is still valid.
         let revision = tree.changeCount
         task?.cancel()
         task = Task { [weak self] in
+            // The walk runs off the main thread and reports back onto it. The
+            // hop is per message, not per node: the passes throttle their own
+            // reporting for exactly this reason.
+            let report: MatchProgress.Report = { step in
+                Task { @MainActor [weak self] in
+                    guard self?.summarizing == true else { return }
+                    self?.progress = step
+                }
+            }
             let computed = await Task.detached(priority: .userInitiated) {
                 Self.report(tree: tree, root: root, physical: physical,
                             includeDuplicates: includeDuplicates,
-                            cache: cache, revision: revision)
+                            cache: cache, revision: revision, onProgress: report)
             }.value
             guard !Task.isCancelled, let self else { return }
             self.apply(computed)
@@ -86,6 +102,7 @@ final class ReportsModule: ObservableObject {
         matchGroups = computed.folders.map { $0.copies.map(\.id) }
             + computed.duplicates.map { $0.copies.map(\.id) }
         summarizing = false
+        progress = nil
         onLoaded?()
     }
 
@@ -107,6 +124,7 @@ final class ReportsModule: ObservableObject {
         matchGroups = []
         openMatches = []
         summarizing = false
+        progress = nil
     }
 
     // MARK: - Deep verification
@@ -154,7 +172,8 @@ final class ReportsModule: ObservableObject {
     /// shows it rather than on every report refresh.
     nonisolated static func report(tree: LiveTree, root: Int32, physical: Bool,
                                    includeDuplicates: Bool,
-                                   cache: SignatureCache, revision: Int) -> ReportData {
+                                   cache: SignatureCache, revision: Int,
+                                   onProgress: MatchProgress.Report? = nil) -> ReportData {
         // One lock acquisition: the store must not escape it.
         tree.withStore { store -> ReportData in
             let summary = Aggregate.summarize(store: store, root: root, usePhysicalSize: physical)
@@ -171,7 +190,9 @@ final class ReportsModule: ObservableObject {
             }
             let matches = FolderMatches.find(store: store, root: root,
                                              precomputed: cache.signatures(for: store,
-                                                                          revision: revision))
+                                                                          revision: revision,
+                                                                          onProgress: onProgress),
+                                             onProgress: onProgress)
             let folders = matches.map { match in
                 FolderEntry(id: matchKey(match.nodes), name: store.name(match.nodes[0]),
                             bytes: match.bytes, reclaimable: match.reclaimable,
@@ -181,7 +202,8 @@ final class ReportsModule: ObservableObject {
                             copies: match.nodes.map { PathRef(id: $0, path: store.path($0)) })
             }
             let groups = Duplicates.find(store: store, root: root,
-                                         insideMatched: matches).map { group in
+                                         insideMatched: matches,
+                                         onProgress: onProgress).map { group in
                 DuplicateEntry(id: matchKey(group.nodes), name: group.name, bytes: group.bytes,
                                reclaimable: group.reclaimable,
                                readBytes: group.bytes * Int64(group.nodes.count),

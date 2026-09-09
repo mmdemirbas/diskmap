@@ -78,11 +78,8 @@ struct CleanupView: View {
             header
             Divider()
             if model.suggestionsLoading {
-                VStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(loc[.computing]).font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                MatchProgressView(progress: model.suggestionsProgress,
+                                  phases: [.signing, .folders, .files])
             } else if model.suggestions.isEmpty {
                 Text(loc[.nothingObviousToFree])
                     .font(.callout).foregroundStyle(.secondary)

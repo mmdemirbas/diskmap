@@ -263,10 +263,11 @@ final class SignatureCache: @unchecked Sendable {
     private var revision = -1
     private var values: [UInt64] = []
 
-    func signatures(for store: NodeStore, revision: Int) -> [UInt64] {
+    func signatures(for store: NodeStore, revision: Int,
+                    onProgress: MatchProgress.Report? = nil) -> [UInt64] {
         lock.lock(); defer { lock.unlock() }
         if self.revision == revision, values.count == store.count { return values }
-        values = FolderMatches.signatures(store)
+        values = FolderMatches.signatures(store, onProgress: onProgress)
         self.revision = revision
         return values
     }
@@ -676,6 +677,7 @@ final class AppModel: ObservableObject {
     }
 
     var suggestionsLoading: Bool { space.loading }
+    var suggestionsProgress: MatchProgress? { space.progress }
     /// Sizes below which a suggestion is not worth making. A field rather than
     /// a constant so a fixture can exercise the screen without a gigabyte of
     /// files, and so it can become a preference later.
@@ -788,6 +790,7 @@ final class AppModel: ObservableObject {
     var summarizing: Bool {
         get { reports.summarizing } set { reports.summarizing = newValue }
     }
+    var reportProgress: MatchProgress? { reports.progress }
     var verifications: [Int64: VerifyStatus] {
         get { reports.verifications } set { reports.verifications = newValue }
     }

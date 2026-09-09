@@ -20,6 +20,11 @@ import SwiftUI
 final class SpaceModule: ObservableObject {
     @Published private(set) var suggestions: [CleanupSuggestion] = []
     @Published private(set) var loading = false
+
+    /// Which of the three passes is running. Same reason as on the copies
+    /// screen: this is the slowest thing in the app and a spinner alone does
+    /// not distinguish work from a hang.
+    @Published private(set) var progress: MatchProgress?
     /// Not published: read when a search starts, never while one is on screen.
     var thresholds = Cleanup.Thresholds()
 
@@ -32,17 +37,26 @@ final class SpaceModule: ObservableObject {
     /// passes, and nobody wants to pay for those while browsing.
     func load(tree: LiveTree, root: Int32, cache: SignatureCache, excluding: [String]) {
         loading = true
+        progress = MatchProgress(phase: .signing, done: 0, total: 0)
         let revision = tree.changeCount
         let thresholds = self.thresholds
         task?.cancel()
         task = Task { [weak self] in
+            let report: MatchProgress.Report = { step in
+                Task { @MainActor [weak self] in
+                    guard self?.loading == true else { return }
+                    self?.progress = step
+                }
+            }
             let found = await Task.detached(priority: .userInitiated) {
                 Self.compute(tree: tree, root: root, cache: cache, revision: revision,
-                             thresholds: thresholds, excluding: excluding)
+                             thresholds: thresholds, excluding: excluding,
+                             onProgress: report)
             }.value
             guard !Task.isCancelled, let self else { return }
             self.suggestions = found
             self.loading = false
+            self.progress = nil
         }
     }
 
@@ -63,17 +77,22 @@ final class SpaceModule: ObservableObject {
         task?.cancel()
         suggestions = []
         loading = false
+        progress = nil
     }
 
     nonisolated static func compute(tree: LiveTree, root: Int32,
                                     cache: SignatureCache, revision: Int,
                                     thresholds: Cleanup.Thresholds,
-                                    excluding: [String] = []) -> [CleanupSuggestion] {
+                                    excluding: [String] = [],
+                                    onProgress: MatchProgress.Report? = nil) -> [CleanupSuggestion] {
         tree.withStore { store in
             let folders = FolderMatches.find(store: store, root: root,
                                              precomputed: cache.signatures(for: store,
-                                                                           revision: revision))
-            let files = Duplicates.find(store: store, root: root, insideMatched: folders)
+                                                                           revision: revision,
+                                                                           onProgress: onProgress),
+                                             onProgress: onProgress)
+            let files = Duplicates.find(store: store, root: root, insideMatched: folders,
+                                        onProgress: onProgress)
             return Cleanup.suggest(store: store, root: root,
                                    folderCopies: folders.map(\.nodes),
                                    fileCopies: files.map(\.nodes),
