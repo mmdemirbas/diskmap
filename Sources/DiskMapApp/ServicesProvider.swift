@@ -18,9 +18,27 @@ import SwiftUI
 final class ServicesProvider: NSObject {
     static let shared = ServicesProvider()
 
-    /// Set once the window exists. A service can arrive before anything is on
-    /// screen, because choosing one launches the app.
-    weak var model: AppModel?
+    /// The sessions on screen, most recently in front first.
+    ///
+    /// One window was one session and this was one reference. With several, a
+    /// service has to land in the window the user was last looking at — not in
+    /// whichever one happened to be built first, and not in all of them.
+    private var sessions: [Weak] = []
+
+    private struct Weak { weak var model: AppModel? }
+
+    /// Registered when a window appears and again whenever it comes to the
+    /// front, which is the same event as far as this is concerned: this is the
+    /// session a service should land in.
+    func use(_ model: AppModel) {
+        sessions.removeAll { $0.model == nil || $0.model === model }
+        sessions.insert(Weak(model: model), at: 0)
+    }
+
+    /// The session in front, skipping windows that have since been closed.
+    var model: AppModel? {
+        sessions.first { $0.model != nil }?.model
+    }
 
     /// Compares the two selected folders.
     ///

@@ -51,7 +51,7 @@ nine days of work sat in `build/` unseen.
 
 | # | Request | Status | Notes |
 |---|---|---|---|
-| 15 | **Multiple instances of each tool** — two maps on two disks, two duplicate scans, at once | open | The large one. Every module assumes a single scan session today. |
+| 15 | **Multiple instances of each tool** — two maps on two disks, two duplicate scans, at once | done | One window is one session: `WindowGroup`, per-window `AppModel`. ⌘N opens a second. Seen running with two windows. |
 | 16 | Free dockable layout by drag and drop | needs a decision | Panes inside the map already dock this way (`f0915c2`). If this means *tools* docking beside each other, it rides on 15. |
 | 17 | A home screen showing every tool equally, so tools are not discovered by browsing menus | done | `HomeView`, plus a Tools menu. Two tools had no way in from anywhere. |
 | 18 | Capacity bars only in the disk map, not above every tool | done | `ContentView`, bars moved inside the map's ready state |
@@ -82,7 +82,9 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 
 | What | When | By whom |
 |---|---|---|
-| Installed build is current | 2026-09-09 20:27 | install.sh |
+| Installed build is current | 2026-09-09 21:14 | install.sh |
+| Two windows, two independent sessions | 2026-09-09 | System Events window list |
+| The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
 | Finder extension registers and Finder loads it | 2026-09-09 | `pluginkit`, process list |
 | The right-click item appears and works | — | needs a right-click |
 | Tabs, flat table, dock, content line | — | needs a look |
