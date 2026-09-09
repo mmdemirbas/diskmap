@@ -131,11 +131,11 @@ public enum FolderMatches {
                         }
                         out[i] = kids == 0 ? 0 : mix(acc ^ (kids &* 0x9E37_79B9_7F4A_7C15))
                     } else {
-                        let start = Int(store.nameOffset[i])
-                        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-                        for k in start..<(start + Int(store.nameLen[i])) {
-                            hash = (hash ^ UInt64(names[k])) &* 0x100_0000_01b3
-                        }
+                        // Folded, so two folders holding the same file under
+                        // names a macOS volume cannot tell apart are still one
+                        // folder twice.
+                        let hash = NameKey.hash(names, offset: Int(store.nameOffset[i]),
+                                                length: Int(store.nameLen[i]))
                         out[i] = mix(hash ^ leafContent(store, id))
                     }
                 }

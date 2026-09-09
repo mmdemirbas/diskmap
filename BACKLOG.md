@@ -69,7 +69,7 @@ nine days of work sat in `build/` unseen.
 | 23 | Finish the partials: 2d and 12 | done | `52e0c76`, and drops plus row drags on both lists. |
 | 24 | Share scan data between tools, so one folder is never walked twice | done | `NodeStore.subtree`, `ScanReuse`. A comparison asks the scan first; ~9x on folders it can answer. Refuses where the copy would not be the same answer. |
 | 25 | Faster scanning, still precise and correct | done | Measured first: `docs/scanning-speed.md`. The walk is at the syscall floor — 4.3x faster than `du`, and one thread costs what `du` costs. Thread count raised to where the curve flattens; two obvious ideas measured and dropped. |
-| 26 | Audit the mistakes tools like this are known to make | open | Case-insensitive and normalisation-insensitive filesystems, mount crossing, firmlinks, symlink cycles, hard links, clones. |
+| 26 | Audit the mistakes tools like this are known to make | done | `docs/known-pitfalls.md`. One real gap found and fixed: the copy hunt matched names by raw bytes on volumes that fold case. |
 
 ---
 

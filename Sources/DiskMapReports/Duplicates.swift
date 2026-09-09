@@ -57,7 +57,11 @@ public enum Duplicates {
 
                 let size = store.totalLogical[Int(child)]
                 guard size >= minimumSize else { continue }
-                groups[Key(name: store.name(child), size: size), default: []].append(child)
+                // Folded: `Photo.jpg` and `photo.jpg` are one name on the
+                // volumes this runs on, and two files with one name and one
+                // size are what this screen is for.
+                groups[Key(name: NameKey.folded(store.name(child)), size: size),
+                       default: []].append(child)
             }
         }
 
