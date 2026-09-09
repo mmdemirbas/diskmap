@@ -451,6 +451,8 @@ final class L10n: ObservableObject {
         case hardlinkMark, symlinkMark, compressedMark, unreadableMark
         case closePane, addPane, dragToRearrange
         case noExtraDetails, notIndexed, notIndexedHelp
+        case anyContent, largePictures, longRecordings, screenshots, olderThanFiveYears
+        case filterByContent, askingTheIndex, indexHasNothingHere
         case needsAScan, chooseWhatToScan, copiesSubtitle
         case startOverTitle, startOverBody, startOverConfirm
         case alreadyCovered, forgetFolder
@@ -569,6 +571,19 @@ final class L10n: ObservableObject {
         .notIndexed: ("Not in Spotlight's index", "Spotlight dizininde yok"),
         .notIndexedHelp: ("Dimensions, length and capture dates come from Spotlight. This volume, or this folder, is not indexed — so there is nothing to read rather than nothing to say.",
                           "Boyut, süre ve çekim tarihi Spotlight'tan gelir. Bu birim ya da bu klasör dizine alınmamış; yani söylenecek bir şey yok değil, okunacak bir şey yok."),
+        .anyContent: ("Anything inside", "İçeriği fark etmez"),
+        // Not "pictures": a video has pixel dimensions too, and on this disk the
+        // biggest things this question finds are films. The label says what the
+        // question actually asks.
+        .largePictures: ("2000 pixels wide or more", "2000 piksel ve daha geniş"),
+        .longRecordings: ("Recordings over 10 minutes", "10 dakikadan uzun kayıtlar"),
+        .screenshots: ("Screenshots", "Ekran görüntüleri"),
+        .olderThanFiveYears: ("Taken more than 5 years ago", "5 yıldan eski çekimler"),
+        .filterByContent: ("Only files whose contents match. Answered by Spotlight, which has already read them — nothing is opened here.",
+                           "Yalnızca içeriği eşleşen dosyalar. Yanıt, bu dosyaları zaten okumuş olan Spotlight'tan gelir; burada hiçbir dosya açılmaz."),
+        .askingTheIndex: ("Asking Spotlight…", "Spotlight'a soruluyor…"),
+        .indexHasNothingHere: ("Spotlight has not indexed what was scanned, so this question cannot be answered here — which is not the same as nothing matching.",
+                               "Spotlight taranan yeri dizine almamış, bu yüzden bu soru burada yanıtlanamıyor. Bu, hiçbir şeyin eşleşmediği anlamına gelmez."),
         .closePane: ("Close this view", "Bu görünümü kapat"),
         .addPane: ("Add a view here", "Buraya bir görünüm ekle"),
         .dragToRearrange: ("Drag onto another view to place it beside or behind it",

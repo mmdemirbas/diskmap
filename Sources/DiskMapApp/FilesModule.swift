@@ -76,6 +76,24 @@ final class FilesModule: ObservableObject {
 
     @Published var text = ""
     @Published var categories: Set<FileCategory> = []
+
+    /// A question about what is *inside* files, answered by the index in one
+    /// query rather than by opening anything. Kept apart from the filters above
+    /// because those cost a pass over memory and this costs a query — and
+    /// because it is the one filter that can be unanswerable.
+    @Published private(set) var question: ContentQuestion = .any
+    @Published private(set) var contentAnswer: ContentMatches?
+    @Published private(set) var askingIndex = false
+    /// The index had nothing to say about these roots at all, which is a
+    /// different answer from "nothing matched" and has to read differently.
+    @Published private(set) var indexUnavailable = false
+    private var queryTask: Task<Void, Never>?
+
+    /// True while the question has been asked and the answer has not arrived.
+    /// The table shows nothing rather than showing everything, since everything
+    /// is what an unfiltered table looks like.
+    var waitingForTheIndex: Bool { question != .any && contentAnswer == nil }
+
     @Published var sizeBand: SizeBand = .any
     @Published var timeBand: TimeBand = .any
     @Published var includeFolders = false
@@ -90,6 +108,40 @@ final class FilesModule: ObservableObject {
 
     var isFiltered: Bool {
         !text.isEmpty || !categories.isEmpty || sizeBand != .any || timeBand != .any
+            || question != .any
+    }
+
+    /// Asks the index, then reloads against the answer.
+    ///
+    /// The query runs once per question rather than once per keystroke: it is
+    /// seconds of somebody else's work, and the answer does not change while
+    /// the other filters are being adjusted.
+    func ask(_ question: ContentQuestion, roots: [String], in tree: LiveTree?) {
+        queryTask?.cancel()
+        self.question = question
+        contentAnswer = nil
+        indexUnavailable = false
+        guard let predicate = question.predicate() else {
+            askingIndex = false
+            return reset(in: tree)
+        }
+        askingIndex = true
+        queryTask = Task { [weak self] in
+            let found = await Task.detached(priority: .userInitiated) {
+                SpotlightQuery.paths(matching: predicate, under: roots)
+            }.value
+            guard !Task.isCancelled, let self, self.question == question else { return }
+            // Only worth asking when nothing came back: a non-empty answer is
+            // proof enough that the index is there.
+            let unavailable = found.isEmpty
+                ? await Task.detached { !roots.allSatisfy(SpotlightQuery.isIndexed) }.value
+                : false
+            guard !Task.isCancelled, self.question == question else { return }
+            self.contentAnswer = ContentMatches(paths: found, token: question.rawValue)
+            self.indexUnavailable = unavailable
+            self.askingIndex = false
+            self.reset(in: tree)
+        }
     }
 
     /// What the index is asked for. Recomputed rather than stored, so a band
@@ -100,6 +152,7 @@ final class FilesModule: ObservableObject {
         out.text = text.trimmingCharacters(in: .whitespaces)
         out.categories = categories
         out.includeFolders = includeFolders
+        out.content = contentAnswer
         (out.minBytes, out.maxBytes) = sizeBand.bounds
         let now = Date().timeIntervalSince1970
         let (recent, stale) = timeBand.days
@@ -137,6 +190,9 @@ final class FilesModule: ObservableObject {
 
     func reload(in tree: LiveTree?) {
         guard let tree else { return clear() }
+        // Reloading now would show the whole tree, which is what no filter at
+        // all looks like. Better to show nothing and say why.
+        guard !waitingForTheIndex else { return }
         loading = true
         let filter = self.filter
         let (sort, ascending, limit) = (self.sort, self.ascending, self.limit)
@@ -174,8 +230,25 @@ final class FilesModule: ObservableObject {
     /// nodes from a previous scan mean nothing to this one.
     func clear() {
         task?.cancel()
+        queryTask?.cancel()
+        question = .any
+        contentAnswer = nil
+        askingIndex = false
+        indexUnavailable = false
         page = FileTablePage()
         loading = false
         limit = Self.pageSize
+    }
+}
+
+extension ContentQuestion {
+    var key: L10n.K {
+        switch self {
+        case .any: .anyContent
+        case .largePictures: .largePictures
+        case .longRecordings: .longRecordings
+        case .screenshots: .screenshots
+        case .olderThanFiveYears: .olderThanFiveYears
+        }
     }
 }

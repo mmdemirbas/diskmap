@@ -101,6 +101,14 @@ struct FilesView: View {
             .onChange(of: model.filesTime) { _, _ in model.resetFiles() }
             .help(loc[.filterByDate])
 
+            Picker("", selection: $model.filesQuestion) {
+                ForEach(ContentQuestion.allCases) { question in
+                    Text(loc[question.key]).tag(question)
+                }
+            }
+            .labelsHidden().frame(width: 176)
+            .help(loc[.filterByContent])
+
             Toggle(loc[.includeFolders], isOn: $model.filesShowFolders)
                 .toggleStyle(.checkbox).font(.system(size: 11))
                 .onChange(of: model.filesShowFolders) { _, _ in model.resetFiles() }
@@ -191,9 +199,14 @@ struct FilesView: View {
     @ViewBuilder private var rows: some View {
         if model.files.page.rows.isEmpty {
             VStack(spacing: 6) {
-                Text(model.files.loading ? loc[.computing]
-                     : (model.files.isFiltered ? loc[.noMatches] : loc[.emptyFolder]))
-                    .font(.callout).foregroundStyle(.secondary)
+                Text(emptyMessage).font(.callout).foregroundStyle(.secondary)
+                // Said out loud rather than left as an empty list: no answers
+                // available and nothing matching are opposite conclusions.
+                if model.files.indexUnavailable {
+                    Text(loc[.indexHasNothingHere])
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center).frame(maxWidth: 420)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.renderMode {
@@ -214,6 +227,12 @@ struct FilesView: View {
                 }
             }
         }
+    }
+
+    private var emptyMessage: String {
+        if model.files.askingIndex || model.files.waitingForTheIndex { return loc[.askingTheIndex] }
+        if model.files.loading { return loc[.computing] }
+        return model.files.isFiltered ? loc[.noMatches] : loc[.emptyFolder]
     }
 
     private func rowView(_ row: FileRow) -> some View {

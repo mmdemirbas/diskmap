@@ -35,11 +35,21 @@ public struct FileFilter: Sendable, Equatable {
     /// way the map sizes them.
     public var includeFolders = false
 
+    /// The answer to a content question, already asked.
+    ///
+    /// Deliberately a set of results rather than a question: this type is about
+    /// what the index can answer for free, and a question about what is *in*
+    /// files is a query somebody else has to run first. Keeping the query out
+    /// here is what stops a filter that costs a tenth of a second and a filter
+    /// that costs nine seconds looking the same at the call site.
+    public var content: ContentMatches?
+
     public init() {}
 
     public var isEmpty: Bool {
         text.isEmpty && categories.isEmpty && minBytes == 0 && maxBytes == 0
             && modifiedAfter == 0 && modifiedBefore == 0 && !includeFolders
+            && content == nil
     }
 }
 
@@ -163,6 +173,16 @@ public enum FileTable {
                               Find.matchStart(buffer, offset, length, pattern) >= 0 else { continue }
                     } else if let slowText {
                         guard store.name(child).lowercased().contains(slowText) else { continue }
+                    }
+
+                    // Two tests, cheap one first. The name hash prunes to the
+                    // few nodes that could be a match; only those pay for a
+                    // path, which is the cost this walk exists to avoid.
+                    if let content = filter.content {
+                        guard content.mightHold(
+                                nameHash: ContentMatches.hash(bytes: names, offset: offset,
+                                                              length: length)),
+                              content.holds(path: store.path(child)) else { continue }
                     }
 
                     var category = FileCategory.folder

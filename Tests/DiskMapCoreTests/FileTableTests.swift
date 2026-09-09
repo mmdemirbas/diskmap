@@ -255,6 +255,85 @@ final class FileTableTests: XCTestCase {
         XCTAssertEqual(names(page(filter: filter)), ["big.mp4"])
     }
 
+    // MARK: - Asking about what is inside files
+
+    /// A content question is answered by the index in one query, and the answer
+    /// is a set of paths. Turning that back into rows is an intersection with
+    /// the tree, which must not cost a path per node.
+    func testAContentAnswerNarrowsToJustThoseFiles() throws {
+        try write("a/photo.heic", 900_000)
+        try write("b/notes.txt", 900_000)
+        scan()
+        let wanted = store.path(try XCTUnwrap(store.find(
+            path: root.appendingPathComponent("a/photo.heic").path)))
+
+        var filter = FileFilter()
+        filter.content = ContentMatches(paths: [wanted], token: "largePictures")
+        XCTAssertEqual(names(page(filter: filter)), ["photo.heic"])
+    }
+
+    /// The intersection prunes by name first because a name is in memory and a
+    /// path is not. That is a filter, not the answer: two files can share a
+    /// name and only one of them be the one the index meant.
+    func testTwoFilesWithOneNameAreNotBothMatches() throws {
+        try write("keep/shot.png", 900_000)
+        try write("other/shot.png", 900_000)
+        scan()
+        let wanted = store.path(try XCTUnwrap(store.find(
+            path: root.appendingPathComponent("keep/shot.png").path)))
+
+        var filter = FileFilter()
+        filter.content = ContentMatches(paths: [wanted])
+        let found = page(filter: filter)
+        XCTAssertEqual(found.total, 1, "a namesake came along with the match")
+        XCTAssertTrue(found.rows.first?.folder.hasSuffix("/keep") ?? false)
+    }
+
+    /// A name is hashed from interned bytes in the tree and from a Swift string
+    /// out of the index. The two have to agree, including about case.
+    func testTheNameHashIgnoresCaseTheSameWayOnBothSides() {
+        let fromIndex = ContentMatches.hash(name: "Photo.HEIC")
+        let bytes = Array("photo.heic".utf8)
+        let fromTree = bytes.withUnsafeBufferPointer {
+            ContentMatches.hash(bytes: $0.baseAddress!, offset: 0, length: bytes.count)
+        }
+        XCTAssertEqual(fromIndex, fromTree)
+    }
+
+    func testAQuestionWithNoAnswerYetIsNotAFilter() throws {
+        try write("a.txt", 1_000)
+        scan()
+        var filter = FileFilter()
+        filter.content = ContentMatches(paths: [])
+        XCTAssertTrue(page(filter: filter).rows.isEmpty,
+                      "an empty answer means nothing matched, not that nothing was asked")
+        XCTAssertFalse(filter.isEmpty, "the table must still say it is filtered")
+    }
+
+    // MARK: - The questions themselves
+
+    func testTheQuestionsBecomePredicatesTheIndexUnderstands() {
+        XCTAssertNil(ContentQuestion.any.predicate())
+        for question in ContentQuestion.allCases where question != .any {
+            let predicate = try? XCTUnwrap(question.predicate())
+            XCTAssertFalse(predicate?.isEmpty ?? true, question.rawValue)
+            XCTAssertTrue(predicate?.hasPrefix("kMDItem") ?? false, question.rawValue)
+        }
+    }
+
+    /// Written as a date counted back from now, so the menu does not quietly
+    /// become wrong in January.
+    func testOlderThanFiveYearsIsCountedFromNow() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let predicate = try XCTUnwrap(ContentQuestion.olderThanFiveYears.predicate(now: now))
+        // 1,800,000,000 is 15 January 2027, so five years back is 2022.
+        XCTAssertTrue(predicate.contains("2022-"), predicate)
+
+        let earlier = try XCTUnwrap(
+            ContentQuestion.olderThanFiveYears.predicate(now: now.addingTimeInterval(-86_400 * 400)))
+        XCTAssertNotEqual(predicate, earlier)
+    }
+
     /// Empty answers and unfiltered answers are different answers.
     func testAFilterThatMatchesNothingSaysSo() throws {
         try write("notes.txt", 1_000)

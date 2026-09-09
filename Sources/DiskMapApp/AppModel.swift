@@ -647,6 +647,14 @@ final class AppModel: ObservableObject {
         get { files.includeFolders } set { files.includeFolders = newValue }
     }
 
+    /// Asking about what is inside files, scoped to what was scanned: the index
+    /// knows the whole disk, and an answer from outside the tree on screen is
+    /// an answer to a question nobody asked.
+    var filesQuestion: ContentQuestion {
+        get { files.question }
+        set { files.ask(newValue, roots: tree?.roots ?? [], in: tree) }
+    }
+
     func reloadFiles() { files.reload(in: tree) }
     func resetFiles() { files.reset(in: tree) }
     func sortFiles(by key: FileSort) { files.sortBy(key, in: tree) }
@@ -658,7 +666,9 @@ final class AppModel: ObservableObject {
         files.sizeBand = .any
         files.timeBand = .any
         files.includeFolders = false
-        files.reset(in: tree)
+        // Last, because it is the one that reloads by itself once the index
+        // answers — and with `any` there is nothing to wait for.
+        files.ask(.any, roots: tree?.roots ?? [], in: tree)
     }
 
     var suggestionsLoading: Bool { space.loading }

@@ -505,6 +505,35 @@ func cmdFind(_ path: String, _ needle: String) {
     }
 }
 
+/// What a content question costs against the real index, and how much of the
+/// answer is inside the tree that was scanned.
+///
+/// The claim the content filter rests on: asking the index once scales with the
+/// number of matches, while asking per file scales with the size of the tree.
+/// This is where that is checked on a real machine rather than assumed.
+func cmdContent(_ path: String) {
+    let store = DiskScanner().scan(ScanOptions(rootPath: path)).store
+    print("\(store.count.formatted()) nodes under \(path)")
+    for question in ContentQuestion.allCases {
+        guard let predicate = question.predicate() else { continue }
+        let t0 = DispatchTime.now()
+        let paths = SpotlightQuery.paths(matching: predicate, under: [path])
+        let queryMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+
+        let t1 = DispatchTime.now()
+        var filter = FileFilter()
+        filter.content = ContentMatches(paths: paths, token: question.rawValue)
+        let page = FileTable.page(store: store, filter: filter, sort: .size, limit: 5)
+        let joinMs = Double(DispatchTime.now().uptimeNanoseconds - t1.uptimeNanoseconds) / 1e6
+
+        let label = question.rawValue.padding(toLength: 20, withPad: " ", startingAt: 0)
+        print(String(format: "  %@ %7.0f ms query, %6.0f ms join → %d indexed, %d in the tree, %@",
+                     label, queryMs, joinMs, paths.count, page.total,
+                     fmt(page.totalPhysical)))
+        for row in page.rows.prefix(3) { print("      \(fmt(row.physical))  \(row.path)") }
+    }
+}
+
 /// One line per sort key, every field starting at the same column.
 private func report(_ label: String, _ ms: Double, _ page: FileTablePage) {
     let name = label.padding(toLength: 11, withPad: " ", startingAt: 0)
@@ -673,6 +702,7 @@ case "snapshot": cmdSnapshot(args.count > 2 ? args[2] : FileManager.default.home
 case "changes": cmdChanges(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                            args.count > 3 ? args[3] : nil)
 case "cleanup": cmdCleanup(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
+case "content": cmdContent(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path)
 case "table": cmdTable(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                        args.count > 3 ? (Int(args[3]) ?? 1000) : 1000)
 case "find": cmdFind(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
@@ -693,5 +723,5 @@ default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]
                + " | dupes <path> | compare <left> <right> [--verify]"
                + " | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
-               + " | table <path> [rows] | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
+               + " | table <path> [rows] | content <path> | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
 }
