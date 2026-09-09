@@ -30,6 +30,39 @@ final class ExportTests: XCTestCase {
         return Export.document(store: r.store, stats: r.stats, options: options)
     }
 
+    // MARK: - The pipeline shape
+
+    /// A macOS filename may hold a tab or a newline, and one that does would
+    /// add a column or a row to the output. Nothing fails: `awk -F'\t'` reads
+    /// the wrong field for that record and every field after it, which is a
+    /// wrong answer that arrives looking like a right one.
+    func testAFilenameWithATabInItDoesNotAddAColumn() throws {
+        let rows = [["/tmp/has\ttab.txt", "document", "4096"],
+                    ["/tmp/two\nlines.txt", "document", "8192"]]
+        let text = String(decoding: Export.tsv(["path", "kind", "physical"], rows), as: UTF8.self)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).dropLast()
+
+        XCTAssertEqual(lines.count, 3, "a name with a newline in it became a second row")
+        for line in lines {
+            XCTAssertEqual(line.filter { $0 == "\t" }.count, 2,
+                           "wrong number of columns in: \(line)")
+        }
+        XCTAssertTrue(text.contains(#"/tmp/has\ttab.txt"#))
+        XCTAssertTrue(text.contains(#"/tmp/two\nlines.txt"#))
+    }
+
+    /// The escape character itself, or unescaping gives back a different name.
+    func testABackslashInANameSurvivesTheRoundTrip() {
+        let text = String(decoding: Export.tsv(["path"], [[#"/tmp/a\tb"#]]), as: UTF8.self)
+        XCTAssertTrue(text.contains(#"/tmp/a\\tb"#),
+                      "a literal backslash-t is now indistinguishable from a tab")
+    }
+
+    func testOrdinaryNamesAreLeftExactlyAsTheyAre() {
+        let text = String(decoding: Export.tsv(["path"], [["/tmp/plain name.txt"]]), as: UTF8.self)
+        XCTAssertEqual(text, "path\n/tmp/plain name.txt\n")
+    }
+
     // MARK: - Answering a question rather than describing a disk
 
     /// The field that stops a caller reading `rows.count` as the count.

@@ -318,6 +318,41 @@ public enum Export {
                        })
     }
 
+    /// Tab-separated, with a header line, for the half of headless use that is
+    /// a pipeline rather than a parser.
+    ///
+    /// Every field is escaped, and it has to be: a macOS filename may contain a
+    /// tab or a newline, and one that does would otherwise add a column or a
+    /// row to the output. Nothing would fail — `awk -F'\t'` would simply read
+    /// the wrong field for that one row and every row after it in the record,
+    /// which is a wrong answer that arrives looking like a right one.
+    ///
+    /// The escaping is the usual one for this format: backslash first, then tab
+    /// and newline and carriage return as `\t`, `\n` and `\r`. A consumer that
+    /// needs the real name unescapes; one that only wants columns can ignore it.
+    public static func tsv(_ header: [String], _ rows: [[String]]) -> Data {
+        var out = header.map(escaped).joined(separator: "\t") + "\n"
+        for row in rows { out += row.map(escaped).joined(separator: "\t") + "\n" }
+        return Data(out.utf8)
+    }
+
+    static func escaped(_ field: String) -> String {
+        guard field.contains(where: { $0 == "\\" || $0 == "\t" || $0 == "\n" || $0 == "\r" })
+        else { return field }
+        var out = ""
+        out.reserveCapacity(field.count + 8)
+        for character in field {
+            switch character {
+            case "\\": out += "\\\\"
+            case "\t": out += "\\t"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            default: out.append(character)
+            }
+        }
+        return out
+    }
+
     public static func encode<T: Encodable>(_ doc: T, prettyPrinted: Bool = true) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

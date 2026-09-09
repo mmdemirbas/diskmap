@@ -49,7 +49,12 @@ struct Arguments {
     }
 
     mutating func number(_ name: String) -> Int {
-        guard let n = Int(value(name)) else { fail("\(name) needs a number", 1) }
+        let raw = value(name)
+        // A negative used to be clamped to zero, and zero means "every row" —
+        // so a mistyped `--limit -5` quietly asked for three million lines.
+        guard let n = Int(raw), n >= 0 else {
+            fail("\(name) needs a number that is not negative, got \(raw)", 1)
+        }
         return n
     }
 
@@ -101,15 +106,10 @@ func encoded<T: Encodable>(_ doc: T, prettyPrinted: Bool) -> Data {
     catch { fail("could not encode the result: \(error)", 3) }
 }
 
-/// Tab-separated, with a header line.
-///
-/// JSON is the default because it says what each field is. This exists because
-/// half of headless use is a pipeline, and `awk -F'\t'` should not need a JSON
-/// parser in front of it.
+/// The document formatter lives beside the other machine-readable shapes, so
+/// the escaping it has to do is testable. This is only the local name for it.
 func tsv(_ header: [String], _ rows: [[String]]) -> Data {
-    var out = header.joined(separator: "\t") + "\n"
-    for row in rows { out += row.joined(separator: "\t") + "\n" }
-    return Data(out.utf8)
+    Export.tsv(header, rows)
 }
 
 let isoDate: ISO8601DateFormatter = {

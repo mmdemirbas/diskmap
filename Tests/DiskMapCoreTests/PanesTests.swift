@@ -85,6 +85,20 @@ final class PanesTests: XCTestCase {
         XCTAssertTrue(model.duplicates.isEmpty)
     }
 
+    /// A drop can name a group that is no longer there — the layout may have
+    /// changed under an in-flight drag. Recovering from that must not put the
+    /// same pane in two places, which is the invariant every other operation
+    /// relies on.
+    func testADropOnAGroupThatIsGoneDoesNotDuplicateThePane() {
+        var layout = DockLayout(root: .leaf([.treemap]))
+        layout.move(.treemap, to: UUID(), edge: nil)
+
+        let everywhere = layout.leaves.flatMap(\.panes)
+        XCTAssertEqual(everywhere.filter { $0 == .treemap }.count, 1,
+                       "the pane is in two places at once: \(everywhere)")
+        XCTAssertEqual(Set(everywhere).count, everywhere.count, "some pane is duplicated")
+    }
+
     /// Closing a pane brings another forward, and that one may need a report
     /// nobody has asked for yet.
     func testClosingAPaneAsksForWhateverTheNextOneNeeds() throws {

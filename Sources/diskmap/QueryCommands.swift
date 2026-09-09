@@ -74,7 +74,7 @@ func runFiles(_ arguments: [String]) -> Never {
             }
             sort = parsed
         case "--asc": ascending = true
-        case "--limit": limit = max(0, args.number(arg))
+        case "--limit": limit = args.number(arg)
         case "--tsv": asTSV = true
         case "--compact": pretty = false
         case "--quiet": quiet = true
@@ -145,7 +145,7 @@ func runFind(_ arguments: [String]) -> Never {
         switch arg {
         case "-h", "--help": print(findUsage); exit(0)
         case "-o", "--out": out = args.value(arg)
-        case "--limit": limit = max(0, args.number(arg))
+        case "--limit": limit = args.number(arg)
         case "--tsv": asTSV = true
         case "--compact": pretty = false
         case "--quiet": quiet = true

@@ -180,7 +180,15 @@ struct DockLayout: Codable, Equatable {
     }
 
     /// Puts a pane into a group as another tab, or splits that group in two.
+    ///
+    /// A pane already on screen is brought forward rather than added a second
+    /// time. One place per pane is the invariant every other operation here
+    /// relies on, and there is a path that breaks it: dropping onto a group
+    /// that has since disappeared, in a layout small enough that removing the
+    /// dragged pane empties it, falls back to the standard arrangement — which
+    /// already holds that pane.
     mutating func insert(_ kind: PaneKind, into leafID: UUID, edge: DockEdge?) {
+        guard !contains(kind) else { return activate(kind) }
         root = Self.map(root) { node in
             guard case .leaf(let id, let panes, let active) = node, id == leafID else { return node }
             guard let edge else {

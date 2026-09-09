@@ -32,7 +32,7 @@ func runScan(_ arguments: [String]) -> Never {
         case "-h", "--help": print(scanUsage); exit(0)
         case "-o", "--out": out = args.value(arg)
         case "--min-folder": options.folderMinimumBytes = args.size(arg)
-        case "--top-files": options.largestFiles = max(0, args.number(arg))
+        case "--top-files": options.largestFiles = args.number(arg)
         case "--duplicates": options.includeDuplicates = true
         case "--suggestions": options.includeSuggestions = true
         case "--compact": options.prettyPrinted = false

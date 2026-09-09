@@ -202,7 +202,13 @@ are answered from the scan's index, so a filter costs one pass over memory and
 never opens a file.
 
 `--tsv` writes `path`, `kind`, `physical`, `logical`, `modified`, `marks`
-instead, with a header line, for the half of headless use that is a pipeline:
+instead, with a header line, for the half of headless use that is a pipeline.
+
+**Fields are escaped.** A macOS filename may contain a tab or a newline, and one
+that does would otherwise add a column or a row — `awk -F'\t'` would read the
+wrong field for that record and never say so. Backslash becomes `\\`, and tab,
+newline and carriage return become `\t`, `\n` and `\r`. Unescape if you need the
+real name; ignore it if you only want columns.
 
 ```bash
 diskmap files / --kind video --min 1GB --older-than 730 --tsv --quiet \
