@@ -99,6 +99,66 @@ final class ReviewFlowTests: XCTestCase {
                       "the copy report was left showing a file that has just been trashed")
     }
 
+    // MARK: - The single item from a context menu
+
+    /// The most-used way to delete something, and until now the only route in
+    /// the app that acted without saying what it was about to do: a file under
+    /// five gigabytes went straight to the Trash on one click.
+    ///
+    /// It is also the route easiest to hit by accident. The row under the
+    /// pointer when a context menu opens is not always the row the eye was on.
+    func testTrashingOneFileAsksFirstAndDoesNothingUntilAnswered() throws {
+        try write("keep.bin", 4_000)
+        let model = ready()
+        let victim = try node(model, "keep.bin")
+
+        model.requestTrash(victim)
+
+        let pending = try XCTUnwrap(model.pendingTrash, "one file was trashed with no question")
+        XCTAssertEqual(pending.name, "keep.bin")
+        XCTAssertFalse(pending.isDirectory)
+        XCTAssertTrue(fm.fileExists(atPath: root.appendingPathComponent("keep.bin").path),
+                      "the file moved before the question was answered")
+        XCTAssertTrue(model.undoStack.isEmpty)
+    }
+
+    func testAnsweringYesIsWhatMovesIt() throws {
+        try write("go.bin", 4_000)
+        let model = ready()
+        model.requestTrash(try node(model, "go.bin"))
+
+        model.confirmPendingTrash()
+
+        XCTAssertNil(model.pendingTrash)
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("go.bin").path))
+        XCTAssertEqual(model.undoStack.count, 1, "nothing to undo with")
+    }
+
+    /// Cancelling has to leave the disk alone, which is the whole point of
+    /// asking.
+    func testAnsweringNoLeavesItWhereItIs() throws {
+        try write("stay.bin", 4_000)
+        let model = ready()
+        model.requestTrash(try node(model, "stay.bin"))
+
+        model.pendingTrash = nil
+
+        XCTAssertTrue(fm.fileExists(atPath: root.appendingPathComponent("stay.bin").path))
+        XCTAssertTrue(model.undoStack.isEmpty)
+    }
+
+    /// The planner still runs before the question is asked. Being told a folder
+    /// cannot be removed is only useful while it is still a question.
+    func testSomethingTheRulesRefuseIsNeverEvenAskedAbout() throws {
+        try write("inside.bin", 4_000)
+        let model = ready()
+
+        model.requestTrash(0)
+
+        XCTAssertNil(model.pendingTrash, "the scan root reached the confirmation")
+        XCTAssertNotNil(model.toast, "it was refused without saying why")
+    }
+
     // MARK: - Selecting
 
     func testTickingSomethingPutsItInThePlan() throws {

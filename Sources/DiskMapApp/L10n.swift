@@ -216,6 +216,13 @@ final class L10n: ObservableObject {
             ? "Bu klasörde \(fmt(items)) öğe var, toplam \(size). Çöp Kutusu'ndan ya da Geri Al ile döndürebilirsiniz."
             : "This folder holds \(fmt(items)) items totalling \(size). You can put it back from the Trash or with Undo."
     }
+    /// One file says its size; a folder says how many things are inside it,
+    /// because that is the part you cannot see from its name.
+    func confirmTrashFileBody(_ size: String) -> String {
+        active == .tr
+            ? "\(size). Çöp Kutusu'ndan ya da Geri Al ile döndürebilirsiniz."
+            : "\(size). You can put it back from the Trash or with Undo."
+    }
     func datalessNote(_ count: Int, _ size: String) -> String {
         active == .tr
             ? "\(fmt(count)) dosya iCloud yer tutucusu: görünen boyutu \(size), diskte 0 bayt. Silmek yer açmaz."

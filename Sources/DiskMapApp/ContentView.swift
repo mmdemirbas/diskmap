@@ -82,7 +82,9 @@ struct ContentView: View {
             Button(loc[.moveToTrash], role: .destructive) { model.confirmPendingTrash() }
             Button(loc[.cancel], role: .cancel) { model.pendingTrash = nil }
         } message: { pending in
-            Text(loc.confirmTrashBody(pending.itemCount, shortBytes(pending.bytes)))
+            Text(pending.isDirectory
+                 ? loc.confirmTrashBody(pending.itemCount, shortBytes(pending.bytes))
+                 : loc.confirmTrashFileBody(shortBytes(pending.bytes)))
         }
     }
 

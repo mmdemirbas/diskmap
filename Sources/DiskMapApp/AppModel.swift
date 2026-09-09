@@ -1689,14 +1689,16 @@ final class AppModel: ObservableObject {
         // at the moment of the click, because the sheet can sit open for a
         // while and the disk does not wait.
         guard let candidate = planOne(node) else { return }
-        if candidate.isDirectory || candidate.bytes >= 5_000_000_000 {
-            pendingTrash = PendingTrash(node: candidate.node, name: candidate.name,
-                                        bytes: candidate.bytes,
-                                        itemCount: candidate.itemCount,
-                                        isDirectory: candidate.isDirectory)
-        } else {
-            performTrash(node)
-        }
+        // Everything is confirmed, whatever its size or kind. This used to send
+        // a file under five gigabytes straight to the Trash on one click of a
+        // context menu — the only route in the app that acted without saying
+        // what it was about to do, and the one that is easiest to hit by
+        // accident, since the item under the pointer when the menu opened is
+        // not always the item the eye was on.
+        pendingTrash = PendingTrash(node: candidate.node, name: candidate.name,
+                                    bytes: candidate.bytes,
+                                    itemCount: candidate.itemCount,
+                                    isDirectory: candidate.isDirectory)
     }
 
     /// One node through the same planner every other route to the Trash uses,
