@@ -364,20 +364,76 @@ final class AppModel: ObservableObject {
         get { session.stats } set { session.stats = newValue }
     }
 
-    @Published var currentDirectory: Int32 = 0
-    /// Folders opened in place in the tree table, without navigating into them.
-    @Published var expanded: Set<Int32> = []
-    private var backStack: [Int32] = []
-    private var forwardStack: [Int32] = []
-    /// Rows shown per level. Far beyond what anyone scrolls, but it stops a
-    /// folder with a million entries from building a million row structs.
-    private let rowsPerLevel = 5000
-    @Published var breadcrumb: [(id: Int32, name: String)] = []
-    @Published var rows: [Row] = []
-    @Published var selection: Int32?
-    @Published var selectedInfo: ItemInfo?
-    @Published var usePhysicalSize = true
-    @Published var filterText = ""
+    /// Where the space went: the folder being looked at, the rows under it,
+    /// the selection and the three layout caches. Re-emitted like the rest, so
+    /// every view that reads `model.rows` did not have to be re-pointed for the
+    /// move; a pane that only draws the map can observe this object directly.
+    lazy var map = MapModule(session: session)
+    private var mapRelay: AnyCancellable?
+
+    var currentDirectory: Int32 {
+        get { map.currentDirectory } set { map.currentDirectory = newValue }
+    }
+    var expanded: Set<Int32> {
+        get { map.expanded } set { map.expanded = newValue }
+    }
+    var breadcrumb: [(id: Int32, name: String)] { map.breadcrumb }
+    var rows: [Row] { map.rows }
+    var selection: Int32? {
+        get { map.selection } set { map.selection = newValue }
+    }
+    var selectedInfo: ItemInfo? {
+        get { map.selectedInfo } set { map.selectedInfo = newValue }
+    }
+    var usePhysicalSize: Bool {
+        get { map.usePhysicalSize } set { map.usePhysicalSize = newValue }
+    }
+    var filterText: String {
+        get { map.filterText } set { map.filterText = newValue }
+    }
+    var visualization: Visualization {
+        get { map.visualization } set { map.visualization = newValue }
+    }
+    var colourMode: ColourMode {
+        get { map.colourMode } set { map.colourMode = newValue }
+    }
+    var panel: PanelMode {
+        get { map.panel } set { map.panel = newValue }
+    }
+    /// The row the list should bring into view. Cleared once it has.
+    var scrollTo: Int32? {
+        get { map.scrollTo } set { map.scrollTo = newValue }
+    }
+    var revision: Int { map.revision }
+    var layoutToken: Int { map.layoutToken }
+    var layoutCache: LayoutStore<TreemapLayout> { map.layoutCache }
+    var sunburstCache: LayoutStore<SunburstLayout> { map.sunburstCache }
+    var icicleCache: LayoutStore<IcicleLayout> { map.icicleCache }
+
+    func enter(_ node: Int32) { map.enter(node) }
+    func goUp() { map.goUp() }
+    func goBack() { map.goBack() }
+    func goForward() { map.goForward() }
+    var canGoBack: Bool { map.canGoBack }
+    var canGoForward: Bool { map.canGoForward }
+    func toggleExpanded(_ node: Int32) { map.toggleExpanded(node) }
+    func select(_ node: Int32?) { map.select(node) }
+    func rebuild() { map.rebuild() }
+    func layoutKey(size: CGSize) -> String { map.layoutKey(size: size) }
+    func cachedLayout(for size: CGSize) -> TreemapLayout? { map.cachedLayout(for: size) }
+    func cachedSunburst(for size: CGSize) -> SunburstLayout? { map.cachedSunburst(for: size) }
+    func cachedIcicle(for size: CGSize) -> IcicleLayout? { map.cachedIcicle(for: size) }
+    @discardableResult
+    func computeLayoutSync(size: CGSize) -> TreemapLayout? { map.computeLayoutSync(size: size) }
+    @discardableResult
+    func computeSunburstSync(size: CGSize) -> SunburstLayout? { map.computeSunburstSync(size: size) }
+    @discardableResult
+    func computeIcicleSync(size: CGSize) -> IcicleLayout? { map.computeIcicleSync(size: size) }
+    func relayout(size: CGSize) async { await map.relayout(size: size) }
+
+    /// The name to show for a node, which for a root is its disk.
+    func displayName(_ raw: String) -> String { session.displayName(raw) }
+    var rootLabel: String { session.rootLabel }
 
     var liveActive: Bool {
         get { session.liveActive } set { session.liveActive = newValue }
@@ -648,9 +704,6 @@ final class AppModel: ObservableObject {
         willSet { objectWillChange.send() }
     }
 
-    @Published var visualization: Visualization = .treemap
-    @Published var colourMode: ColourMode = .type
-    @Published var panel: PanelMode = .contents
 
     /// What is in here, and what is in here twice. Re-emitted like the rest, so
     /// the panels that read `model.duplicates` did not have to be re-pointed
@@ -688,15 +741,10 @@ final class AppModel: ObservableObject {
         get { reports.matchGroups } set { reports.matchGroups = newValue }
     }
 
-    let layoutCache = LayoutStore<TreemapLayout>()
-    let sunburstCache = LayoutStore<SunburstLayout>()
-    let icicleCache = LayoutStore<IcicleLayout>()
-    @Published private(set) var layoutToken = 0
     /// Offscreen rendering has no async phase, so layout must run inline.
     var renderMode = false
 
     var tree: LiveTree? { session.tree }
-    @Published private(set) var revision = 0
 
     private var activeScanner: DiskScanner?
     private var scanTask: Task<Void, Never>?
@@ -730,6 +778,12 @@ final class AppModel: ObservableObject {
         reportsRelay = reports.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
+        mapRelay = map.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+        // Moving to another folder makes every open report stale. The map does
+        // not know a report exists; this is where that is decided.
+        map.onNavigated = { [weak self] in self?.refreshSummary() }
         // A tick refers to a node in the report that produced it — unless a
         // review is open, in which case it refers to a decision being made.
         reports.onLoaded = { [weak self] in
@@ -863,40 +917,6 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: - Naming a root
-
-    /// A root node's name is its absolute path, so a scan of two disks lists
-    /// "/", "/System/Volumes/Data" and "/Volumes/MD8TB" — three mount points
-    /// where the user chose two disks, one of which is silently split in half.
-    /// Roots are named the way the disk chooser names them instead, so there is
-    /// one vocabulary across the app.
-    private var rootNames: [String: String] = [:]
-
-    private func buildRootNames(_ roots: [String]) {
-        var names: [String: String] = [:]
-        for root in roots where volumeMountPoint(root) == root {
-            guard let info = VolumeInfo.forPath(root) else { continue }
-            // Both halves of the startup disk report the same volume name, and
-            // two rows called "Macintosh HD" is the confusion this replaces.
-            // The read-only half is the one that needs saying.
-            names[root] = root == "/" && roots.contains(RootSet.startupDataVolume)
-                ? L10n.shared.systemVolume(info.name)
-                : info.name
-        }
-        rootNames = names
-    }
-
-    /// The name to show for a node, which for a root is its disk.
-    func displayName(_ raw: String) -> String {
-        rootNames[raw] ?? abbreviatedName(raw)
-    }
-
-    /// The startup disk arrives as two volumes. Showing "2 locations" for what
-    /// the user asked to scan as one disk would be needless jargon.
-    var rootLabel: String {
-        guard let roots = tree?.roots, !roots.isEmpty else { return "/" }
-        if RootSet.coversWholeVolume(roots) { return volume?.name ?? "/" }
-        return L10n.shared.locationCount(roots.count)
-    }
 
     // MARK: - Scan targets
 
@@ -1071,12 +1091,7 @@ final class AppModel: ObservableObject {
         reconciliation = nil
         rejectedRoots = []
         rootsSpanVolumes = false
-        rows = []
-        breadcrumb = []
-        currentDirectory = 0
-        expanded = []
-        selection = nil
-        selectedInfo = nil
+        map.clear()
         checked = []
         reviewing = nil
         space.clear()
@@ -1093,10 +1108,6 @@ final class AppModel: ObservableObject {
         // Finder; the app just can no longer be the one to put them back,
         // because "back" was a place in a tree that no longer exists.
         undoStack = []
-        backStack = []
-        forwardStack = []
-        filterText = ""
-        layoutCache.clear(); sunburstCache.clear(); icicleCache.clear()
         phase = .idle
         refreshVolume()
     }
@@ -1115,7 +1126,7 @@ final class AppModel: ObservableObject {
                 snapshotCount: Snapshots.list(volume: "/").count,
                 scanRootIsWholeVolume: RootSet.coversWholeVolume(live.roots))
         }
-        buildRootNames(live.roots)
+        session.buildRootNames(live.roots)
         rejectedRoots = live.rejectedRoots
         // The startup disk is two volumes but one physical disk, so the
         // "more than one disk" note would be noise there.
@@ -1128,17 +1139,7 @@ final class AppModel: ObservableObject {
         live.startWatching()
         liveActive = live.liveUpdatesActive
         hasFullDiskAccess = FileActions.hasFullDiskAccess()
-        currentDirectory = 0
-        // A startup-disk scan has two roots and effectively everything lives on
-        // the Data volume. Opening on the synthetic parent shows one enormous
-        // rectangle and nothing useful, so start where the bytes are. The
-        // breadcrumb still goes up to the system volume.
-        if RootSet.coversWholeVolume(live.roots), live.roots.count > 1,
-           let dataNode = live.withStore({ $0.find(path: RootSet.startupDataVolume) }) {
-            currentDirectory = dataNode
-        }
-        selection = nil
-        selectedInfo = nil
+        map.openAtTheRoot(of: live)
         phase = .ready
         rebuild()
     }
@@ -1155,340 +1156,6 @@ final class AppModel: ObservableObject {
         // Only while it is open: the walk is a tenth of a second and nobody
         // should pay for it to refresh a screen they cannot see.
         if openTabs.contains(.files) { files.reload(in: tree) }
-    }
-
-    // MARK: - Navigation
-
-    func enter(_ node: Int32) {
-        guard let tree, tree.withStore({ node < Int32($0.count) && $0.isDirectory(node) }) else { return }
-        guard node != currentDirectory else { return }
-        backStack.append(currentDirectory)
-        forwardStack.removeAll()
-        moveTo(node)
-    }
-
-    func goUp() {
-        guard let tree, currentDirectory > 0 else { return }
-        let parent = tree.withStore { $0.parent[Int(currentDirectory)] }
-        guard parent >= 0 else { return }
-        backStack.append(currentDirectory)
-        forwardStack.removeAll()
-        moveTo(parent)
-    }
-
-    var canGoBack: Bool { !backStack.isEmpty }
-    var canGoForward: Bool { !forwardStack.isEmpty }
-
-    func goBack() {
-        guard let previous = backStack.popLast() else { return }
-        forwardStack.append(currentDirectory)
-        moveTo(previous)
-    }
-
-    func goForward() {
-        guard let next = forwardStack.popLast() else { return }
-        backStack.append(currentDirectory)
-        moveTo(next)
-    }
-
-    private func moveTo(_ node: Int32) {
-        currentDirectory = node
-        expanded.removeAll()
-        selection = nil
-        selectedInfo = nil
-        rebuild()
-        refreshSummary()
-    }
-
-    /// Opens or closes a folder inside the table, leaving the view where it is.
-    func toggleExpanded(_ node: Int32) {
-        if expanded.contains(node) {
-            // Close descendants too, so reopening does not restore a deep tree.
-            expanded = expanded.filter { !isDescendant($0, of: node) && $0 != node }
-        } else {
-            expanded.insert(node)
-        }
-        rebuild()
-    }
-
-    private func isDescendant(_ node: Int32, of ancestor: Int32) -> Bool {
-        guard let tree else { return false }
-        return tree.withStore { store in
-            var cur = node
-            while cur > 0 {
-                cur = store.parent[Int(cur)]
-                if cur == ancestor { return true }
-            }
-            return false
-        }
-    }
-
-    func select(_ node: Int32?) {
-        selection = node
-        selectedInfo = node.flatMap(info(for:))
-    }
-
-    private func info(for node: Int32) -> ItemInfo? {
-        guard let tree, let volume else { return nil }
-        return tree.withStore { store -> ItemInfo? in
-            guard node >= 0, node < Int32(store.count),
-                  !store.flagSet(node).contains(.removed) else { return nil }
-            let rawName = store.name(node)
-            let name = displayName(rawName)
-            let isDir = store.isDirectory(node)
-            let path = store.path(node)
-            return ItemInfo(
-                node: node, name: name, path: path,
-                physical: store.totalPhysical[Int(node)],
-                logical: store.totalLogical[Int(node)],
-                isDirectory: isDir,
-                category: Categorizer.of(name: rawName, isDirectory: isDir, path: path),
-                flags: store.flagSet(node),
-                modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(node)])),
-                fractionOfVolume: volume.used > 0
-                    ? Double(store.totalPhysical[Int(node)]) / Double(volume.used) : 0,
-                childCount: store.children(node).count)
-        }
-    }
-
-    func rebuild() {
-        guard let tree else { rows = []; breadcrumb = []; return }
-        let physical = usePhysicalSize
-        let filter = filterText.lowercased()
-
-        let (dir, newRows, crumbs) = tree.withStore { store -> (Int32, [Row], [(Int32, String)]) in
-            // If the folder we were looking at has been deleted, climb to the
-            // nearest ancestor that still exists rather than showing a blank.
-            var dir = currentDirectory
-            if dir < 0 || dir >= Int32(store.count) { dir = 0 }
-            while dir > 0 && store.flagSet(dir).contains(.removed) { dir = store.parent[Int(dir)] }
-
-            var out: [Row] = []
-            appendRows(store, parent: dir, depth: 0, physical: physical,
-                       filter: filter, into: &out)
-
-            var chain: [(Int32, String)] = []
-            var cur = dir
-            while cur > 0 { chain.append((cur, displayName(store.name(cur)))); cur = store.parent[Int(cur)] }
-            chain.append((0, store.isMultiRoot ? "" : store.name(0)))
-            return (dir, out, chain.reversed())
-        }
-        if dir != currentDirectory { currentDirectory = dir }
-        rows = newRows
-        breadcrumb = crumbs.map { (id: $0.0, name: $0.1) }
-        selectedInfo = selection.flatMap(info(for:))
-        if selectedInfo == nil { selection = nil }
-        revision &+= 1
-    }
-
-    /// Flattens the visible part of the tree: every child of `parent`, and the
-    /// children of any folder the user has opened, in one array the list can
-    /// render without knowing anything about the tree.
-    private func appendRows(_ store: NodeStore, parent: Int32, depth: Int,
-                            physical: Bool, filter: String, into out: inout [Row]) {
-        let sizes = physical ? store.totalPhysical : store.totalLogical
-        let parentTotal = max(sizes[Int(parent)], 1)
-
-        var kids: [Int32] = []
-        for c in store.children(parent) where !store.flagSet(c).contains(.removed) {
-            // The filter applies to the level being browsed; once a folder is
-            // opened, everything inside it is shown.
-            if depth == 0, !filter.isEmpty, !store.name(c).lowercased().contains(filter) { continue }
-            kids.append(c)
-        }
-        kids.sort { sizes[Int($0)] > sizes[Int($1)] }
-
-        let shown = kids.prefix(rowsPerLevel)
-        for c in shown {
-            let name = displayName(store.name(c))
-            let isDir = store.isDirectory(c)
-            let childCount = store.children(c).count
-            let isOpen = expanded.contains(c)
-            out.append(Row(id: c, name: name,
-                           physical: store.totalPhysical[Int(c)],
-                           logical: store.totalLogical[Int(c)],
-                           isDirectory: isDir,
-                           category: Categorizer.of(name: name, isDirectory: isDir),
-                           fractionOfParent: Double(sizes[Int(c)]) / Double(parentTotal),
-                           flags: store.flagSet(c),
-                           modified: Date(timeIntervalSince1970: TimeInterval(store.mtime[Int(c)])),
-                           depth: depth,
-                           hasChildren: isDir && childCount > 0,
-                           isExpanded: isOpen,
-                           hiddenSiblings: 0))
-            if isOpen && childCount > 0 {
-                appendRows(store, parent: c, depth: depth + 1, physical: physical,
-                           filter: "", into: &out)
-            }
-        }
-        if kids.count > shown.count {
-            let rest = kids.dropFirst(shown.count)
-            let bytes = rest.reduce(Int64(0)) { $0 + sizes[Int($1)] }
-            out.append(Row(id: -(parent + 2), name: "", physical: bytes, logical: bytes,
-                           isDirectory: false, category: .other,
-                           fractionOfParent: Double(bytes) / Double(parentTotal),
-                           flags: [], modified: Date(timeIntervalSince1970: 0),
-                           depth: depth, hasChildren: false, isExpanded: false,
-                           hiddenSiblings: rest.count))
-        }
-    }
-
-    // MARK: - Treemap layout
-
-    func layoutKey(size: CGSize) -> String {
-        "\(visualization.rawValue)-\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)"
-    }
-
-    func cachedLayout(for size: CGSize) -> TreemapLayout? { layoutCache.get(layoutKey(size: size)) }
-
-    nonisolated static func compute(tree: LiveTree, root: Int32, size: CGSize,
-                                    physical: Bool, filter: String, key: String,
-                                    rootNames names: [String: String] = [:]) -> TreemapLayout {
-        let span = Telemetry.begin("layout")
-        let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
-        let needle = filter.lowercased()
-        return tree.withStore { store in
-            let laid = Treemap.layout(
-                store: store, root: root, in: rect, usePhysicalSize: physical,
-                includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
-            var map: [Int32: CellInfo] = [:]
-            map.reserveCapacity(laid.count)
-            for c in laid where c.node >= 0 {
-                map[c.node] = cellInfo(store, c.node, physical: physical, rootNames: names)
-            }
-            span.end(["cells": .int(Int64(laid.count)),
-                      "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
-                      "view": .text("treemap")], minMilliseconds: 40)
-            return TreemapLayout(key: key, cells: laid, info: map)
-        }
-    }
-
-    nonisolated static func cellInfo(_ store: NodeStore, _ node: Int32, physical: Bool,
-                                    rootNames: [String: String] = [:]) -> CellInfo {
-        let name = store.name(node)
-        let isDir = store.isDirectory(node)
-        let age = AgeBucket.of(secondsAgo: Date().timeIntervalSince1970
-                               - Double(store.mtime[Int(node)]))
-        return CellInfo(name: rootNames[name] ?? abbreviatedName(name),
-                        category: Categorizer.of(name: name, isDirectory: isDir),
-                        bytes: physical ? store.totalPhysical[Int(node)] : store.totalLogical[Int(node)],
-                        isDirectory: isDir,
-                        flags: store.flagSet(node),
-                        age: age)
-    }
-
-    nonisolated static func computeSunburst(tree: LiveTree, root: Int32, size: CGSize,
-                                            physical: Bool, filter: String, key: String,
-                                            rootNames names: [String: String] = [:]) -> SunburstLayout {
-        let span = Telemetry.begin("layout")
-        let rect = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
-        let needle = filter.lowercased()
-        return tree.withStore { store in
-            let segments = Sunburst.layout(
-                store: store, root: root, in: rect, usePhysicalSize: physical,
-                includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
-            var map: [Int32: CellInfo] = [:]
-            map.reserveCapacity(segments.count)
-            for segment in segments where segment.node >= 0 {
-                map[segment.node] = cellInfo(store, segment.node, physical: physical, rootNames: names)
-            }
-            span.end(["cells": .int(Int64(segments.count)),
-                      "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
-                      "view": .text("sunburst")], minMilliseconds: 40)
-            return SunburstLayout(key: key, segments: segments, info: map)
-        }
-    }
-
-    nonisolated static func computeIcicle(tree: LiveTree, root: Int32, size: CGSize,
-                                          physical: Bool, filter: String, key: String,
-                                          rootNames names: [String: String] = [:]) -> IcicleLayout {
-        let span = Telemetry.begin("layout")
-        let rect = CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 4)
-        let needle = filter.lowercased()
-        return tree.withStore { store in
-            let cells = Icicle.layout(
-                store: store, root: root, in: rect, usePhysicalSize: physical,
-                includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
-            var map: [Int32: CellInfo] = [:]
-            map.reserveCapacity(cells.count)
-            for cell in cells where cell.node >= 0 {
-                map[cell.node] = cellInfo(store, cell.node, physical: physical, rootNames: names)
-            }
-            span.end(["cells": .int(Int64(cells.count)),
-                      "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
-                      "view": .text("icicle")], minMilliseconds: 40)
-            return IcicleLayout(key: key, cells: cells, info: map)
-        }
-    }
-
-    func cachedIcicle(for size: CGSize) -> IcicleLayout? { icicleCache.get(layoutKey(size: size)) }
-
-    @discardableResult
-    func computeIcicleSync(size: CGSize) -> IcicleLayout? {
-        guard let tree, size.width > 16, size.height > 16 else { return nil }
-        let layout = Self.computeIcicle(tree: tree, root: currentDirectory, size: size,
-                                        physical: usePhysicalSize, filter: filterText,
-                                        key: layoutKey(size: size), rootNames: rootNames)
-        icicleCache.set(layout)
-        return layout
-    }
-
-    func cachedSunburst(for size: CGSize) -> SunburstLayout? { sunburstCache.get(layoutKey(size: size)) }
-
-    @discardableResult
-    func computeSunburstSync(size: CGSize) -> SunburstLayout? {
-        guard let tree, size.width > 16, size.height > 16 else { return nil }
-        let layout = Self.computeSunburst(tree: tree, root: currentDirectory, size: size,
-                                          physical: usePhysicalSize, filter: filterText,
-                                          key: layoutKey(size: size), rootNames: rootNames)
-        sunburstCache.set(layout)
-        return layout
-    }
-
-    @discardableResult
-    func computeLayoutSync(size: CGSize) -> TreemapLayout? {
-        guard let tree, size.width > 8, size.height > 8 else { return nil }
-        let l = Self.compute(tree: tree, root: currentDirectory, size: size,
-                             physical: usePhysicalSize, filter: filterText,
-                             key: layoutKey(size: size), rootNames: rootNames)
-        layoutCache.set(l)
-        return l
-    }
-
-    func relayout(size: CGSize) async {
-        guard let tree, size.width > 8, size.height > 8 else { return }
-        let key = layoutKey(size: size)
-        let root = currentDirectory
-        let physical = usePhysicalSize
-        let filter = filterText
-        let names = rootNames
-        switch visualization {
-        case .treemap:
-            if layoutCache.get(key) != nil { return }
-            let layout = await Task.detached(priority: .userInitiated) {
-                Self.compute(tree: tree, root: root, size: size, physical: physical,
-                             filter: filter, key: key, rootNames: names)
-            }.value
-            guard !Task.isCancelled else { return }
-            layoutCache.set(layout)
-        case .sunburst:
-            if sunburstCache.get(key) != nil { return }
-            let layout = await Task.detached(priority: .userInitiated) {
-                Self.computeSunburst(tree: tree, root: root, size: size, physical: physical,
-                                     filter: filter, key: key, rootNames: names)
-            }.value
-            guard !Task.isCancelled else { return }
-            sunburstCache.set(layout)
-        case .icicle:
-            if icicleCache.get(key) != nil { return }
-            let layout = await Task.detached(priority: .userInitiated) {
-                Self.computeIcicle(tree: tree, root: root, size: size, physical: physical,
-                                   filter: filter, key: key, rootNames: names)
-            }.value
-            guard !Task.isCancelled else { return }
-            icicleCache.set(layout)
-        }
-        layoutToken &+= 1
     }
 
     /// Whole-subtree reports. The walk lives in the reports module; what stays
@@ -1667,28 +1334,10 @@ final class AppModel: ObservableObject {
     func focus(_ item: FoundItem) { focus(node: item.node) }
 
     func focus(node: Int32) {
-        guard let tree else { return }
-        let parent = tree.withStore { store -> Int32 in
-            guard node > 0, node < Int32(store.count) else { return 0 }
-            return store.parent[Int(node)]
-        }
         activeTab = .map
-        // A filter still in force would hide the very row being focused.
-        if !filterText.isEmpty { filterText = "" }
-        expanded.removeAll()
-        if parent >= 0, parent != currentDirectory {
-            backStack.append(currentDirectory)
-            forwardStack.removeAll()
-            moveTo(parent)
-        } else {
-            rebuild()
-        }
-        select(node)
-        scrollTo = node
+        map.reveal(node)
     }
 
-    /// The row the list should bring into view. Cleared once it has.
-    @Published var scrollTo: Int32?
 
     // MARK: - Handing the result to another program
 
