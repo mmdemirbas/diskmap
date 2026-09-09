@@ -22,7 +22,7 @@ nine days of work sat in `build/` unseen.
 | 2a | *Yer açma* as a screen, not a cramped popup | done | tab, `79c197d` |
 | 2b | One-click compare of the folders it identifies | done | Copies view, pairs only |
 | 2c | Opening a module must not close the previous one | done | tabs, `79c197d` |
-| 2d | All views update in realtime | partial | open tools refresh on tree change (`9ab59f0`); a module that is closed does not |
+| 2d | All views update in realtime | partial | Open tools refresh on tree change (`9ab59f0`), and a closed one now fetches when it is opened (`f032f71`). Find results and the change history still do not follow the tree. |
 | 3 | Every modification shows a report first, checked again just before acting | done | `ec6252d`; drift check was already there |
 | 4 | Icons that mean what they do | done | `e40f5b9` (start-over was a zoom glyph) |
 | 5 | Confirm before a long operation that loses state | done | rescan confirmation, `e40f5b9` |
