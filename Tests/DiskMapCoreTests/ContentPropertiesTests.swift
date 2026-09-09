@@ -116,6 +116,12 @@ final class ContentCacheTests: XCTestCase {
         XCTAssertFalse(knownButPlain.isEmpty)
     }
 
+    /// A query with nowhere to look would ask about the whole machine — every
+    /// volume, every home folder — and answer about files nobody scanned.
+    func testAQueryWithNoScopeAsksNothing() {
+        XCTAssertTrue(SpotlightQuery.paths(matching: "kMDItemPixelWidth > 0", under: []).isEmpty)
+    }
+
     /// The real index, on whatever machine this runs on. Not an assertion about
     /// what it knows — that is the machine's business — only that asking it
     /// costs what the design assumed. Skipped rather than failed where the

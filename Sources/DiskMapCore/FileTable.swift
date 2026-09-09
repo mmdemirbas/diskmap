@@ -138,8 +138,18 @@ public enum FileTable {
         // actually needs it for all ten million.
         let needsCategory = !filter.categories.isEmpty || sort == .kind
 
+        // Two ways to keep the best rows, and the crossover is not subtle.
+        //
+        // For a page, an insertion-sorted array of `limit` entries is right:
+        // almost everything fails the threshold test outright and never gets
+        // inserted. For a very large limit it is quadratic — every entry is
+        // kept, and each one scans backwards through what is already there.
+        // Asking for a hundred thousand rows of a three-million-file tree took
+        // thirty-five seconds of that, on top of a twenty-three second scan.
+        // Past the crossover, collecting and sorting once is the cheaper shape.
+        let bounded = limit <= boundedSelection
         var kept: [Entry] = []
-        kept.reserveCapacity(limit + 1)
+        kept.reserveCapacity(bounded ? limit + 1 : 4096)
         var stack: [Int32] = [root]
         var total = 0
         var totalPhysical: Int64 = 0
@@ -208,6 +218,10 @@ public enum FileTable {
                     case .name:     key = namePrefix(names, offset, length)
                     }
                     let entry = Entry(key: key, bytes: physical, node: child)
+                    guard bounded else {
+                        kept.append(entry)
+                        continue
+                    }
                     guard kept.count < limit
                             || before(entry, kept[kept.count - 1], ascending) else { continue }
                     // From the back: an entry that only just beat the worst one
@@ -219,6 +233,11 @@ public enum FileTable {
                     if kept.count > limit { kept.removeLast() }
                 }
             }
+            if !bounded {
+                kept.sort { before($0, $1, ascending) }
+                if kept.count > limit { kept.removeLast(kept.count - limit) }
+            }
+
             // Built here rather than after the walk so a row's kind is the
             // same function that the kind filter just ran. The two spellings
             // of the classifier do not agree on every folder name, and a row
@@ -249,10 +268,19 @@ public enum FileTable {
         // Names longer than the eight bytes the key holds are only ordered
         // correctly once there are real strings to compare, and there are at
         // most `limit` of those.
+        //
+        // The comparison is the key's own order carried past eight bytes, and
+        // deliberately not the Finder's numeric-aware one. A page is a slice
+        // chosen by the key, so ordering the slice by a *different* rule means
+        // the rows on screen are not the first N in the order they are shown
+        // in: with names like `f0` to `f299`, the numeric rule displayed
+        // `f0…f39` out of a set that had been chosen as `f0, f1, f10, f100…`.
+        // Being able to trust the top of a sorted list is worth more than
+        // `file2` sitting before `file10`.
         if sort == .name {
             page.rows.sort {
-                let order = $0.name.localizedStandardCompare($1.name)
-                if order != .orderedSame { return ascending == (order == .orderedAscending) }
+                let a = Array($0.name.lowercased().utf8), b = Array($1.name.lowercased().utf8)
+                if a != b { return ascending == a.lexicographicallyPrecedes(b) }
                 return $0.physical > $1.physical
             }
         }
@@ -260,6 +288,10 @@ public enum FileTable {
                   "returned": .int(Int64(page.rows.count))], minMilliseconds: 100)
         return page
     }
+
+    /// Above this, a page is not a page. Chosen well past any list a person
+    /// scrolls and well below where the insertion cost starts to show.
+    static let boundedSelection = 4096
 
     private struct Entry {
         var key: UInt64

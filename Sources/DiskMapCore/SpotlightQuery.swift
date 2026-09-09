@@ -61,15 +61,16 @@ public enum SpotlightQuery {
     /// the intersection only needs as many as the table will show.
     public static func paths(matching predicate: String, under roots: [String],
                              limit: Int = 50_000) -> [String] {
-        guard !predicate.isEmpty, limit > 0 else { return [] }
+        // No roots means no scope, and no scope means the whole index — every
+        // volume, every home folder, answers about files nobody scanned. The
+        // question is always "what is inside the tree on screen".
+        guard !predicate.isEmpty, limit > 0, !roots.isEmpty else { return [] }
         let span = Telemetry.begin("spotlight.query")
         guard let query = MDQueryCreate(nil, predicate as CFString, nil, nil) else {
             span.end(["matches": .int(0)])
             return []
         }
-        if !roots.isEmpty {
-            MDQuerySetSearchScope(query, roots as CFArray, 0)
-        }
+        MDQuerySetSearchScope(query, roots as CFArray, 0)
         // Synchronous: gather everything, then stop. Without this the query
         // stays live and keeps a callback alive for a screen that has moved on.
         guard MDQueryExecute(query, CFOptionFlags(kMDQuerySynchronous.rawValue)) else {

@@ -101,14 +101,21 @@ final class FileTableTests: XCTestCase {
                        ["aaaaaaaa-aaa.txt", "aaaaaaaa-zzz.txt"])
     }
 
-    /// Sorting by name is how a person reads a list, so `file2` belongs before
-    /// `file10` the way the Finder puts it.
-    func testNamesSortTheWayTheFinderSortsThem() throws {
+    /// Names sort by their characters rather than the Finder's numeric-aware
+    /// way, so `file10` comes before `file2`.
+    ///
+    /// This is a trade and the other side of it is worse. A page is the first N
+    /// rows chosen by a key built from the name; ordering the page by a
+    /// different rule afterwards means the rows shown are not the first N *in
+    /// the order they are shown in*. With three hundred files called `f0` to
+    /// `f299`, the numeric rule displayed `f0…f39` out of a set that had been
+    /// chosen as `f0, f1, f10, f100…` — a top-of-list nobody could trust.
+    func testNamesSortInTheOrderThePageWasChosenWith() throws {
         try write("file10.txt", 1_000)
         try write("file2.txt", 1_000)
         scan()
 
-        XCTAssertEqual(names(page(sort: .name, ascending: true)), ["file2.txt", "file10.txt"])
+        XCTAssertEqual(names(page(sort: .name, ascending: true)), ["file10.txt", "file2.txt"])
     }
 
     func testNewestFirstWhenSortingByDate() throws {
@@ -134,6 +141,30 @@ final class FileTableTests: XCTestCase {
         let rows = page(sort: .kind, ascending: true, limit: 2).rows
         XCTAssertEqual(rows.map(\.name), ["huge.mp4", "middling.mp4"],
                        "the cap kept an arbitrary member of a kind instead of the biggest")
+    }
+
+    /// Keeping the best thousand rows and keeping the best million are
+    /// different algorithms, and they have to agree about what "best" means.
+    ///
+    /// The insertion-sorted array that answers for a page is quadratic when the
+    /// page is enormous — a hundred thousand rows of a three-million-file tree
+    /// cost thirty-five seconds of it — so past a crossover the walk collects
+    /// everything and sorts once instead. Two paths, one order.
+    func testBothWaysOfKeepingTheBestRowsAgree() throws {
+        for i in 0..<300 { try write("f\(i).bin", (i % 40) * 1_000 + 1) }
+        scan()
+
+        for sort in FileSort.allCases {
+            for ascending in [true, false] {
+                let paged = FileTable.page(store: store, sort: sort,
+                                           ascending: ascending, limit: 40)
+                let whole = FileTable.page(store: store, sort: sort, ascending: ascending,
+                                           limit: FileTable.boundedSelection * 2)
+                XCTAssertEqual(paged.rows.map(\.node), Array(whole.rows.prefix(40).map(\.node)),
+                               "\(sort.rawValue) ascending=\(ascending)")
+                XCTAssertEqual(paged.total, whole.total)
+            }
+        }
     }
 
     // MARK: - What the footer may claim
