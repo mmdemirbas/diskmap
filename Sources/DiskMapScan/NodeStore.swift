@@ -281,27 +281,45 @@ public final class NodeStore {
     }
 
     /// Rebuilds an absolute path by walking to the root. Cheap: depth is ~10-20.
-    public func path(_ id: Int32) -> String {
-        var parts: [String] = []
+    ///
+    /// Bytes, not text. A name is whatever the volume allowed, and turning one
+    /// that is not valid UTF-8 into a `String` puts U+FFFD where the awkward
+    /// bytes were — after which the path names nothing and every action on it
+    /// fails, or worse, matches something else. `path(_:)` below is this, shown
+    /// to a person.
+    public func pathBytes(_ id: Int32) -> RawPath {
+        var spans: [(offset: Int, length: Int)] = []
         var cur = id
         while cur > 0 {
-            parts.append(name(cur))
+            spans.append(nameSpan(cur))
             cur = parent[Int(cur)]
         }
-        guard !parts.isEmpty else { return roots.count == 1 ? roots[0] : "" }
-        parts.reverse()
-        // In a multi-root tree the first component is already absolute.
-        if let head = parts.first, head.hasPrefix("/") {
-            let rest = parts.dropFirst()
-            let joined = rest.isEmpty ? head : (head == "/" ? "" : head) + "/" + rest.joined(separator: "/")
-            return Firmlinks.displayPath(joined)
+        guard !spans.isEmpty else { return RawPath(roots.count == 1 ? roots[0] : "") }
+        spans.reverse()
+
+        return nameBytes.withUnsafeBufferPointer { blob -> RawPath in
+            guard let base = blob.baseAddress else { return RawPath("") }
+            func component(_ span: (offset: Int, length: Int)) -> UnsafeBufferPointer<UInt8> {
+                UnsafeBufferPointer(start: base + span.offset, count: span.length)
+            }
+            // In a multi-root tree the first component is already absolute.
+            let head = spans[0]
+            var path = head.length > 0 && base[head.offset] == RawPath.separator
+                ? RawPath(bytes: Array(component(head)))
+                : RawPath(roots.first ?? "/").appending(component(head))
+            for span in spans.dropFirst() { path = path.appending(component(span)) }
+            return Firmlinks.displayPath(path)
         }
-        let base = roots.first ?? "/"
-        let joined = (base == "/" ? "" : base) + "/" + parts.joined(separator: "/")
-        return Firmlinks.displayPath(joined)
     }
 
-    public func url(_ id: Int32) -> URL { URL(fileURLWithPath: path(id)) }
+    public func path(_ id: Int32) -> String { pathBytes(id).display }
+
+    /// The URL to act on. Built from the bytes rather than from `path(_:)`,
+    /// because `URL(fileURLWithPath:)` takes a `String` and would lose exactly
+    /// what `pathBytes` went to the trouble of keeping.
+    public func url(_ id: Int32) -> URL {
+        pathBytes(id).url(isDirectory: isDirectory(id))
+    }
 
     public func childNamed(_ parentID: Int32, _ target: String) -> Int32? {
         for c in children(parentID) where name(c) == target { return c }

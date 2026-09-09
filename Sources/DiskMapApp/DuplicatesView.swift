@@ -239,7 +239,7 @@ struct DuplicatesView: View {
         .contentShape(Rectangle())
         .onTapGesture { model.select(copy.id) }
         .onTapGesture(count: 2) { model.reveal(copy.id) }
-        .draggable(URL(fileURLWithPath: copy.path))
+        .draggable(model.url(of: copy.id) ?? URL(fileURLWithPath: copy.path))
         .contextMenu {
             Button(loc[.revealInFinder]) { model.reveal(copy.id) }
             Button(loc[.copyPath]) { model.copyPath(copy.id) }

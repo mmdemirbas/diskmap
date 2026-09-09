@@ -1699,7 +1699,7 @@ final class AppModel: ObservableObject {
             return
         }
         cancelBulkTrash()
-        performTrash(plan.items.map { (URL(fileURLWithPath: $0.path), $0.node, $0.bytes) },
+        performTrash(plan.items.map { ($0.node, $0.bytes) },
                      label: L10n.shared.freedBytes(shortBytes(plan.bytes)))
     }
 
@@ -1872,9 +1872,20 @@ final class AppModel: ObservableObject {
     // MARK: - Actions
 
     func reveal(_ node: Int32) {
-        guard let tree else { return }
-        let path = tree.withStore { $0.path(node) }
-        FileActions.revealInFinder([URL(fileURLWithPath: path)])
+        guard let url = url(of: node) else { return }
+        FileActions.revealInFinder([url])
+    }
+
+    /// What a node is, as something the rest of the system can act on.
+    ///
+    /// Built from the stored name bytes rather than from `path`, which is text
+    /// and cannot carry a name the volume allowed and Unicode does not.
+    func url(of node: Int32) -> URL? {
+        guard let tree else { return nil }
+        return tree.withStore { store in
+            guard node >= 0, node < Int32(store.count) else { return nil }
+            return store.url(node)
+        }
     }
 
     func copyPath(_ node: Int32) {
@@ -1950,16 +1961,23 @@ final class AppModel: ObservableObject {
 
     private func performTrash(_ node: Int32) {
         guard let item = planOne(node) else { return }
-        performTrash([(url: URL(fileURLWithPath: item.path), node: item.node, bytes: item.bytes)],
+        performTrash([(node: item.node, bytes: item.bytes)],
                      label: L10n.shared.freedBytes(shortBytes(item.bytes)))
     }
 
     /// The one place anything is moved to the Trash. Everything above it
     /// decides *what*; this decides nothing.
-    private func performTrash(_ targets: [(url: URL, node: Int32, bytes: Int64)], label: String) {
+    private func performTrash(_ targets: [(node: Int32, bytes: Int64)], label: String) {
         guard let tree, !targets.isEmpty else { return }
         // Each target carries what the tree last saw of it, so the one place
         // anything is moved to the Trash can check that it is still that thing.
+        //
+        // The URL is built here, from the same store as the description, rather
+        // than carried in from whoever planned this. A node id never becomes a
+        // different file — a live update marks the old one removed and appends
+        // a new one — so the two cannot disagree, and a path that made the
+        // journey through a `String` cannot arrive with U+FFFD in it and name
+        // something else.
         let described: [FileActions.Target] = tree.withStore { store in
             // A node the tree does not have is a node nothing can vouch for,
             // so it is dropped rather than trashed on no description at all.
@@ -1967,7 +1985,7 @@ final class AppModel: ObservableObject {
                 guard t.node > 0, t.node < Int32(store.count) else { return nil }
                 let folder = store.isDirectory(t.node)
                 return FileActions.Target(
-                    url: t.url, node: t.node, bytes: t.bytes, isFolder: folder,
+                    url: store.url(t.node), node: t.node, bytes: t.bytes, isFolder: folder,
                     length: folder ? -1 : store.totalLogical[Int(t.node)],
                     modified: store.mtime[Int(t.node)])
             }

@@ -67,12 +67,55 @@ The standing rule for this project is that nothing may be lost by mistake.
 | **Acting on a stale list** | Every modification shows a report first and is checked again against the disk immediately before acting (**src**, `TrashDriftTests`) |
 | **A comparison built from stale data** | A comparison may be answered from the scan only while the tree is being watched, and never when the scan did not walk all of it. See `docs/scanning-speed.md` (**run**) |
 
+## Names that are not text
+
+A filename is bytes: any bytes except a slash and a zero. On APFS they also
+happen to be valid UTF-8, because APFS refuses anything else at creation —
+`mkdir` with a 0xFF in the name returns EILSEQ (**run**). The volumes where
+that does not hold are the ones people keep backups on: a share served by Samba
+or NFS from Linux, an ext4 volume through FUSE, an archive unpacked by
+something that did not care.
+
+Turning such a name into a `String` puts U+FFFD where the awkward bytes were,
+and the damage cannot be undone: a path rebuilt from it names nothing. The walk
+would fail to open that folder and count it and everything beneath it as
+unreadable — a whole subtree missing from the total, under a permissions
+warning, on a tool whose one job is to add up correctly.
+
+So paths are carried as bytes (`RawPath`) from the directory listing to the
+`open`, and turned into text only to be shown to somebody:
+
+- The **walk** builds each child path from the listing's bytes (**src**).
+- **Paths out of the store** are rebuilt from the stored name bytes, which is
+  what the store always held. `path(_:)` is that shown to a person; `url(_:)`
+  is that made actionable, built with
+  `URL(fileURLWithFileSystemRepresentation:)` rather than
+  `URL(fileURLWithPath:)`, which takes a `String` and would lose it again.
+- **Every action** — reveal, Trash, drag — goes from a node id to a URL through
+  that one funnel, at the moment of acting, rather than carrying a path
+  through a `String` in a plan (**run**, `RawPathTests`).
+
+The name cannot be created on this machine, so the tests put the bytes into the
+store directly, which is what a share serving them would have handed the walk.
+One test asserts the volume still refuses, so that if it ever stops the gap in
+coverage is announced rather than silent.
+
+### Where this stops
+
+**Live updates.** FSEvents hands paths over as CFStrings, so a directory with
+such a name would be reported under a mangled path. The consequence is bounded:
+the lookup fails, the relist returns false, and that directory is not refreshed.
+It fails closed — nothing is corrupted, nothing is acted on, and the totals from
+the scan itself stay right.
+
+**The folder comparison** keeps relative paths as text. Its *verdict* is
+unaffected: names are matched on raw bytes, so two such files still compare as
+the same file. What degrades is per-item: the row shows U+FFFD, and Reveal or a
+sync action on that one item fails rather than acting.
+
 ## Known and accepted
 
 - **Directory inodes** are not counted as bytes of their own. `du` does count
   them; the difference is a few kilobytes per thousand directories.
 - **A network or FUSE volume** may report attributes this walk trusts —
   `ATTR_FILE_ALLOCSIZE` in particular — more loosely than a local one.
-- **A name that is not valid UTF-8** would break the path rebuilt for opening a
-  subdirectory. APFS refuses such a name at creation, checked by trying it; a
-  network share serving one is the case this does not cover (**run**).

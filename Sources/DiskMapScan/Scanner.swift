@@ -42,6 +42,11 @@ public struct ScanOptions: Sendable {
     /// and can hang for the network timeout. The firmlinked paths are the same
     /// bytes as the Data volume reached by another name, so walking them from
     /// `/` double-counts most of the disk.
+    /// The same list as bytes, which is what the walk compares against.
+    public func excludedPaths(for root: String) -> Set<RawPath> {
+        Set(exclusions(for: root).map(RawPath.init))
+    }
+
     public func exclusions(for root: String) -> Set<String> {
         var out: Set<String> = ["/dev", "/net", "/home", "/.vol", "/.fseventsd", "/.DocumentRevisions-V100"]
         if root == "/" {
@@ -154,7 +159,7 @@ final class InodeSet: @unchecked Sendable {
 }
 
 public final class DiskScanner {
-    private struct Task { let path: String; let node: Int32 }
+    private struct Task { let path: RawPath; let node: Int32 }
 
     private struct Pending {
         var nameOffset: Int; var nameLength: Int
@@ -213,20 +218,26 @@ public final class DiskScanner {
     ///
     /// Walking down one component at a time has no limit, and costs a syscall
     /// per level only where the ordinary open has already failed.
-    static func openDirectory(_ path: String) -> Int32 {
-        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    /// Takes the path as bytes rather than text, so a name the volume allows
+    /// and Unicode does not still names the folder it names.
+    static func openDirectory(_ path: RawPath) -> Int32 {
+        let fd = path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
         if fd >= 0 || errno != ENAMETOOLONG { return fd }
 
         var current = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard current >= 0 else { return -1 }
-        let parts = path.split(separator: "/")
+        let parts = path.components
         for (index, component) in parts.enumerated() {
             // `open` only refuses to follow the *last* component, so the walk
             // has to match that or it would reject paths the old call accepted.
             let last = index == parts.count - 1
-            let next = String(component).withCString {
-                openat(current, $0, O_RDONLY | O_DIRECTORY | O_CLOEXEC
-                                    | (last ? O_NOFOLLOW : 0))
+            var terminated = Array(component)
+            terminated.append(0)
+            let next = terminated.withUnsafeBufferPointer { raw in
+                raw.baseAddress!.withMemoryRebound(to: CChar.self, capacity: raw.count) {
+                    openat(current, $0, O_RDONLY | O_DIRECTORY | O_CLOEXEC
+                                        | (last ? O_NOFOLLOW : 0))
+                }
             }
             close(current)
             guard next >= 0 else { return -1 }
@@ -366,7 +377,7 @@ public final class DiskScanner {
                          carry: Carry,
                          progress: (@Sendable (ScanProgress) -> Void)?) -> ScanStats {
         var stats = ScanStats()
-        let exclusions = options.exclusions(for: root)
+        let exclusions = options.excludedPaths(for: root)
 
         var rootStat = stat()
         guard lstat(root, &rootStat) == 0 else { return stats }
@@ -374,10 +385,11 @@ public final class DiskScanner {
         // st_dev cannot separate APFS volumes inside one container, so mount
         // points are matched by path instead. The root itself is normally a
         // mount point and must not be skipped.
-        var crossings = options.followMountPoints ? [] : MountTable.mountPoints()
-        crossings.remove(root)
+        var crossings: Set<RawPath> = options.followMountPoints
+            ? [] : Set(MountTable.mountPoints().map(RawPath.init))
+        crossings.remove(RawPath(root))
 
-        let queue = Queue(seed: Task(path: root, node: hostNode))
+        let queue = Queue(seed: Task(path: RawPath(root), node: hostNode))
         let lock = NSLock()
         var currentPath = root
 
@@ -415,7 +427,9 @@ public final class DiskScanner {
                         lock.lock()
                         store.flags[Int(task.node)] |= NodeFlags.unreadable.rawValue
                         stats.unreadableDirectories += 1
-                        if stats.unreadableSamples.count < 25 { stats.unreadableSamples.append(task.path) }
+                        if stats.unreadableSamples.count < 25 {
+                            stats.unreadableSamples.append(task.path.display)
+                        }
                         lock.unlock()
                         continue
                     }
@@ -506,21 +520,20 @@ public final class DiskScanner {
                     }
                     store.firstChild[Int(task.node)] = base
                     store.childCount[Int(task.node)] = Int32(pending.count)
-                    currentPath = task.path
+                    currentPath = task.path.display
                     lock.unlock()
 
-                    // Rebuilding the child path as a String would mangle a name
-                    // that is not valid UTF-8, and the open would then fail on a
-                    // folder that is perfectly readable. It cannot happen: APFS
-                    // refuses such a name at creation with EILSEQ, checked by
-                    // trying it. A network share serving one is the case this
-                    // does not cover.
-                    let prefix = task.path == "/" ? "" : task.path
+                    // The child path is built from the bytes the listing gave,
+                    // never from text. A name that is not valid UTF-8 — which a
+                    // Samba or NFS share from Linux will happily serve, and
+                    // which APFS refuses at creation — would otherwise come back
+                    // with U+FFFD where the awkward bytes were, name nothing,
+                    // fail to open, and take its whole subtree out of the total
+                    // under a permissions warning.
                     for (i, p) in pending.enumerated()
                     where p.flags.contains(.directory) && !p.flags.contains(.symlink) {
-                        let name = String(decoding: nameBuf[p.nameOffset..<(p.nameOffset + p.nameLength)],
-                                          as: UTF8.self)
-                        let childPath = prefix + "/" + name
+                        let childPath = task.path.appending(
+                            nameBuf[p.nameOffset..<(p.nameOffset + p.nameLength)])
                         if exclusions.contains(childPath) {
                             lock.lock()
                             store.flags[Int(base) + i] |= NodeFlags.excluded.rawValue

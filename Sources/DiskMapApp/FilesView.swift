@@ -288,7 +288,7 @@ struct FilesView: View {
         // A table of every file that cannot be dragged into another window is
         // a table you have to leave to use. What the drop does is the other
         // application's business; nothing here moves or deletes anything.
-        .draggable(URL(fileURLWithPath: row.path))
+        .draggable(model.url(of: row.node) ?? URL(fileURLWithPath: row.path))
         .contextMenu { menu(row) }
     }
 
