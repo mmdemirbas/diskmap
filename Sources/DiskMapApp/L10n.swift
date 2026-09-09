@@ -214,7 +214,7 @@ final class L10n: ObservableObject {
     func confirmTrashBody(_ items: Int, _ size: String) -> String {
         active == .tr
             ? "Bu klasörde \(fmt(items)) öğe var, toplam \(size). Çöp Kutusu'ndan ya da Geri Al ile döndürebilirsiniz."
-            : "This folder holds \(fmt(items)) items totalling \(size). You can put it back from the Trash or with Undo."
+            : "This folder holds \(count(items, "item", "items")) totalling \(size). You can put it back from the Trash or with Undo."
     }
     /// What the index knows about a file, on one line.
     ///

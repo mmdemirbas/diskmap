@@ -428,6 +428,10 @@ final class AppModel: ObservableObject {
 
     func closePane(_ kind: PaneKind) {
         map.dock.remove(kind)
+        // Closing one pane brings another forward, and the one that comes
+        // forward may need a report that has never been asked for — closing
+        // Contents can leave Copies in front of an empty list.
+        refreshSummary()
     }
 
     func movePane(_ kind: PaneKind, to leaf: UUID, edge: DockEdge?) {

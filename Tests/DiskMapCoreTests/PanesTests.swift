@@ -85,6 +85,24 @@ final class PanesTests: XCTestCase {
         XCTAssertTrue(model.duplicates.isEmpty)
     }
 
+    /// Closing a pane brings another forward, and that one may need a report
+    /// nobody has asked for yet.
+    func testClosingAPaneAsksForWhateverTheNextOneNeeds() throws {
+        let model = ready()
+        // Copies behind Contents in the same group: no copy pass yet.
+        model.showPane(.contents)
+        model.refreshSummarySync()
+        XCTAssertTrue(model.duplicates.isEmpty)
+
+        model.closePane(.contents)
+        model.refreshSummarySync()
+
+        XCTAssertEqual(model.panel, .largest, "something else should have come forward")
+        model.showPane(.copies)
+        model.refreshSummarySync()
+        XCTAssertFalse(model.duplicates.isEmpty)
+    }
+
     /// Each picture is cached under its own name, so one does not answer for
     /// another at the same size.
     func testEachPictureIsKeyedByItsOwnKind() throws {
