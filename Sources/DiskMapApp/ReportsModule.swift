@@ -39,6 +39,11 @@ final class ReportsModule: ObservableObject {
     /// rather than this object's.
     var onLoaded: (() -> Void)?
 
+    /// The walk in flight, so a tree that keeps moving cannot leave two of
+    /// them running at once. They would both finish, both write, and the one
+    /// that happened to be slower would win.
+    private var task: Task<Void, Never>?
+
     /// Walking eleven million nodes takes a moment, so it runs off the main
     /// thread and only when something is actually showing a report.
     func load(tree: LiveTree, root: Int32, physical: Bool,
@@ -51,13 +56,14 @@ final class ReportsModule: ObservableObject {
         // The tree's own counter, not the view's: retyping a filter must not
         // throw away a hash pass that is still valid.
         let revision = tree.changeCount
-        Task { [weak self] in
+        task?.cancel()
+        task = Task { [weak self] in
             let computed = await Task.detached(priority: .userInitiated) {
                 Self.report(tree: tree, root: root, physical: physical,
                             includeDuplicates: includeDuplicates,
                             cache: cache, revision: revision)
             }.value
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
             self.apply(computed)
         }
     }
@@ -90,6 +96,7 @@ final class ReportsModule: ObservableObject {
     /// "this would remove the last copy" guard no longer recognised the rows it
     /// was guarding.
     func clear() {
+        task?.cancel()
         cancelAllVerifications()
         summary = nil
         largeFiles = []

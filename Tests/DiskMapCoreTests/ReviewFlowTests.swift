@@ -71,6 +71,32 @@ final class ReviewFlowTests: XCTestCase {
         XCTAssertTrue(model.matchGroups.isEmpty)
     }
 
+    /// Trashing something has to reach every tool that is open, not the one
+    /// that happened to be in front.
+    ///
+    /// The refresh used to be conditional on the side panel showing a report,
+    /// which was the whole question while copies were one of that panel's four
+    /// views. Copies is a tab of its own now: with the panel on contents and
+    /// that tab open, a trashed file stayed listed in it — tickable, on the
+    /// screen whose rows lead back to the Trash.
+    func testTrashingSomethingRefreshesTheToolsThatAreOpen() throws {
+        try write("one/a.bin", 2_000_000)
+        try write("two/a.bin", 2_000_000)
+        let model = ready()
+        model.open(.duplicates)
+        model.refreshSummarySync()
+        model.panel = .contents
+        XCTAssertFalse(model.summarizing)
+
+        let victim = try node(model, "one/a.bin")
+        model.toggleChecked(victim)
+        model.requestBulkTrash()
+        model.confirmBulkTrash()
+
+        XCTAssertTrue(model.summarizing,
+                      "the copy report was left showing a file that has just been trashed")
+    }
+
     // MARK: - Selecting
 
     func testTickingSomethingPutsItInThePlan() throws {

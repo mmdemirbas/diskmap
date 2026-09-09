@@ -1108,6 +1108,7 @@ final class AppModel: ObservableObject {
         // Finder; the app just can no longer be the one to put them back,
         // because "back" was a place in a tree that no longer exists.
         undoStack = []
+        liveRefreshTask?.cancel()
         phase = .idle
         refreshVolume()
     }
@@ -1151,11 +1152,35 @@ final class AppModel: ObservableObject {
         guard windowIsVisible else { rebuildWhenVisible = true; return }
         refreshVolumeIfStale()
         rebuild()
-        // The flat table is a snapshot of the index, so something moved or
-        // trashed elsewhere leaves it showing a row that is no longer there.
-        // Only while it is open: the walk is a tenth of a second and nobody
-        // should pay for it to refresh a screen they cannot see.
+        scheduleLiveRefresh()
+    }
+
+    private var liveRefreshTask: Task<Void, Never>?
+
+    /// The tools that read the tree, brought up to date after it moved.
+    ///
+    /// The map rebuilds on every flush because that is cheap and it is what the
+    /// user is looking at. These are whole-tree walks — the copy pass is a
+    /// signature per folder — so they wait for the tree to stop moving first.
+    /// FSEvents arrives in bursts, and a build running in a watched folder
+    /// would otherwise start a walk, throw it away, and start another.
+    private func scheduleLiveRefresh() {
+        liveRefreshTask?.cancel()
+        liveRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
+            self?.refreshLiveViews()
+        }
+    }
+
+    /// Everything open that reads the tree. Each part decides for itself
+    /// whether it is wanted: nothing here recomputes for a screen nobody has
+    /// opened.
+    func refreshLiveViews() {
+        guard let tree else { return }
+        refreshSummary()
         if openTabs.contains(.files) { files.reload(in: tree) }
+        if openTabs.contains(.space) { reloadCleanup() }
     }
 
     /// Whole-subtree reports. The walk lives in the reports module; what stays
@@ -1294,8 +1319,12 @@ final class AppModel: ObservableObject {
     // MARK: - Where the easy space is
 
     func openCleanup() {
-        guard let tree else { return }
         open(.space)
+        reloadCleanup()
+    }
+
+    func reloadCleanup() {
+        guard let tree else { return }
         space.load(tree: tree, root: currentDirectory,
                    cache: signatureCache, excluding: excludedPaths)
     }
@@ -1713,7 +1742,12 @@ final class AppModel: ObservableObject {
             }
             refreshVolume()
             rebuild()
-            if panel != .contents { refreshSummary() }
+            // Was `if panel != .contents`, which is a narrower question than
+            // the one that matters: the copy report is a tab of its own now, so
+            // trashing something while it was open and the side panel happened
+            // to be showing contents left the trashed row sitting in it,
+            // tickable. `refreshLiveViews` asks each tool whether it is open.
+            refreshLiveViews()
         } catch {
             Telemetry.problem("trash", error.localizedDescription)
             toast = error.localizedDescription
@@ -1760,7 +1794,7 @@ final class AppModel: ObservableObject {
         }
         refreshVolume()
         rebuild()
-        if panel != .contents { refreshSummary() }
+        refreshLiveViews()
     }
 
 }

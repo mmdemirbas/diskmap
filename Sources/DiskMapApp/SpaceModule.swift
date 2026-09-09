@@ -23,18 +23,24 @@ final class SpaceModule: ObservableObject {
     /// Not published: read when a search starts, never while one is on screen.
     var thresholds = Cleanup.Thresholds()
 
+    /// The pass in flight. This one is the most expensive in the app — a
+    /// signature per folder, then the duplicate pass, then the rules — and a
+    /// tree that keeps moving must not start a second before the first is done.
+    private var task: Task<Void, Never>?
+
     /// Computed when asked for rather than kept up to date: it needs the match
     /// passes, and nobody wants to pay for those while browsing.
     func load(tree: LiveTree, root: Int32, cache: SignatureCache, excluding: [String]) {
         loading = true
         let revision = tree.changeCount
         let thresholds = self.thresholds
-        Task { [weak self] in
+        task?.cancel()
+        task = Task { [weak self] in
             let found = await Task.detached(priority: .userInitiated) {
                 Self.compute(tree: tree, root: root, cache: cache, revision: revision,
                              thresholds: thresholds, excluding: excluding)
             }.value
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
             self.suggestions = found
             self.loading = false
         }
@@ -54,6 +60,7 @@ final class SpaceModule: ObservableObject {
     /// Dropped when the tree underneath them is replaced: a suggestion names
     /// nodes, and nodes from a previous scan mean nothing to this one.
     func clear() {
+        task?.cancel()
         suggestions = []
         loading = false
     }
