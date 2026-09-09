@@ -32,7 +32,7 @@ final class ServicesProvider: NSObject {
                               error: AutoreleasingUnsafeMutablePointer<NSString>) {
         let folders = self.folders(on: pasteboard)
         guard let model, !folders.isEmpty else {
-            error.pointee = "Select one or two folders." as NSString
+            error.pointee = "Select one or two items." as NSString
             return
         }
         model.setCompareSide(.left, folders[0])
@@ -46,7 +46,7 @@ final class ServicesProvider: NSObject {
                               error: AutoreleasingUnsafeMutablePointer<NSString>) {
         let folders = self.folders(on: pasteboard)
         guard let model, !folders.isEmpty else {
-            error.pointee = "Select a folder." as NSString
+            error.pointee = "Select a file or a folder." as NSString
             return
         }
         model.clearTargets()
@@ -56,15 +56,25 @@ final class ServicesProvider: NSObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// The folders a selection means.
+    ///
+    /// A file is taken as the folder it is in, the same way a file dropped onto
+    /// a comparison well is. Both tools work on folders, and somebody who
+    /// right-clicked a file inside the folder they meant has made a near miss,
+    /// not a mistake worth refusing. Duplicates are dropped, so selecting three
+    /// files from one folder does not compare it with itself.
     private func folders(on pasteboard: NSPasteboard) -> [URL] {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         let urls = pasteboard.readObjects(forClasses: [NSURL.self],
                                           options: options) as? [URL] ?? []
-        return urls.filter { url in
+        var out: [URL] = []
+        for url in urls {
             var isDirectory: ObjCBool = false
-            let exists = FileManager.default.fileExists(atPath: url.path,
-                                                        isDirectory: &isDirectory)
-            return exists && isDirectory.boolValue
+            guard FileManager.default.fileExists(atPath: url.path,
+                                                 isDirectory: &isDirectory) else { continue }
+            let folder = isDirectory.boolValue ? url : url.deletingLastPathComponent()
+            if !out.contains(where: { $0.path == folder.path }) { out.append(folder) }
         }
+        return out
     }
 }

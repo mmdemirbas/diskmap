@@ -43,6 +43,14 @@ let package = Package(
         .executableTarget(name: "diskmap",
                           dependencies: ["DiskMapScan", "DiskMapReports"], swiftSettings: plain),
         .executableTarget(name: "dmbench", dependencies: ["DiskMapCore"], swiftSettings: plain),
+
+        // The Finder extension. An app extension is a bundle whose executable
+        // starts at NSExtensionMain rather than at main, which is what the
+        // linker flag says; the bundle around it is assembled by the build
+        // script, because a Swift package cannot produce an .appex itself.
+        .executableTarget(name: "DiskMapFinder", swiftSettings: plain,
+                          linkerSettings: [.unsafeFlags(["-Xlinker", "-e",
+                                                         "-Xlinker", "_NSExtensionMain"])]),
         .testTarget(name: "DiskMapCoreTests",
                     dependencies: ["DiskMapCore", "DiskMapApp", "DiskMapScan", "DiskMapMeta",
                                    "DiskMapActions", "DiskMapCompare", "DiskMapReports"],
