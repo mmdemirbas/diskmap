@@ -1802,6 +1802,20 @@ final class AppModel: ObservableObject {
     }
     func swapCompareSides() { compare.swapCompareSides() }
 
+    /// Something dropped onto a screen that shows a scan: measure it too.
+    ///
+    /// Three screens took this drop and each wrote out the two lines itself.
+    /// The chooser is deliberately not one of them — dropping onto a list of
+    /// things to scan means "add it to the list", and starting the scan there
+    /// would take the choice away.
+    @discardableResult
+    func measureAlso(_ urls: [URL]) -> Bool {
+        guard !urls.isEmpty else { return false }
+        addTargets(urls)
+        scan()
+        return true
+    }
+
     /// One side chosen and the other still empty, which is what picking two
     /// folders one right-click at a time looks like halfway through.
     var oneSideIsWaiting: Bool { compareLeft.isEmpty != compareRight.isEmpty }

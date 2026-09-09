@@ -34,6 +34,7 @@ struct DuplicatesView: View {
                 }
             }
         }
+        .dropDestination(for: URL.self) { urls, _ in model.measureAlso(urls) }
     }
 
     // MARK: - Chrome
@@ -238,6 +239,7 @@ struct DuplicatesView: View {
         .contentShape(Rectangle())
         .onTapGesture { model.select(copy.id) }
         .onTapGesture(count: 2) { model.reveal(copy.id) }
+        .draggable(URL(fileURLWithPath: copy.path))
         .contextMenu {
             Button(loc[.revealInFinder]) { model.reveal(copy.id) }
             Button(loc[.copyPath]) { model.copyPath(copy.id) }

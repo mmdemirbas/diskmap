@@ -22,7 +22,7 @@ nine days of work sat in `build/` unseen.
 | 2a | *Yer açma* as a screen, not a cramped popup | done | tab, `79c197d` |
 | 2b | One-click compare of the folders it identifies | done | Copies view, pairs only |
 | 2c | Opening a module must not close the previous one | done | tabs, `79c197d` |
-| 2d | All views update in realtime | partial | Open tools refresh on tree change (`9ab59f0`), and a closed one now fetches when it is opened (`f032f71`). Find results and the change history still do not follow the tree. |
+| 2d | All views update in realtime | done | Open tools refresh on tree change; a closed one fetches when opened; the search and the change history follow it too (`52e0c76`). |
 | 3 | Every modification shows a report first, checked again just before acting | done | `ec6252d`; drift check was already there |
 | 4 | Icons that mean what they do | done | `e40f5b9` (start-over was a zoom glyph) |
 | 5 | Confirm before a long operation that loses state | done | rescan confirmation, `e40f5b9` |
@@ -32,7 +32,7 @@ nine days of work sat in `build/` unseen.
 | 9 | More filters — type, date, size, **and content** | done | `7789ed6`, `ff59e97` |
 | 10 | Flat table of everything, all properties at once | done | `2b0f746`, `7789ed6` |
 | 11 | Added folders tickable like disks | done | `6949cfa` |
-| 12 | Drag and drop where it applies | partial | compare wells and scan targets; not the flat table or the copies list |
+| 12 | Drag and drop where it applies | done | Compare wells, scan targets, the map, the flat table and the copies list. Rows drag out as file URLs. |
 | 13 | A complete disk management tool | ongoing | the standing direction, not a task |
 | 14 | Headless / CLI | done | three commands, `7e43514` |
 
@@ -66,7 +66,7 @@ nine days of work sat in `build/` unseen.
 | # | Request | Status | Notes |
 |---|---|---|---|
 | 22 | Compare two items picked **one at a time**, from different folders: right-click one, right-click the other | done | `AppModel.offerToCompare`; the Finder item is offered on any selection now. |
-| 23 | Finish the partials: 2d and 12 | open | Find and the change history do not follow the tree; the flat table and the copies list take no drags. |
+| 23 | Finish the partials: 2d and 12 | done | `52e0c76`, and drops plus row drags on both lists. |
 | 24 | Share scan data between tools, so one folder is never walked twice | open | Comparing re-walks both sides from disk even when both are already in the scanned tree. |
 | 25 | Faster scanning, still precise and correct | open | Measure first. |
 | 26 | Audit the mistakes tools like this are known to make | open | Case-insensitive and normalisation-insensitive filesystems, mount crossing, firmlinks, symlink cycles, hard links, clones. |

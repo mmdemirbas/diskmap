@@ -49,6 +49,9 @@ struct FilesView: View {
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Same as the map: dropping a folder onto a screen that shows a scan
+        // means measure that too.
+        .dropDestination(for: URL.self) { urls, _ in model.measureAlso(urls) }
         .background(Color(nsColor: .windowBackgroundColor))
         .task { if model.files.page.rows.isEmpty { model.reloadFiles() } }
     }
@@ -282,6 +285,10 @@ struct FilesView: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.focus(node: row.node) }
         .onTapGesture { model.select(row.node) }
+        // A table of every file that cannot be dragged into another window is
+        // a table you have to leave to use. What the drop does is the other
+        // application's business; nothing here moves or deletes anything.
+        .draggable(URL(fileURLWithPath: row.path))
         .contextMenu { menu(row) }
     }
 

@@ -84,11 +84,7 @@ struct MapTool: View {
             Divider()
             statusBar
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            model.addTargets(urls)
-            model.scan()
-            return true
-        }
+        .dropDestination(for: URL.self) { urls, _ in model.measureAlso(urls) }
     }
 
     private var toolbar: some View {
