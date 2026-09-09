@@ -502,8 +502,8 @@ final class AppModel: ObservableObject {
 
     /// Open tools, left to right. The map is always the first and cannot be
     /// closed: it is the scan itself rather than a tool over it.
-    @Published private(set) var openTabs: [ModuleTab] = [.map]
-    @Published var activeTab: ModuleTab = .map
+    @Published private(set) var openTabs: [ModuleTab] = [.home, .map]
+    @Published var activeTab: ModuleTab = .home
 
     /// Opens a tool, or brings it forward if it is already open. Opening one no
     /// longer closes another, which is the entire reason these stopped being
@@ -1400,6 +1400,30 @@ final class AppModel: ObservableObject {
 
     private func recordDigest(of live: LiveTree) {
         changes.record(live)
+    }
+
+    /// Opens a tool the way that tool needs to be opened.
+    ///
+    /// Several of them have to be told to go and fetch something once they are
+    /// on screen — the cleanup search, the change history, the table's first
+    /// page. `open` is the tab bookkeeping alone, so anything that shows a
+    /// tool by name goes through here instead, and no screen opens empty
+    /// because its caller forgot the second line.
+    func openTool(_ tab: ModuleTab) {
+        switch tab {
+        case .space: openCleanup()
+        case .changes: openChanges()
+        case .search: openFind()
+        case .compare: openCompare()
+        case .files: openFiles()
+        case .home, .map, .duplicates: open(tab)
+        }
+    }
+
+    func openFiles() {
+        let wasClosed = !openTabs.contains(.files)
+        open(.files)
+        if wasClosed, let tree { files.reload(in: tree) }
     }
 
     func openChanges() {

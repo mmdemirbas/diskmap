@@ -53,7 +53,7 @@ nine days of work sat in `build/` unseen.
 |---|---|---|---|
 | 15 | **Multiple instances of each tool** — two maps on two disks, two duplicate scans, at once | open | The large one. Every module assumes a single scan session today. |
 | 16 | Free dockable layout by drag and drop | needs a decision | Panes inside the map already dock this way (`f0915c2`). If this means *tools* docking beside each other, it rides on 15. |
-| 17 | A home screen showing every tool equally, so tools are not discovered by browsing menus | open | |
+| 17 | A home screen showing every tool equally, so tools are not discovered by browsing menus | done | `HomeView`, plus a Tools menu. Two tools had no way in from anywhere. |
 | 18 | Capacity bars only in the disk map, not above every tool | done | `ContentView`, bars moved inside the map's ready state |
 | 19 | Finder drift as an exclamation beside "free", click for the breakdown; volumes never mixed | done | Per-volume reconciliation: `Aggregate.totals`, `AppModel.reconciliation(for:)` |
 | 20 | Duplicate detection must show progress, not a blind wait | done | The three passes report through: `MatchProgress`, `MatchProgressView` |

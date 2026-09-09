@@ -98,6 +98,7 @@ struct ContentView: View {
     /// two folders reads them directly, so it opens from a cold launch.
     @ViewBuilder private var openTool: some View {
         switch model.activeTab {
+        case .home:       HomeView(model: model)
         case .map:        mapTab
         case .files:      needsScan { FilesView(model: model) }
         case .space:      needsScan { CleanupView(model: model) }

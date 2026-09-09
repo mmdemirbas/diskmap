@@ -62,13 +62,16 @@ struct DiskMapApp: App {
                     FileActions.revealInFinder([Telemetry.logURL])
                 }
             }
+            // Every tool, in one place, in the order the home screen shows
+            // them. Three of them used to be here and the other four could not
+            // be opened from anywhere at all.
+            CommandMenu(loc[.tabHome]) {
+                ForEach(ModuleTab.allCases) { tab in
+                    Button(loc[tab.key]) { model.openTool(tab) }
+                        .keyboardShortcut(tab.shortcut, modifiers: [.command, .shift])
+                }
+            }
             CommandMenu(loc[.scanMenu]) {
-                Button(loc[.freeUpSpace]) { model.openCleanup() }
-                    .keyboardShortcut("k", modifiers: [.command, .shift])
-                Button(loc[.whatChanged]) { model.openChanges() }
-                    .keyboardShortcut("d", modifiers: [.command, .shift])
-                Button(loc[.compareTitle]) { model.openCompare() }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
                 Button(loc[.exclusions]) { model.showExclusions = true }
                 Divider()
                 Button(loc[.rescan]) { model.scan() }

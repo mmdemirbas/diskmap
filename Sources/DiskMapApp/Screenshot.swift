@@ -96,6 +96,9 @@ enum OffscreenRenderer {
         }
         // Which tool is in front. The tools became tabs, so checking one now
         // means rendering the whole window rather than a sheet on its own.
+        // Without a tab named, the map: the renderer existed before the home
+        // screen did, and every check written against it expects the map.
+        model.activeTab = .map
         if let t = env["DISKMAP_TAB"], let tab = ModuleTab(rawValue: t) {
             model.open(tab)
             if tab == .compare {

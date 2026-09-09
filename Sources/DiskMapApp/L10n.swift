@@ -496,6 +496,9 @@ final class L10n: ObservableObject {
         case inUseNotPurgeable, finderCountsAsFree
         case panelContents, panelLargest, panelTypes, panelDuplicates, computing, ofSubtree
         case phaseMeasuring, phaseSigning, phaseFolders, phaseFiles
+        case tabHome, homeTitle, homeSubtitle, homeOpen, homeNeedsAScan
+        case blurbMap, blurbFiles, blurbSpace, blurbDuplicates
+        case blurbCompare, blurbSearch, blurbChanges
         case duplicatesNote, duplicatesEmpty, reclaimable, sectionFolders, sectionFiles
         case matchExact, verify, verifyAgain, verifyIdentical, verifyStopped
         case ageWeek, ageMonth, ageHalfYear, ageYear, ageTwoYears, ageOlder, staleNote
@@ -809,6 +812,26 @@ final class L10n: ObservableObject {
         .verifyStopped: ("stopped", "durduruldu"),
         .reclaimable: ("could be freed", "boşaltılabilir"),
         .computing: ("Working…", "Hesaplanıyor…"),
+        .tabHome: ("Tools", "Araçlar"),
+        .homeTitle: ("Every tool in here", "Buradaki bütün araçlar"),
+        .homeSubtitle: ("Pick one. Opening a tool does not close another.",
+                        "Birini seçin. Bir aracı açmak diğerini kapatmaz."),
+        .homeOpen: ("open", "açık"),
+        .homeNeedsAScan: ("needs a scan", "tarama gerekir"),
+        .blurbMap: ("Where the space went, as a picture you can walk into",
+                    "Alanın nereye gittiği, içine girebileceğiniz bir resim olarak"),
+        .blurbFiles: ("Every file at once, in one sortable, filterable table",
+                      "Bütün dosyalar tek tabloda; sıralanır, süzülür"),
+        .blurbSpace: ("The easy wins, ranked by what deleting them would free",
+                      "Kolay kazançlar, silmenin boşaltacağı yere göre sıralı"),
+        .blurbDuplicates: ("Folders and files that hold the same thing twice",
+                           "Aynı şeyi iki kez tutan klasörler ve dosyalar"),
+        .blurbCompare: ("Two folders side by side, item by item",
+                        "İki klasör yan yana, madde madde"),
+        .blurbSearch: ("Find anything by name, ranked by how well it matches",
+                       "Adına göre arayın; eşleşme kalitesine göre sıralanır"),
+        .blurbChanges: ("What grew, shrank, appeared or went since the scan",
+                        "Taramadan bu yana ne büyüdü, küçüldü, geldi, gitti"),
         .phaseMeasuring: ("Adding up the folder", "Klasör toplamı çıkarılıyor"),
         .phaseSigning: ("Fingerprinting folders", "Klasörlerin parmak izi alınıyor"),
         .phaseFolders: ("Matching folders", "Klasörler eşleştiriliyor"),
