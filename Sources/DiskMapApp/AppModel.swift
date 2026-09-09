@@ -1198,8 +1198,18 @@ final class AppModel: ObservableObject {
         liveActive = live.liveUpdatesActive
         hasFullDiskAccess = FileActions.hasFullDiskAccess()
         map.openAtTheRoot(of: live)
+        // Everything that names a node from the tree being replaced, dropped
+        // here rather than whenever the next report happens to finish. The tick
+        // list was cleared by that callback, which left a window between a scan
+        // ending and its report loading where a tick pointed at whatever now
+        // sat at that index — and the tick list is what feeds the bulk Trash.
+        checked = []
+        space.clear()
+        reports.clear()
+        files.dropRows()
         phase = .ready
         rebuild()
+        if openTabs.contains(.files) { files.reload(in: tree) }
         // The layout is restored from the last run, so a report pane can be in
         // front before anything has been clicked. Without this the app opens on
         // an empty "Largest" or "Types" and only fills it once the user touches

@@ -185,7 +185,18 @@ final class MapModule: ObservableObject {
     /// the Data volume. Opening on the synthetic parent shows one enormous
     /// rectangle and nothing useful, so start where the bytes are. The
     /// breadcrumb still goes up to the system volume.
+    /// Everything here names a node, and a node id means nothing in a tree that
+    /// has just been replaced: index four thousand is whatever now sits there.
+    /// Going back would go somewhere else entirely, and an open folder would be
+    /// an arbitrary one.
+    func forgetHistory() {
+        backStack.removeAll()
+        forwardStack.removeAll()
+        expanded.removeAll()
+    }
+
     func openAtTheRoot(of live: LiveTree) {
+        forgetHistory()
         currentDirectory = 0
         if RootSet.coversWholeVolume(live.roots), live.roots.count > 1,
            let dataNode = live.withStore({ $0.find(path: RootSet.startupDataVolume) }) {

@@ -226,6 +226,22 @@ final class FilesModule: ObservableObject {
         loading = false
     }
 
+    /// The rows go and the question stays.
+    ///
+    /// A rescan is not a new scan: what was being asked is still what is being
+    /// asked, and re-typing a filter because the disk was measured again would
+    /// be the tool forgetting what it was doing. The rows themselves cannot
+    /// stay — each one names a node, and node ids do not survive a scan.
+    ///
+    /// The content answer does survive, because it is a set of paths rather
+    /// than of nodes, and the paths are still the paths.
+    func dropRows() {
+        task?.cancel()
+        page = FileTablePage()
+        loading = false
+        limit = Self.pageSize
+    }
+
     /// Dropped when the tree underneath is replaced: a row names a node, and
     /// nodes from a previous scan mean nothing to this one.
     func clear() {

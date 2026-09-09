@@ -130,4 +130,78 @@ final class ScanLifecycleTests: XCTestCase {
         XCTAssertEqual(model.phase, .idle)
         XCTAssertFalse(model.isScanning)
     }
+
+    // MARK: - What must not survive a rescan
+
+    private func write(_ path: String, _ bytes: Int) throws {
+        let url = root.appendingPathComponent(path)
+        try fm.createDirectory(at: url.deletingLastPathComponent(),
+                               withIntermediateDirectories: true)
+        try Data(count: bytes).write(to: url)
+    }
+
+    private func scanned() -> AppModel {
+        let model = AppModel()
+        model.clearTargets()
+        model.addTargets([root])
+        model.scanSynchronously()
+        return model
+    }
+
+    /// A node id means nothing across two scans: index 4,000 in the new tree is
+    /// whatever now happens to sit there. Measuring again is not measuring
+    /// something else, so most of the screen is kept — but anything holding
+    /// node ids has to go, and the flat table's rows lead to Reveal, to the
+    /// map, and to the Trash.
+    func testRescanningDropsRowsThatNameNodesFromTheOldTree() throws {
+        let model = scanned()
+        model.open(.files)
+        model.files.reloadSynchronously(in: try XCTUnwrap(model.tree))
+        XCTAssertFalse(model.files.page.rows.isEmpty, "nothing to go stale")
+
+        // The disk moves on, and the tree is measured again.
+        try fm.removeItem(at: root.appendingPathComponent("two.bin"))
+        try write("c/three.bin", 900_000)
+        model.scanSynchronously()
+
+        XCTAssertTrue(model.files.page.rows.isEmpty,
+                      "the table still lists rows built from the previous tree")
+    }
+
+    /// The tick list is the one that feeds the bulk Trash, so a stale entry
+    /// there is a stale entry pointed at a delete.
+    func testRescanningClearsTheTickList() throws {
+        let model = scanned()
+        let node = try XCTUnwrap(model.tree?.withStore {
+            $0.find(path: root.appendingPathComponent("two.bin").path)
+        })
+        model.checked = [node]
+
+        model.scanSynchronously()
+
+        XCTAssertTrue(model.checked.isEmpty,
+                      "a tick from the previous tree survived into this one")
+    }
+
+    /// Cleanup suggestions name nodes too, and every one of them is a proposal
+    /// to remove something.
+    func testRescanningDropsSuggestionsFromTheOldTree() throws {
+        // Build output is the cheapest suggestion to produce: a folder the
+        // toolchain rebuilds, recognised by name.
+        try write("project/node_modules/pkg/index.js", 40_000)
+        try write("project/node_modules/other/big.bin", 40_000)
+        let model = scanned()
+        // A fixture is smaller than anything worth suggesting in real life.
+        var floor = Cleanup.Thresholds()
+        floor.suggestion = 1_000; floor.installer = 1_000; floor.staleFile = 1_000
+        model.cleanupThresholds = floor
+        model.space.loadSynchronously(tree: try XCTUnwrap(model.tree),
+                                      root: 0, cache: SignatureCache())
+        XCTAssertFalse(model.suggestions.isEmpty, "no suggestions to go stale")
+
+        model.scanSynchronously()
+
+        XCTAssertTrue(model.suggestions.isEmpty,
+                      "a proposal to delete survived, naming nodes of a tree that is gone")
+    }
 }
