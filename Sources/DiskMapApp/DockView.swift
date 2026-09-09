@@ -82,22 +82,7 @@ struct DockView: View {
     private static let dividerWidth: CGFloat = 7
 
     private func divider(id: UUID, axis: DockAxis, ratio: Double, full: CGFloat) -> some View {
-        Rectangle()
-            .fill(.quaternary)
-            .frame(width: axis == .horizontal ? 1 : nil,
-                   height: axis == .vertical ? 1 : nil)
-            .frame(width: axis == .horizontal ? Self.dividerWidth : nil,
-                   height: axis == .vertical ? Self.dividerWidth : nil)
-            .contentShape(Rectangle())
-            .onHover { inside in
-                // The pointer says what the divider does before it is grabbed.
-                if inside {
-                    axis == .horizontal
-                        ? NSCursor.resizeLeftRight.push() : NSCursor.resizeUpDown.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
+        DividerHandle(axis: axis, width: Self.dividerWidth)
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
@@ -161,7 +146,12 @@ struct DockView: View {
                 .frame(width: 11, height: 11)
                 .contentShape(Rectangle())
                 .opacity(active ? 1 : 0)
-                .onTapGesture { model.closePane(pane) }
+                // Invisible *and* out of reach. It held its place so the row
+                // would not reflow, but it kept taking the click: aiming at the
+                // right-hand end of a tab that was not in front closed that
+                // pane instead of bringing it forward.
+                .allowsHitTesting(active)
+                .onTapGesture { if active { model.closePane(pane) } }
                 .help(loc[.closePane])
                 .accessibilityHidden(!active)
         }
@@ -270,5 +260,40 @@ private struct PaneFrames: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue()) { $1 }
+    }
+}
+
+/// The grab area between two panes.
+///
+/// A view of its own so it can remember whether it pushed a cursor. Pushing on
+/// enter and popping on leave is the obvious shape and it leaks: close a pane
+/// while the pointer is on the divider beside it and the leave never arrives,
+/// so the resize cursor stays over the whole app until something else sets one.
+private struct DividerHandle: View {
+    let axis: DockAxis
+    let width: CGFloat
+    @State private var pushed = false
+
+    var body: some View {
+        Rectangle()
+            .fill(.quaternary)
+            .frame(width: axis == .horizontal ? 1 : nil,
+                   height: axis == .vertical ? 1 : nil)
+            .frame(width: axis == .horizontal ? width : nil,
+                   height: axis == .vertical ? width : nil)
+            .contentShape(Rectangle())
+            // The pointer says what the divider does before it is grabbed.
+            .onHover { inside in
+                if inside, !pushed {
+                    (axis == .horizontal ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
+                    pushed = true
+                } else if !inside, pushed {
+                    NSCursor.pop()
+                    pushed = false
+                }
+            }
+            .onDisappear {
+                if pushed { NSCursor.pop(); pushed = false }
+            }
     }
 }
