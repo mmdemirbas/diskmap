@@ -1,5 +1,6 @@
 import XCTest
 import DiskMapCore
+@testable import DiskMapCompare
 @testable import DiskMapScan
 
 /// Paths as bytes, because that is what a filename is.
@@ -137,6 +138,31 @@ final class RawPathTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(fd, 0)
         if fd >= 0 { close(fd) }
         XCTAssertLessThan(DiskScanner.openDirectory(RawPath(root.path + "/nope")), 0)
+    }
+
+    /// The claim made in the notes: a comparison's *verdict* is unaffected by a
+    /// name that cannot be decoded, because names are matched on raw bytes and
+    /// never turned into text to be compared. Checked here rather than asserted,
+    /// since the whole point is that decoding would have merged two names into
+    /// one U+FFFD and called two different files the same file.
+    func testTheComparisonMatchesNamesWithoutDecodingThem() {
+        var blob: [UInt8] = []
+        func add(_ bytes: [UInt8]) -> (offset: Int, length: Int) {
+            defer { blob.append(contentsOf: bytes) }
+            return (blob.count, bytes.count)
+        }
+        let first = add([0x61, 0xFF, 0x2E, 0x62])   // a?.b
+        let second = add([0x61, 0xFE, 0x2E, 0x62])  // a?.b, a different byte
+        let sameAsFirst = add([0x61, 0xFF, 0x2E, 0x62])
+        let upper = add([0x41, 0xFF, 0x2E, 0x42])   // A?.B
+
+        blob.withUnsafeBufferPointer { bytes in
+            XCTAssertEqual(DiffTree.compareNames(bytes, first, bytes, sameAsFirst), 0)
+            XCTAssertNotEqual(DiffTree.compareNames(bytes, first, bytes, second), 0,
+                              "two names decoded to one; they are different files")
+            XCTAssertEqual(DiffTree.compareFolded(bytes, first, bytes, upper), 0,
+                           "case folding stopped at the byte it could not read")
+        }
     }
 
     /// Why the awkward name has to be injected rather than created. If this
