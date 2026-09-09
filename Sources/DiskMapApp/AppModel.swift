@@ -443,6 +443,25 @@ final class AppModel: ObservableObject {
     func setDockRatio(_ split: UUID, _ ratio: Double) {
         map.dock.setRatio(split, ratio)
     }
+
+    // MARK: - Arranging the tools themselves
+
+    func moveTool(_ tab: ModuleTab, to leaf: UUID, edge: DockEdge?) {
+        tools.move(tab, to: leaf, edge: edge)
+    }
+
+    /// Adds a tool from a group's `+`, rather than from the home screen. Goes
+    /// through `openTool` so the tool is told to fetch what it shows, then into
+    /// the group that was asked for rather than wherever `add` would have put
+    /// it.
+    func addTool(_ tab: ModuleTab, to leaf: UUID) {
+        openTool(tab)
+        tools.move(tab, to: leaf, edge: nil)
+    }
+
+    func setToolRatio(_ split: UUID, _ ratio: Double) {
+        tools.setRatio(split, ratio)
+    }
     /// The row the list should bring into view. Cleared once it has.
     var scrollTo: Int32? {
         get { map.scrollTo } set { map.scrollTo = newValue }
@@ -500,20 +519,35 @@ final class AppModel: ObservableObject {
     var suggestions: [CleanupSuggestion] { space.suggestions }
     // MARK: - Which tools are open
 
-    /// Open tools, left to right. The map is always the first and cannot be
-    /// closed: it is the scan itself rather than a tool over it.
-    @Published private(set) var openTabs: [ModuleTab] = [.home, .map]
-    @Published var activeTab: ModuleTab = .home
+    /// How the window is divided between the tools that are open.
+    ///
+    /// The same algebra the map uses for its panes, one level up: drag a tool's
+    /// tab onto the edge of another to put them side by side, onto the middle
+    /// to make them tabs of one group. Home and the map cannot be closed, so
+    /// the window always has something in it.
+    ///
+    /// Not written to the preferences, unlike the map's. Which tools are open
+    /// is a fact about the scan being worked on rather than a taste in layouts,
+    /// and with two windows on two disks a shared one would have each of them
+    /// rearranging the other.
+    @Published var tools = ToolDock.standard
+
+    /// Open tools, left to right, however they are arranged.
+    var openTabs: [ModuleTab] { tools.panes }
+
+    /// The tool most recently brought forward. Several are visible at once now,
+    /// so this is "the one that was asked for", not "the only one on screen" —
+    /// which is what every caller of it meant anyway.
+    @Published var activeTab: ModuleTab = .home {
+        didSet { tools.activate(activeTab) }
+    }
 
     /// Opens a tool, or brings it forward if it is already open. Opening one no
     /// longer closes another, which is the entire reason these stopped being
     /// sheets.
     func open(_ tab: ModuleTab) {
-        let wasClosed = !openTabs.contains(tab)
-        if !openTabs.contains(tab) {
-            openTabs.append(tab)
-            openTabs.sort { ModuleTab.allCases.firstIndex(of: $0)! < ModuleTab.allCases.firstIndex(of: $1)! }
-        }
+        let wasClosed = !tools.contains(tab)
+        if wasClosed { tools.add(tab) }
         activeTab = tab
         // The copy report is a second walk and only runs for whoever wants it,
         // so opening the tool is what asks for it.
@@ -530,7 +564,7 @@ final class AppModel: ObservableObject {
         case .files: files.clear()
         default: break
         }
-        openTabs.removeAll { $0 == tab }
+        tools.remove(tab)
         if activeTab == tab { activeTab = openTabs.last ?? .map }
     }
 

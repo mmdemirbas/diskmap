@@ -2,13 +2,30 @@ import AppKit
 import DiskMapCore
 import SwiftUI
 
-/// The map's area, divided the way the user divided it.
+/// How wide the grab area between two panes is.
+private let dividerWidth: CGFloat = 7
+
+/// What a dock can do to the thing it is arranging.
 ///
-/// Seven views that used to be two closed sets — pick one picture, pick one
-/// table — and the two segmented pickers that made them alternatives are gone.
-/// Any pane can sit anywhere: drag its tab onto the middle of another group to
-/// join it, or onto an edge to split that group in two. Drag a divider to
-/// change the share. Close what you do not want and add it back from the `+`.
+/// The layout is a value and the dock draws it; something else owns it and
+/// decides what a change means. The map refreshes its reports when a pane
+/// moves, the window does not — so the operations arrive as five closures
+/// rather than being written into the view.
+struct DockActions<Item: DockItem> {
+    var activate: (Item) -> Void
+    var close: (Item) -> Void
+    var add: (Item, UUID) -> Void
+    var move: (Item, UUID, DockEdge?) -> Void
+    var ratio: (UUID, Double) -> Void
+}
+
+/// An area divided the way the user divided it.
+///
+/// Two things use it. Inside the map, seven views that used to be two closed
+/// sets — pick one picture, pick one table. Inside the window, the tools
+/// themselves. Either way: drag a tab onto the middle of another group to join
+/// it, or onto an edge to split that group in two. Drag a divider to change the
+/// share. Close what you do not want and add it back from the `+`.
 ///
 /// The drag is a plain `DragGesture` rather than the system's drag-and-drop.
 /// Two reasons, and the second is the one that decided it. A drop destination
@@ -17,16 +34,20 @@ import SwiftUI
 /// afterwards, by having done it. And an AppKit drag session cannot be drawn by
 /// `ImageRenderer`, so the whole screen would become a yellow placeholder and
 /// nobody could check it without a window server.
-struct DockView: View {
-    @ObservedObject var model: AppModel
+struct DockView<Item: DockItem, Content: View, Footer: View>: View {
+    let layout: DockLayout<Item>
+    let actions: DockActions<Item>
+    /// One coordinate space per dock, so a pane's rectangle and the pointer are
+    /// in the same numbers however deeply nested the pane is — and so the dock
+    /// inside the map does not answer for the dock around it.
+    let space: String
+    @ViewBuilder let content: (Item) -> Content
+    @ViewBuilder let footer: () -> Footer
+
     @ObservedObject private var loc = L10n.shared
 
-    /// One coordinate space for the whole dock, so a pane's rectangle and the
-    /// pointer are in the same numbers however deeply nested the pane is.
-    private static let space = "dock"
-
     @State private var frames: [UUID: CGRect] = [:]
-    @State private var dragging: PaneKind?
+    @State private var dragging: Item?
     @State private var pointer: CGPoint = .zero
     /// The ratio a divider had when the drag on it began. Translation is
     /// measured from there; reading the current ratio each time would compound.
@@ -35,22 +56,19 @@ struct DockView: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                node(model.map.dock.root)
+                node(layout.root)
                 dropPreview
                 ghost
             }
-            .coordinateSpace(name: Self.space)
-            .onPreferenceChange(PaneFrames.self) { frames = $0 }
-            if model.map.visiblePanes.contains(where: { $0.isPicture }) {
-                Divider()
-                Legend(mode: model.colourMode, renderMode: model.renderMode)
-            }
+            .coordinateSpace(name: space)
+            .onPreferenceChange(PaneFrames<Item>.self) { frames = $0 }
+            footer()
         }
     }
 
     // MARK: - The tree
 
-    @ViewBuilder private func node(_ node: DockNode<PaneKind>) -> some View {
+    @ViewBuilder private func node(_ node: DockNode<Item>) -> some View {
         switch node {
         case .leaf(let id, let panes, let active):
             group(id: id, panes: panes, active: active)
@@ -67,7 +85,7 @@ struct DockView: View {
                        first: AnyView, second: AnyView) -> some View {
         GeometryReader { geo in
             let full = axis == .horizontal ? geo.size.width : geo.size.height
-            let firstLength = max(0, full * ratio - Self.dividerWidth / 2)
+            let firstLength = max(0, full * ratio - dividerWidth / 2)
             let layout = axis == .horizontal
                 ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
             layout {
@@ -79,10 +97,9 @@ struct DockView: View {
         }
     }
 
-    private static let dividerWidth: CGFloat = 7
 
     private func divider(id: UUID, axis: DockAxis, ratio: Double, full: CGFloat) -> some View {
-        DividerHandle(axis: axis, width: Self.dividerWidth)
+        DividerHandle(axis: axis, width: dividerWidth)
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
@@ -95,7 +112,7 @@ struct DockView: View {
                         }
                         let moved = axis == .horizontal
                             ? value.translation.width : value.translation.height
-                        model.setDockRatio(id, start + Double(moved) / Double(max(full, 1)))
+                        actions.ratio(id, start + Double(moved) / Double(max(full, 1)))
                     }
                     .onEnded { _ in ratioAtStart = nil }
             )
@@ -103,7 +120,7 @@ struct DockView: View {
 
     // MARK: - One group of panes
 
-    private func group(id: UUID, panes: [PaneKind], active: PaneKind) -> some View {
+    private func group(id: UUID, panes: [Item], active: Item) -> some View {
         VStack(spacing: 0) {
             tabs(id: id, panes: panes, active: active)
             Divider()
@@ -117,12 +134,12 @@ struct DockView: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .background(GeometryReader { geo in
-            Color.clear.preference(key: PaneFrames.self,
-                                   value: [id: geo.frame(in: .named(Self.space))])
+            Color.clear.preference(key: PaneFrames<Item>.self,
+                                   value: [id: geo.frame(in: .named(space))])
         })
     }
 
-    private func tabs(id: UUID, panes: [PaneKind], active: PaneKind) -> some View {
+    private func tabs(id: UUID, panes: [Item], active: Item) -> some View {
         HStack(spacing: 2) {
             ForEach(panes) { pane in
                 tab(pane, in: id, active: pane == active)
@@ -134,7 +151,7 @@ struct DockView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private func tab(_ pane: PaneKind, in leaf: UUID, active: Bool) -> some View {
+    private func tab(_ pane: Item, in leaf: UUID, active: Bool) -> some View {
         HStack(spacing: 5) {
             Image(systemName: pane.icon).font(.system(size: 10)).frame(width: 13)
             Text(loc[pane.key]).font(.system(size: 11, weight: active ? .semibold : .regular))
@@ -145,15 +162,15 @@ struct DockView: View {
                 .font(.system(size: 7, weight: .bold))
                 .frame(width: 11, height: 11)
                 .contentShape(Rectangle())
-                .opacity(active ? 1 : 0)
+                .opacity(active && pane.isClosable ? 1 : 0)
                 // Invisible *and* out of reach. It held its place so the row
                 // would not reflow, but it kept taking the click: aiming at the
                 // right-hand end of a tab that was not in front closed that
                 // pane instead of bringing it forward.
-                .allowsHitTesting(active)
-                .onTapGesture { if active { model.closePane(pane) } }
+                .allowsHitTesting(active && pane.isClosable)
+                .onTapGesture { if active, pane.isClosable { actions.close(pane) } }
                 .help(loc[.closePane])
-                .accessibilityHidden(!active)
+                .accessibilityHidden(!(active && pane.isClosable))
         }
         .foregroundStyle(active ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
         .padding(.horizontal, 7).padding(.vertical, 3)
@@ -163,9 +180,9 @@ struct DockView: View {
             .strokeBorder(active ? Color.accentColor.opacity(0.4) : .clear))
         .opacity(dragging == pane ? 0.35 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { model.showPane(pane) }
+        .onTapGesture { actions.activate(pane) }
         .gesture(
-            DragGesture(minimumDistance: 5, coordinateSpace: .named(Self.space))
+            DragGesture(minimumDistance: 5, coordinateSpace: .named(space))
                 .onChanged { value in
                     dragging = pane
                     pointer = value.location
@@ -173,7 +190,7 @@ struct DockView: View {
                 .onEnded { value in
                     defer { dragging = nil }
                     guard let target = target(at: value.location) else { return }
-                    model.movePane(pane, to: target.leaf, edge: target.edge)
+                    actions.move(pane, target.leaf, target.edge)
                 }
         )
         .help(loc[.dragToRearrange])
@@ -181,10 +198,10 @@ struct DockView: View {
 
     /// Adds a pane that is not on screen anywhere, into this group.
     private func addMenu(into leaf: UUID) -> some View {
-        let missing = model.map.dock.missing
+        let missing = layout.missing
         return Menu {
             ForEach(missing) { pane in
-                Button { model.addPane(pane, to: leaf) } label: {
+                Button { actions.add(pane, leaf) } label: {
                     Label(loc[pane.key], systemImage: pane.icon)
                 }
             }
@@ -199,18 +216,6 @@ struct DockView: View {
         .disabled(missing.isEmpty)
         .opacity(missing.isEmpty ? 0.3 : 1)
         .help(loc[.addPane])
-    }
-
-    @ViewBuilder private func content(_ pane: PaneKind) -> some View {
-        switch pane {
-        case .treemap:  TreemapView(model: model)
-        case .sunburst: SunburstView(model: model)
-        case .icicle:   IcicleView(model: model)
-        case .contents: ContentsList(model: model)
-        case .largest:  LargestFilesView(model: model)
-        case .types:    TypeBreakdownView(model: model)
-        case .copies:   DuplicatesView(model: model)
-        }
     }
 
     // MARK: - Dragging one somewhere else
@@ -256,8 +261,8 @@ struct DockView: View {
 /// Where each group ended up, in the dock's own coordinates. Collected from the
 /// views rather than computed alongside them, so the rectangle a drop is tested
 /// against is the rectangle that was actually drawn.
-private struct PaneFrames: PreferenceKey {
-    static let defaultValue: [UUID: CGRect] = [:]
+private struct PaneFrames<Item: DockItem>: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] { [:] }
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue()) { $1 }
     }
@@ -295,5 +300,41 @@ private struct DividerHandle: View {
             .onDisappear {
                 if pushed { NSCursor.pop(); pushed = false }
             }
+    }
+}
+
+/// The dock inside the map: seven views of one scan.
+///
+/// A wrapper rather than a call site, because what a pane *is* — and what has
+/// to happen when one moves — belongs next to the map rather than inside a
+/// generic layout engine. Every rearrangement refreshes the reports: the pane
+/// brought forward by a close may need one that has never been asked for.
+struct MapDock: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        DockView(layout: model.map.dock,
+                 actions: DockActions(activate: model.showPane,
+                                      close: model.closePane,
+                                      add: model.addPane,
+                                      move: model.movePane,
+                                      ratio: model.setDockRatio),
+                 space: "dock.panes") { pane in
+            switch pane {
+            case .treemap:  TreemapView(model: model)
+            case .sunburst: SunburstView(model: model)
+            case .icicle:   IcicleView(model: model)
+            case .contents: ContentsList(model: model)
+            case .largest:  LargestFilesView(model: model)
+            case .types:    TypeBreakdownView(model: model)
+            case .copies:   DuplicatesView(model: model)
+            }
+        } footer: {
+            // Only when there is a picture to read it against.
+            if model.map.visiblePanes.contains(where: { $0.isPicture }) {
+                Divider()
+                Legend(mode: model.colourMode, renderMode: model.renderMode)
+            }
+        }
     }
 }

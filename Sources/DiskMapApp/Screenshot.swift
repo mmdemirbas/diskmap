@@ -111,6 +111,11 @@ enum OffscreenRenderer {
                                               cache: SignatureCache())
             }
             if tab == .duplicates { model.refreshSummarySync() }
+            // Beside the map rather than in front of it, so the arrangement
+            // the dock exists for can be looked at without a window server.
+            if env["DISKMAP_TAB_BESIDE"] != nil, let host = model.tools.leafHolding(.map) {
+                model.moveTool(tab, to: host, edge: .trailing)
+            }
             if tab == .files, let tree = model.tree {
                 model.filesText = env["DISKMAP_FILES_TEXT"] ?? ""
                 if let k = env["DISKMAP_FILES_KIND"], let kind = FileCategory.allCases
