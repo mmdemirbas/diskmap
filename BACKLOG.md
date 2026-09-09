@@ -61,6 +61,18 @@ nine days of work sat in `build/` unseen.
 
 ---
 
+## From 2026-09-09, second round
+
+| # | Request | Status | Notes |
+|---|---|---|---|
+| 22 | Compare two items picked **one at a time**, from different folders: right-click one, right-click the other | open | The Finder menu offers Compare only on a selection of exactly two, so two folders in different places cannot be picked. |
+| 23 | Finish the partials: 2d and 12 | open | Find and the change history do not follow the tree; the flat table and the copies list take no drags. |
+| 24 | Share scan data between tools, so one folder is never walked twice | open | Comparing re-walks both sides from disk even when both are already in the scanned tree. |
+| 25 | Faster scanning, still precise and correct | open | Measure first. |
+| 26 | Audit the mistakes tools like this are known to make | open | Case-insensitive and normalisation-insensitive filesystems, mount crossing, firmlinks, symlink cycles, hard links, clones. |
+
+---
+
 ## Deferred, and why
 
 Nothing is deferred silently. If an item is put off, it is written here with
@@ -87,5 +99,6 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 | Two tools side by side in one window | 2026-09-09 | offscreen render, `tmp/split.png` |
 | The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
 | Finder extension registers and Finder loads it | 2026-09-09 | `pluginkit`, process list |
-| The right-click item appears and works | — | needs a right-click |
-| Tabs, flat table, dock, content line | — | needs a look |
+| The right-click item appears and works | 2026-09-09 | the user, by right-clicking |
+| The drag gesture on tool tabs | 2026-09-09 | the user |
+| Tabs, flat table, content line | — | needs a look |
