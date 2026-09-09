@@ -6,7 +6,15 @@ public struct ScanOptions: Sendable {
     public var roots: [String]
     /// Off by default: an external drive is a separate budget, not part of this one.
     public var followMountPoints: Bool = false
-    public var threadCount: Int = min(12, ProcessInfo.processInfo.activeProcessorCount)
+    /// More threads than cores, on purpose.
+    ///
+    /// A walker spends almost all of its time inside `getattrlistbulk` and
+    /// `open`, blocked in the kernel rather than computing — measured at 95% of
+    /// a worker's samples. One thread per core therefore leaves the machine
+    /// idle waiting on the filesystem. On a ten-core machine over 3.2 million
+    /// nodes: ten threads 13.2s, sixteen 12.4s, and flat from there, so the cap
+    /// is where the curve went flat rather than where the cores ran out.
+    public var threadCount: Int = max(4, min(16, ProcessInfo.processInfo.activeProcessorCount * 2))
     public var extraExclusions: Set<String> = []
 
     /// How many nodes to size the arrays for, when the caller knows better
@@ -439,25 +447,37 @@ public final class DiskScanner {
                     close(fd)
                     if pending.isEmpty { continue }
 
+                    // Extra links to one inode: the bytes exist once, and the
+                    // first sighting is the one that keeps them. Decided before
+                    // the store lock is taken, because the sighting table has a
+                    // lock of its own — holding two to answer one question is
+                    // how a parallel walk turns into a queue.
+                    var hardlinks = 0
+                    var hardlinkLogical: Int64 = 0
+                    for i in pending.indices where pending[i].linkCount > 1
+                        && !pending[i].flags.contains(.directory) {
+                        guard !inodes.isFirstSighting(onDevice: rootDev, pending[i].fileID) else {
+                            continue
+                        }
+                        pending[i].flags.insert(.hardlinkDuplicate)
+                        pending[i].physical = 0
+                        hardlinks += 1
+                        hardlinkLogical += pending[i].logical
+                    }
+
                     var subdirs: [Task] = []
                     subdirs.reserveCapacity(16)
 
                     lock.lock()
+                    stats.hardlinkDuplicates += hardlinks
+                    stats.hardlinkDuplicateLogical += hardlinkLogical
                     let base = Int32(store.count)
                     nameBuf.withUnsafeBufferPointer { nb in
                         let nbBase = nb.baseAddress!
-                        for var p in pending {
-                            var physical = p.physical
-                            // Extra links to one inode: the bytes exist once.
-                            if p.linkCount > 1, !p.flags.contains(.directory),
-                               !inodes.isFirstSighting(onDevice: rootDev, p.fileID) {
-                                p.flags.insert(.hardlinkDuplicate)
-                                stats.hardlinkDuplicates += 1
-                                stats.hardlinkDuplicateLogical += p.logical
-                                physical = 0
-                            }
+                        for p in pending {
                             _ = store.append(name: nbBase + p.nameOffset, nameLength: p.nameLength,
-                                             parent: task.node, logical: p.logical, physical: physical,
+                                             parent: task.node, logical: p.logical,
+                                             physical: p.physical,
                                              mtime: p.mtime, flags: p.flags)
                             if p.flags.contains(.directory) {
                                 stats.directories += 1
@@ -466,7 +486,7 @@ public final class DiskScanner {
                             } else {
                                 stats.files += 1
                                 stats.totalLogical += p.logical
-                                stats.totalPhysical += physical
+                                stats.totalPhysical += p.physical
                                 if p.flags.contains(.dataless) {
                                     stats.datalessCount += 1
                                     stats.datalessLogical += p.logical
