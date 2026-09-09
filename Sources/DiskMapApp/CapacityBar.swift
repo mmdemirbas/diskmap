@@ -15,14 +15,19 @@ struct CapacityBar: View {
     @Environment(\.colorScheme) private var scheme
 
     /// Purgeable is a slice *of* used, not a fourth region of the disk.
-    private var segments: [(color: Color, bytes: Int64, label: String)] {
+    private var segments: [(color: Color, bytes: Int64, label: String, isFree: Bool)] {
         let purgeable = max(0, min(volume.purgeable, volume.used))
         return [
-            (Palette.used(scheme), volume.used - purgeable, loc[.inUse]),
-            (Palette.purgeable(scheme), purgeable, loc[.purgeable]),
-            (Palette.free(scheme), max(0, volume.trueAvailable), loc[.free]),
+            (Palette.used(scheme), volume.used - purgeable, loc[.inUse], false),
+            (Palette.purgeable(scheme), purgeable, loc[.purgeable], false),
+            (Palette.free(scheme), max(0, volume.trueAvailable), loc[.free], true),
         ]
     }
+
+    /// Whether this disk is one where the Finder's figure and the real one have
+    /// come apart. A gigabyte of purgeable is where the difference stops being
+    /// rounding and starts being the reason a copy fails.
+    private var finderDisagrees: Bool { volume.purgeable > 1_000_000_000 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -51,27 +56,35 @@ struct CapacityBar: View {
                     HStack(spacing: 5) {
                         RoundedRectangle(cornerRadius: 2).fill(seg.color).frame(width: 9, height: 9)
                         Text("\(seg.label) \(shortBytes(seg.bytes))").font(.system(size: 11))
+                        // The disagreement with the Finder, said in one glyph
+                        // beside the number it is about rather than in a line
+                        // of red prose under the bar. The prose is still there,
+                        // one click away, where somebody who wants it is
+                        // looking for it.
+                        if seg.isFree {
+                            Button(action: onExplain) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Palette.warning(scheme))
+                                    .frame(width: 12, height: 12)
+                            }
+                            .buttonStyle(.plain)
+                            .help(loc.finderClaim(shortBytes(volume.finderAvailable),
+                                                  shortBytes(volume.trueAvailable))
+                                  + " " + loc[.capacityHelp])
+                            // Reserved rather than conditional: a bar with a
+                            // healthy disk and a bar with a drifting one are
+                            // side by side, and the labels after this must line
+                            // up between them.
+                            .opacity(finderDisagrees ? 1 : 0)
+                            .allowsHitTesting(finderDisagrees)
+                            .accessibilityHidden(!finderDisagrees)
+                        }
                     }
                 }
                 Spacer()
             }
             .foregroundStyle(.secondary)
-
-            if volume.purgeable > 1_000_000_000 {
-                Button(action: onExplain) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                        Text(loc.finderClaim(shortBytes(volume.finderAvailable),
-                                             shortBytes(volume.trueAvailable)))
-                            .fontWeight(.medium)
-                        Text(loc[.why]).underline()
-                    }
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.warning(scheme))
-                }
-                .buttonStyle(.plain)
-                .help(loc[.capacityHelp])
-            }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -154,7 +167,6 @@ private struct Hatching: Shape {
 struct ReconciliationSheet: View {
     let volume: VolumeInfo
     let reconciliation: Reconciliation?
-    let stats: ScanStats?
     /// A ScrollView measures zero height offscreen, so an ImageRenderer
     /// capture of this sheet is a title over a blank page. Every scroller in
     /// the app goes through the shared fallback for that reason.
@@ -369,7 +381,9 @@ struct ReconciliationSheet: View {
     }
 
     @ViewBuilder private var footnotes: some View {
-        if let s = stats, s.datalessCount > 0 || s.hardlinkDuplicates > 0 {
+        // The volume's own counts, not the scan's. With two disks measured
+        // together the scan's totals belong to neither of them.
+        if let s = reconciliation, s.datalessCount > 0 || s.hardlinkDuplicateCount > 0 {
             VStack(alignment: .leading, spacing: 6) {
                 if s.datalessCount > 0 {
                     Label(loc.datalessNote(s.datalessCount, shortBytes(s.datalessLogical)),
@@ -377,8 +391,9 @@ struct ReconciliationSheet: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if s.hardlinkDuplicates > 0 {
-                    Label(loc.hardlinkNote(s.hardlinkDuplicates, shortBytes(s.hardlinkDuplicateLogical)),
+                if s.hardlinkDuplicateCount > 0 {
+                    Label(loc.hardlinkNote(s.hardlinkDuplicateCount,
+                                           shortBytes(s.hardlinkDuplicateLogical)),
                           systemImage: "link")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

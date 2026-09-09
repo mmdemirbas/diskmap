@@ -32,16 +32,13 @@ struct ContentView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared
     @Environment(\.colorScheme) private var scheme
-    @State private var showReconciliation = false
+    /// Which volume's breakdown is open, rather than whether *a* breakdown is.
+    /// With two disks measured together, "the reconciliation" was one screen
+    /// built from both and shown for either.
+    @State private var explaining: VolumeInfo?
 
     var body: some View {
         VStack(spacing: 0) {
-            // One bar per disk being measured. A single bar while two disks
-            // are in the total is a screen that misstates itself.
-            ForEach(model.targetedVolumes, id: \.path) { v in
-                CapacityBar(volume: v) { showReconciliation = true }
-                Divider()
-            }
             TabStrip(model: model)
             Divider()
             openTool
@@ -54,12 +51,11 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(model.appearance.colorScheme)
         .modifier(Sheets(model: model))
-        .sheet(isPresented: $showReconciliation) {
-            if let v = model.volume {
-                ReconciliationSheet(volume: v, reconciliation: model.reconciliation,
-                                    stats: model.stats, renderMode: model.renderMode)
-                    .preferredColorScheme(model.appearance.colorScheme)
-            }
+        .sheet(item: $explaining) { volume in
+            ReconciliationSheet(volume: volume,
+                                reconciliation: model.reconciliation(for: volume),
+                                renderMode: model.renderMode)
+                .preferredColorScheme(model.appearance.colorScheme)
         }
         .confirmationDialog(loc[.startOverTitle],
                             isPresented: Binding(get: { model.pendingNewScan },
@@ -141,6 +137,14 @@ struct ContentView: View {
 
     private var results: some View {
         VStack(spacing: 0) {
+            // One bar per disk being measured, and only here. How full a disk
+            // is answers a question the map asks; it says nothing about a
+            // folder comparison or a search, and standing above every tool it
+            // read as a header belonging to all of them.
+            ForEach(model.targetedVolumes) { v in
+                CapacityBar(volume: v) { explaining = v }
+                Divider()
+            }
             toolbar
             Divider()
             // Was a fixed split: one picture on the left, one table on the

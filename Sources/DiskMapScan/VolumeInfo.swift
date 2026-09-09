@@ -7,7 +7,11 @@ import Foundation
 /// (evictable iCloud content, caches, local snapshots) to the real free space.
 /// On a disk that leans on iCloud Drive the gap runs to terabytes, which is why
 /// Finder can claim a nearly empty disk that is in fact nearly full.
-public struct VolumeInfo: Sendable {
+public struct VolumeInfo: Sendable, Identifiable {
+    /// A volume is identified by where it is mounted, which is what makes two
+    /// capacity screens two screens rather than one shown twice.
+    public var id: String { path }
+
     public var path: String
     public var name: String
     public var total: Int64
@@ -90,18 +94,23 @@ public struct Reconciliation: Sendable {
     public var volumeUsed: Int64
     public var scannedPhysical: Int64
     public var datalessLogical: Int64
+    public var datalessCount: Int
     public var hardlinkDuplicateLogical: Int64
+    public var hardlinkDuplicateCount: Int
     public var unreadableDirectories: Int
     public var snapshotCount: Int
     public var scanRootIsWholeVolume: Bool
 
     public init(volumeUsed: Int64, scannedPhysical: Int64, datalessLogical: Int64,
                 hardlinkDuplicateLogical: Int64, unreadableDirectories: Int,
-                snapshotCount: Int, scanRootIsWholeVolume: Bool) {
+                snapshotCount: Int, scanRootIsWholeVolume: Bool,
+                datalessCount: Int = 0, hardlinkDuplicateCount: Int = 0) {
         self.volumeUsed = volumeUsed
         self.scannedPhysical = scannedPhysical
         self.datalessLogical = datalessLogical
+        self.datalessCount = datalessCount
         self.hardlinkDuplicateLogical = hardlinkDuplicateLogical
+        self.hardlinkDuplicateCount = hardlinkDuplicateCount
         self.unreadableDirectories = unreadableDirectories
         self.snapshotCount = snapshotCount
         self.scanRootIsWholeVolume = scanRootIsWholeVolume

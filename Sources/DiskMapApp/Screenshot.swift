@@ -128,11 +128,12 @@ enum OffscreenRenderer {
                 model.search.runSynchronously(in: tree)
             }
         }
-        if env["DISKMAP_SHEET"] == "reconciliation", let v = model.volume {
+        if env["DISKMAP_SHEET"] == "reconciliation", let v = model.targetedVolumes.first {
             // The one screen whose whole job is to be understood at a glance,
             // and the one that cannot be seen through the window it sits over.
-            view = AnyView(ReconciliationSheet(volume: v, reconciliation: model.reconciliation,
-                                               stats: model.stats, renderMode: true)
+            view = AnyView(ReconciliationSheet(volume: v,
+                                               reconciliation: model.reconciliation(for: v),
+                                               renderMode: true)
                 .environment(\.colorScheme, scheme))
         } else if env["DISKMAP_SHEET"] == "exclusions" {
             model.excludedPaths = (env["DISKMAP_EXCLUDED"] ?? "").split(separator: ":").map(String.init)

@@ -33,6 +33,35 @@ public struct AgeUsage: Sendable {
     public var files: Int
 }
 
+/// The few figures the capacity screen reconciles against a volume, for one
+/// subtree rather than for the whole scan.
+///
+/// Scanning two disks at once used to compare the *combined* scanned bytes
+/// against each disk's own used figure, which is two unrelated quantities in
+/// one sentence. Every number here comes from one root, so a volume's screen
+/// only ever holds that volume's data.
+public struct SubtreeTotals: Sendable {
+    public var physical: Int64 = 0
+    public var datalessLogical: Int64 = 0
+    public var datalessCount = 0
+    public var hardlinkDuplicateLogical: Int64 = 0
+    public var hardlinkDuplicateCount = 0
+    public var unreadableDirectories = 0
+
+    public init() {}
+
+    public static func + (a: SubtreeTotals, b: SubtreeTotals) -> SubtreeTotals {
+        var out = SubtreeTotals()
+        out.physical = a.physical + b.physical
+        out.datalessLogical = a.datalessLogical + b.datalessLogical
+        out.datalessCount = a.datalessCount + b.datalessCount
+        out.hardlinkDuplicateLogical = a.hardlinkDuplicateLogical + b.hardlinkDuplicateLogical
+        out.hardlinkDuplicateCount = a.hardlinkDuplicateCount + b.hardlinkDuplicateCount
+        out.unreadableDirectories = a.unreadableDirectories + b.unreadableDirectories
+        return out
+    }
+}
+
 public struct SubtreeSummary: Sendable {
     /// Node ids, biggest first. Files only, from anywhere in the subtree.
     public var largestFiles: [Int32] = []
@@ -50,6 +79,39 @@ public struct SubtreeSummary: Sendable {
 /// with: the biggest files anywhere below here, what kinds of file they are,
 /// and how much of it has not been touched in years.
 public enum Aggregate {
+    /// What one root holds, for reconciling against the volume it sits on.
+    ///
+    /// The physical total is already aggregated on the node; the rest are
+    /// properties of individual files and need the walk. One pass, and only
+    /// when a breakdown is actually asked for.
+    public static func totals(store: NodeStore, root: Int32) -> SubtreeTotals {
+        var out = SubtreeTotals()
+        guard root >= 0, root < Int32(store.count) else { return out }
+        out.physical = store.totalPhysical[Int(root)]
+
+        var stack: [Int32] = [root]
+        while let node = stack.popLast() {
+            for child in store.children(node) {
+                let index = Int(child)
+                let flags = store.flagSet(child)
+                if flags.contains(.removed) { continue }
+                if flags.contains(.dataless) {
+                    out.datalessLogical += store.totalLogical[index]
+                    out.datalessCount += 1
+                }
+                if flags.contains(.hardlinkDuplicate) {
+                    out.hardlinkDuplicateLogical += store.totalLogical[index]
+                    out.hardlinkDuplicateCount += 1
+                }
+                if store.isDirectory(child) {
+                    if flags.contains(.unreadable) { out.unreadableDirectories += 1 }
+                    stack.append(child)
+                }
+            }
+        }
+        return out
+    }
+
     public static func summarize(store: NodeStore, root: Int32,
                                  usePhysicalSize: Bool = true,
                                  largestCount: Int = 300,

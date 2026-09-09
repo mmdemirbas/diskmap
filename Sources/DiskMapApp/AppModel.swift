@@ -892,6 +892,44 @@ final class AppModel: ObservableObject {
     /// The volumes the chosen targets actually live on, in the order the
     /// targets were given. One capacity bar per disk being measured: showing a
     /// single disk's bar while measuring two is a screen that misstates itself.
+    /// The breakdown for one volume, built from the roots that live on it.
+    ///
+    /// Scanning two disks at once produced one `reconciliation` for the whole
+    /// scan, and every capacity screen showed it — so the bytes measured on one
+    /// disk were compared against the used figure of another. Two unrelated
+    /// quantities in one sentence, presented as an accounting.
+    ///
+    /// Computed when a breakdown is opened rather than kept up to date: it is a
+    /// walk, and nobody is looking at it most of the time.
+    func reconciliation(for volume: VolumeInfo) -> Reconciliation? {
+        guard let tree else { return nil }
+        let mine = tree.roots.filter { path in
+            volumeMountPoint(path).map(RootSet.physicalDisk) == volume.path
+        }
+        guard !mine.isEmpty else { return nil }
+
+        let totals = tree.withStore { store -> SubtreeTotals in
+            // One root: node zero is that folder. Several: node zero is
+            // synthetic and each root is a child of it.
+            guard store.isMultiRoot else { return Aggregate.totals(store: store, root: 0) }
+            return mine.reduce(SubtreeTotals()) { running, path in
+                guard let node = store.find(path: path) else { return running }
+                return running + Aggregate.totals(store: store, root: node)
+            }
+        }
+        return Reconciliation(
+            volumeUsed: volume.used,
+            scannedPhysical: totals.physical,
+            datalessLogical: totals.datalessLogical,
+            hardlinkDuplicateLogical: totals.hardlinkDuplicateLogical,
+            unreadableDirectories: totals.unreadableDirectories,
+            snapshotCount: Snapshots.list(volume: volume.path).count,
+            // Whole-volume only when the roots on *this* volume cover it.
+            scanRootIsWholeVolume: RootSet.coversWholeVolume(mine),
+            datalessCount: totals.datalessCount,
+            hardlinkDuplicateCount: totals.hardlinkDuplicateCount)
+    }
+
     var targetedVolumes: [VolumeInfo] {
         let paths = tree?.roots ?? scanTargets
         var seen = Set<String>()
