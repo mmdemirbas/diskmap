@@ -65,7 +65,7 @@ final class MapModule: ObservableObject {
     ///
     /// Written down as it changes: a layout you have to rebuild every morning
     /// is a layout nobody builds.
-    @Published var dock = DockLayout.decoded(
+    @Published var dock = PaneDock.decoded(
         from: UserDefaults.standard.string(forKey: dockStorageKey) ?? "") {
         didSet {
             guard dockLayoutPersists else { return }

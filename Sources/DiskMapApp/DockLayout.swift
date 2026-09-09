@@ -89,8 +89,8 @@ enum DockEdge: String, Codable, CaseIterable {
 /// Indirect because a split holds two more of these. Codable so a layout the
 /// user built survives quitting the app — a layout you have to rebuild every
 /// morning is a layout nobody builds.
-indirect enum DockNode: Codable, Equatable, Identifiable {
-    case leaf(id: UUID, panes: [PaneKind], active: PaneKind)
+indirect enum DockNode<Item: DockItem>: Codable, Equatable, Identifiable {
+    case leaf(id: UUID, panes: [Item], active: Item)
     case split(id: UUID, axis: DockAxis, ratio: Double, first: DockNode, second: DockNode)
 
     var id: UUID {
@@ -100,11 +100,11 @@ indirect enum DockNode: Codable, Equatable, Identifiable {
         }
     }
 
-    static func leaf(_ panes: [PaneKind]) -> DockNode {
+    static func leaf(_ panes: [Item]) -> DockNode {
         .leaf(id: UUID(), panes: panes, active: panes[0])
     }
 
-    var panes: [PaneKind] {
+    var panes: [Item] {
         switch self {
         case .leaf(_, let panes, _): panes
         case .split(_, _, _, let first, let second): first.panes + second.panes
@@ -120,31 +120,28 @@ indirect enum DockNode: Codable, Equatable, Identifiable {
 /// past the end has to stop rather than make a rectangle of zero width. All of
 /// that is testable without drawing anything, and none of it is testable once
 /// it is tangled up in a drag gesture.
-struct DockLayout: Codable, Equatable {
-    private(set) var root: DockNode
+struct DockLayout<Item: DockItem>: Codable, Equatable {
+    private(set) var root: DockNode<Item>
 
-    /// The layout the app opens with, which is the screen it had before there
-    /// was a dock: pictures on the left, tables on the right, each group's
-    /// members as tabs. Nothing is lost by not touching it.
-    static var standard: DockLayout {
-        DockLayout(root: .split(id: UUID(), axis: .horizontal, ratio: 0.58,
-                                first: .leaf([.treemap, .sunburst, .icicle]),
-                                second: .leaf([.contents, .largest, .types, .copies])))
-    }
+    /// The arrangement this kind of item opens with, before the user has
+    /// moved anything. Each kind decides its own, because the sensible first
+    /// screen for three pictures and four tables is not the sensible first
+    /// screen for a window full of tools.
+    static var standard: DockLayout { DockLayout(root: Item.standardLayout) }
 
-    init(root: DockNode) { self.root = root }
+    init(root: DockNode<Item>) { self.root = root }
 
     // MARK: - Reading it
 
-    var panes: [PaneKind] { root.panes }
-    func contains(_ kind: PaneKind) -> Bool { panes.contains(kind) }
-    var missing: [PaneKind] { PaneKind.allCases.filter { !contains($0) } }
+    var panes: [Item] { root.panes }
+    func contains(_ kind: Item) -> Bool { panes.contains(kind) }
+    var missing: [Item] { Item.allCases.filter { !contains($0) } }
 
     /// Every group, in the order they appear. The drag machinery needs these to
     /// know what it can be dropped on.
-    var leaves: [(id: UUID, panes: [PaneKind], active: PaneKind)] {
-        var out: [(UUID, [PaneKind], PaneKind)] = []
-        func walk(_ node: DockNode) {
+    var leaves: [(id: UUID, panes: [Item], active: Item)] {
+        var out: [(UUID, [Item], Item)] = []
+        func walk(_ node: DockNode<Item>) {
             switch node {
             case .leaf(let id, let panes, let active): out.append((id, panes, active))
             case .split(_, _, _, let a, let b): walk(a); walk(b)
@@ -154,14 +151,14 @@ struct DockLayout: Codable, Equatable {
         return out.map { (id: $0.0, panes: $0.1, active: $0.2) }
     }
 
-    func leafHolding(_ kind: PaneKind) -> UUID? {
+    func leafHolding(_ kind: Item) -> UUID? {
         leaves.first { $0.panes.contains(kind) }?.id
     }
 
     // MARK: - Changing it
 
     /// Brings a pane forward within its group.
-    mutating func activate(_ kind: PaneKind) {
+    mutating func activate(_ kind: Item) {
         root = Self.map(root) { node in
             guard case .leaf(let id, let panes, _) = node, panes.contains(kind) else { return node }
             return .leaf(id: id, panes: panes, active: kind)
@@ -171,9 +168,9 @@ struct DockLayout: Codable, Equatable {
     /// Adds a pane that is not on screen, next to its own kind: a table joins
     /// the tables. Falling back to the first group rather than refusing, since
     /// a menu item that does nothing is worse than one that puts it somewhere.
-    mutating func add(_ kind: PaneKind) {
+    mutating func add(_ kind: Item) {
         guard !contains(kind) else { return activate(kind) }
-        let host = leaves.first { $0.panes.contains { $0.isPicture == kind.isPicture } }
+        let host = leaves.first { $0.panes.contains { $0.affinity == kind.affinity } }
             ?? leaves.first
         guard let host else { return }
         insert(kind, into: host.id, edge: nil)
@@ -187,15 +184,15 @@ struct DockLayout: Codable, Equatable {
     /// that has since disappeared, in a layout small enough that removing the
     /// dragged pane empties it, falls back to the standard arrangement — which
     /// already holds that pane.
-    mutating func insert(_ kind: PaneKind, into leafID: UUID, edge: DockEdge?) {
+    mutating func insert(_ kind: Item, into leafID: UUID, edge: DockEdge?) {
         guard !contains(kind) else { return activate(kind) }
         root = Self.map(root) { node in
             guard case .leaf(let id, let panes, let active) = node, id == leafID else { return node }
             guard let edge else {
                 return .leaf(id: id, panes: panes + [kind], active: kind)
             }
-            let existing = DockNode.leaf(id: id, panes: panes, active: active)
-            let fresh = DockNode.leaf([kind])
+            let existing = DockNode<Item>.leaf(id: id, panes: panes, active: active)
+            let fresh = DockNode<Item>.leaf([kind])
             return .split(id: UUID(), axis: edge.axis, ratio: 0.5,
                           first: edge.takesFirstPlace ? fresh : existing,
                           second: edge.takesFirstPlace ? existing : fresh)
@@ -205,7 +202,16 @@ struct DockLayout: Codable, Equatable {
     /// Takes a pane off the screen. A group left with nothing in it goes with
     /// it, and so does the split that held the two of them — otherwise the
     /// layout keeps a divider with an empty rectangle behind it.
-    mutating func remove(_ kind: PaneKind) {
+    mutating func remove(_ kind: Item) {
+        // Some items are the screen rather than something on it — the map is
+        // the scan, and a window with nothing in it is not a layout anyone
+        // asked for. They can be moved anywhere and not taken away.
+        guard kind.isClosable else { return }
+        detach(kind)
+    }
+
+    /// Takes a pane out of the layout without asking whether it may be closed.
+    private mutating func detach(_ kind: Item) {
         root = Self.prune(Self.map(root) { node in
             guard case .leaf(let id, let panes, let active) = node,
                   panes.contains(kind) else { return node }
@@ -217,14 +223,17 @@ struct DockLayout: Codable, Equatable {
 
     /// Drags a pane somewhere else. Removing first means a pane is never in two
     /// places, which is the invariant that makes every other operation simple.
-    mutating func move(_ kind: PaneKind, to leafID: UUID, edge: DockEdge?) {
+    mutating func move(_ kind: Item, to leafID: UUID, edge: DockEdge?) {
         // Dropping a lone pane back onto its own group would take the group
         // away and put it back somewhere else, which is a lot of movement for
         // a gesture that meant nothing.
         if let source = leafHolding(kind), source == leafID,
            leaves.first(where: { $0.id == leafID })?.panes.count == 1 { return }
         let survivors = leaves
-        remove(kind)
+        // Deliberately not `remove`: that one refuses to take an item off the
+        // screen, and this is not taking it off the screen, it is picking it
+        // up. Moving the map is allowed; closing it is not.
+        detach(kind)
         // The group that was dropped onto may have been the one that just
         // vanished, in which case there is nowhere to put this back.
         guard leaves.contains(where: { $0.id == leafID }) else {
@@ -251,20 +260,21 @@ struct DockLayout: Codable, Equatable {
     // MARK: - Walking the tree
 
     /// Rebuilds the tree, applying `body` to every node bottom-up.
-    private static func map(_ node: DockNode,
-                            _ body: (DockNode) -> DockNode) -> DockNode {
+    private static func map(_ node: DockNode<Item>,
+                            _ body: (DockNode<Item>) -> DockNode<Item>) -> DockNode<Item> {
         switch node {
         case .leaf:
             return body(node)
         case .split(let id, let axis, let ratio, let first, let second):
-            let rebuilt = DockNode.split(id: id, axis: axis, ratio: ratio,
-                                         first: map(first, body), second: map(second, body))
+            let rebuilt = DockNode<Item>.split(id: id, axis: axis, ratio: ratio,
+                                               first: map(first, body),
+                                               second: map(second, body))
             return body(rebuilt)
         }
     }
 
     /// Drops empty groups, and collapses any split left with one child.
-    private static func prune(_ node: DockNode) -> DockNode? {
+    private static func prune(_ node: DockNode<Item>) -> DockNode<Item>? {
         switch node {
         case .leaf(_, let panes, _):
             return panes.isEmpty ? nil : node
@@ -288,9 +298,9 @@ struct DockLayout: Codable, Equatable {
     /// trusting it, every invariant the operations rely on is re-established —
     /// one place per pane, an active tab that is really in its group, a ratio
     /// that leaves both sides visible — and anything left over is dropped.
-    static func sanitised(_ node: DockNode) -> DockLayout {
-        var seen: Set<PaneKind> = []
-        func clean(_ node: DockNode) -> DockNode? {
+    static func sanitised(_ node: DockNode<Item>) -> DockLayout {
+        var seen: Set<Item> = []
+        func clean(_ node: DockNode<Item>) -> DockNode<Item>? {
             switch node {
             case .leaf(let id, let panes, let active):
                 let unique = panes.filter { seen.insert($0).inserted }
@@ -314,7 +324,7 @@ struct DockLayout: Codable, Equatable {
 
     static func decoded(from json: String) -> DockLayout {
         guard !json.isEmpty, let data = json.data(using: .utf8),
-              let node = try? JSONDecoder().decode(DockNode.self, from: data) else {
+              let node = try? JSONDecoder().decode(DockNode<Item>.self, from: data) else {
             return .standard
         }
         return sanitised(node)
@@ -366,3 +376,55 @@ enum DockGeometry {
         }
     }
 }
+
+/// What a dock can hold.
+///
+/// The layout algebra never cared what a pane *was* — it moves opaque things
+/// between rectangles — and writing it against one enum was what stopped the
+/// window from using it. Two docks now share it: the panes inside the map, and
+/// the tools inside the window.
+protocol DockItem: Hashable, Codable, Identifiable, CaseIterable {
+    /// What the tab says.
+    var key: L10n.K { get }
+    var icon: String { get }
+    /// Which items belong beside each other when one is added from a menu
+    /// rather than dropped somewhere. A table joins the tables.
+    var affinity: Int { get }
+    /// Whether it can be taken off the screen at all. It can always be moved.
+    var isClosable: Bool { get }
+    /// The arrangement before the user has moved anything.
+    static var standardLayout: DockNode<Self> { get }
+}
+
+extension PaneKind: DockItem {
+    var affinity: Int { isPicture ? 0 : 1 }
+    /// Every pane is a view of the map and none of them is the map, so any of
+    /// them can be closed and added back from the `+`.
+    var isClosable: Bool { true }
+
+    /// The screen the map had before there was a dock: pictures on the left,
+    /// tables on the right, each group's members as tabs. Nothing is lost by
+    /// not touching it.
+    static var standardLayout: DockNode<PaneKind> {
+        .split(id: UUID(), axis: .horizontal, ratio: 0.58,
+               first: .leaf([.treemap, .sunburst, .icicle]),
+               second: .leaf([.contents, .largest, .types, .copies]))
+    }
+}
+
+extension ModuleTab: DockItem {
+    /// The map produces the scan the rest read, so it keeps its own company.
+    var affinity: Int { self == .map || self == .home ? 0 : 1 }
+
+    /// One row of tools, as tabs, the way they were before they could be
+    /// dragged apart. Nobody wants a split window on first launch; they want
+    /// the one they get by dragging a tab to an edge.
+    static var standardLayout: DockNode<ModuleTab> {
+        .leaf(id: UUID(), panes: [.home, .map], active: .home)
+    }
+}
+
+/// The two docks, named so the rest of the app does not spell out a generic
+/// parameter to say something as ordinary as "the layout".
+typealias PaneDock = DockLayout<PaneKind>
+typealias ToolDock = DockLayout<ModuleTab>

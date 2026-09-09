@@ -50,7 +50,7 @@ struct DockView: View {
 
     // MARK: - The tree
 
-    @ViewBuilder private func node(_ node: DockNode) -> some View {
+    @ViewBuilder private func node(_ node: DockNode<PaneKind>) -> some View {
         switch node {
         case .leaf(let id, let panes, let active):
             group(id: id, panes: panes, active: active)

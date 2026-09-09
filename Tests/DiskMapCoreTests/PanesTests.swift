@@ -90,7 +90,7 @@ final class PanesTests: XCTestCase {
     /// same pane in two places, which is the invariant every other operation
     /// relies on.
     func testADropOnAGroupThatIsGoneDoesNotDuplicateThePane() {
-        var layout = DockLayout(root: .leaf([.treemap]))
+        var layout = PaneDock(root: .leaf([.treemap]))
         layout.move(.treemap, to: UUID(), edge: nil)
 
         let everywhere = layout.leaves.flatMap(\.panes)
@@ -134,9 +134,9 @@ final class PanesTests: XCTestCase {
 /// has to exist in exactly one place, and a divider dragged to the end must
 /// stop rather than leave a rectangle nobody can grab.
 final class DockLayoutTests: XCTestCase {
-    private func standard() -> DockLayout { .standard }
+    private func standard() -> PaneDock { .standard }
 
-    private func leafID(_ layout: DockLayout, holding kind: PaneKind) -> UUID {
+    private func leafID(_ layout: PaneDock, holding kind: PaneKind) -> UUID {
         layout.leafHolding(kind)!
     }
 
@@ -178,7 +178,7 @@ final class DockLayoutTests: XCTestCase {
 
     /// The side the pane lands on is the side it was dropped on.
     func testTheEdgeDecidesWhichSideItLandsOn() {
-        var layout = DockLayout(root: .leaf([.contents]))
+        var layout = PaneDock(root: .leaf([.contents]))
         let only = leafID(layout, holding: .contents)
         layout.insert(.treemap, into: only, edge: .leading)
 
@@ -235,7 +235,7 @@ final class DockLayoutTests: XCTestCase {
     /// Dragging a lone pane back onto its own group means nothing, and must not
     /// take the group away and rebuild it somewhere else.
     func testDroppingALonePaneOnItsOwnGroupChangesNothing() {
-        var layout = DockLayout(root: .split(id: UUID(), axis: .horizontal, ratio: 0.5,
+        var layout = PaneDock(root: .split(id: UUID(), axis: .horizontal, ratio: 0.5,
                                              first: .leaf([.treemap]),
                                              second: .leaf([.contents])))
         let before = layout
@@ -244,7 +244,7 @@ final class DockLayoutTests: XCTestCase {
     }
 
     func testMovingTheLastPaneOutOfAGroupStillLandsSomewhere() {
-        var layout = DockLayout(root: .split(id: UUID(), axis: .horizontal, ratio: 0.5,
+        var layout = PaneDock(root: .split(id: UUID(), axis: .horizontal, ratio: 0.5,
                                              first: .leaf([.treemap]),
                                              second: .leaf([.contents])))
         layout.move(.treemap, to: leafID(layout, holding: .contents), edge: nil)
@@ -297,7 +297,7 @@ final class DockLayoutTests: XCTestCase {
         let tables = leafID(layout, holding: .contents)
         layout.move(.sunburst, to: tables, edge: .bottom)
 
-        XCTAssertEqual(DockLayout.decoded(from: layout.encoded), layout)
+        XCTAssertEqual(PaneDock.decoded(from: layout.encoded), layout)
     }
 
     func testNonsenseOnDiskFallsBackToSomethingDrawable() {
@@ -305,8 +305,8 @@ final class DockLayoutTests: XCTestCase {
         // identifiers for its groups, so two standard layouts are the same
         // screen and not the same object.
         for stored in ["{ not json", "", "null", "[]"] {
-            let layout = DockLayout.decoded(from: stored)
-            XCTAssertEqual(layout.panes, DockLayout.standard.panes, stored)
+            let layout = PaneDock.decoded(from: stored)
+            XCTAssertEqual(layout.panes, PaneDock.standard.panes, stored)
             XCTAssertEqual(layout.leaves.count, 2, stored)
         }
     }
@@ -358,12 +358,13 @@ final class DockLayoutTests: XCTestCase {
     /// version of the app could have written anything into it. Rather than
     /// trusting it, the invariants are re-established on the way in.
     func testAStoredLayoutIsRepairedRatherThanTrusted() {
-        let doubled = DockNode.split(id: UUID(), axis: .horizontal, ratio: 9,
-                                     first: .leaf(id: UUID(), panes: [.treemap, .treemap],
-                                                  active: .copies),
-                                     second: .leaf(id: UUID(), panes: [.treemap],
-                                                   active: .treemap))
-        let repaired = DockLayout.sanitised(doubled)
+        let doubled = DockNode<PaneKind>.split(id: UUID(), axis: .horizontal, ratio: 9,
+                                               first: .leaf(id: UUID(),
+                                                            panes: [.treemap, .treemap],
+                                                            active: .copies),
+                                               second: .leaf(id: UUID(), panes: [.treemap],
+                                                             active: .treemap))
+        let repaired = PaneDock.sanitised(doubled)
 
         XCTAssertEqual(repaired.panes, [.treemap], "a pane was left in two places")
         XCTAssertEqual(repaired.leaves.first?.active, .treemap,

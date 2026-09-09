@@ -27,7 +27,7 @@ enum OffscreenRenderer {
         // starts from the standard arrangement rather than from whatever that
         // person happens to have dragged their panes into.
         dockLayoutPersists = false
-        model.map.dock = .standard
+        model.map.dock = PaneDock.standard
         if parts.count >= 6, let mode = Appearance(rawValue: parts[5]) { model.appearance = mode }
         if parts.count >= 7, let lang = L10n.Language(rawValue: parts[6]) {
             L10n.shared.preference = lang
