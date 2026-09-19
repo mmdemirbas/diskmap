@@ -531,6 +531,77 @@ extension LiveUpdateTests {
         tree.withStore { assertWellFormed($0) }
     }
 
+    /// A second link to a file the scan already counted. The walk gives the
+    /// bytes to the first link it meets and flags the rest; a relist that
+    /// re-appends the flagged link from the listing, where it is just a
+    /// file, would count the bytes again — pnpm lays a whole node_modules
+    /// out as hard links, so this is not exotic.
+    ///
+    /// Which link keeps the bytes is whichever the walk met first, and two
+    /// walks need not agree, so the check is on what does not depend on it:
+    /// the same files, the same logical size on every one of them, and the
+    /// same physical total at the root.
+    func testARelistDoesNotCountAHardLinkTwice() throws {
+        try write("data/big.bin", 50_000)
+        try write("data/other.bin", 1_000)
+        try fm.createDirectory(at: root.appendingPathComponent("links"), withIntermediateDirectories: true)
+        try fm.linkItem(at: root.appendingPathComponent("data/big.bin"),
+                        to: root.appendingPathComponent("links/big-link.bin"))
+        let tree = self.tree()
+        func agree(_ why: String) {
+            var oracle = ScanOptions(rootPath: root.path); oracle.threadCount = 2
+            let fresh = reachable(DiskScanner().scan(oracle).store)
+            let live = tree.withStore { reachable($0) }
+            XCTAssertEqual(Set(live.keys), Set(fresh.keys), why)
+            for (k, e) in live { XCTAssertEqual(e.logical, fresh[k]?.logical, "\(why): \(k)") }
+            XCTAssertEqual(live[root.path]?.physical, fresh[root.path]?.physical, "\(why): the bytes on disk")
+        }
+        agree("before anything moved")
+
+        // The folder holding the flagged link is rebuilt.
+        try write("links/arrived.bin", 10)
+        tree.flushNow(events: [RawPath(root.appendingPathComponent("links/arrived.bin").path)])
+        agree("after the link's folder was rebuilt")
+
+        // A new link to a counted file appears in a folder the store knows.
+        try fm.linkItem(at: root.appendingPathComponent("data/big.bin"),
+                        to: root.appendingPathComponent("data/again.bin"))
+        tree.flushNow(events: [RawPath(root.appendingPathComponent("data/again.bin").path)])
+        agree("after a new link appeared")
+
+        // And in a folder that appears with the link inside it.
+        try fm.createDirectory(at: root.appendingPathComponent("fresh"), withIntermediateDirectories: true)
+        try fm.linkItem(at: root.appendingPathComponent("data/big.bin"),
+                        to: root.appendingPathComponent("fresh/third.bin"))
+        tree.flushNow(events: [RawPath(root.appendingPathComponent("fresh").path),
+                               RawPath(root.appendingPathComponent("fresh/third.bin").path)])
+        agree("after a folder with a link appeared")
+
+        // The link that keeps the bytes goes; another must take them over,
+        // since the file is still on disk under its other names.
+        let links = ["data/big.bin", "data/again.bin", "links/big-link.bin", "fresh/third.bin"]
+        let keeper = try XCTUnwrap(tree.withStore { store in
+            links.first { store.find(path: root.appendingPathComponent($0).path)
+                .map { !store.flagSet($0).contains(.hardlinkDuplicate) } == true }
+        })
+        try fm.removeItem(at: root.appendingPathComponent(keeper))
+        tree.flushNow(events: [RawPath(root.appendingPathComponent(keeper).path)])
+        agree("after the keeper \(keeper) was deleted")
+        XCTAssertEqual(tree.withStore { $0.totalPhysical[0] }, 53_248 + 4_096 + 4_096,
+                       "the bytes are still on disk under the other names")
+
+        // And when the keeper goes with its whole folder.
+        let keeper2 = try XCTUnwrap(tree.withStore { store in
+            links.first { store.find(path: root.appendingPathComponent($0).path)
+                .map { !store.flagSet($0).contains(.hardlinkDuplicate) } == true }
+        })
+        let folder = root.appendingPathComponent(keeper2).deletingLastPathComponent()
+        let inside = fm.enumerator(at: folder, includingPropertiesForKeys: nil)!.compactMap { $0 as? URL }
+        try fm.removeItem(at: folder)
+        tree.flushNow(events: inside.map { RawPath($0.path) } + [RawPath(folder.path)])
+        agree("after the keeper's folder \(folder.lastPathComponent) was deleted")
+    }
+
     /// A folder and one of its subfolders, both known, both changed within
     /// one debounce window. The parent's relist keeps the child's subtree as
     /// it was, so the child's own relist must still happen.

@@ -109,12 +109,15 @@ public struct ScanStats: Sendable {
 }
 
 public struct ScanResult: Sendable {
+    /// Which node keeps each multi-link inode's bytes, for the live update.
+    public let inodes: InodeSet
     public init(store: NodeStore, stats: ScanStats, roots: [String],
-                rejectedRoots: [RejectedRoot]) {
+                rejectedRoots: [RejectedRoot], inodes: InodeSet = InodeSet()) {
         self.store = store
         self.stats = stats
         self.roots = roots
         self.rejectedRoots = rejectedRoots
+        self.inodes = inodes
     }
 
     public let store: NodeStore
@@ -148,13 +151,96 @@ public struct ScanProgress: Sendable {
 /// where there are two - and zero the second one's bytes. Measured on two
 /// 20 MB images, each holding six hardlinked pairs: 17 extra links reported
 /// where there were 12.
-final class InodeSet: @unchecked Sendable {
+/// Inodes with more than one link, and for each the node that keeps its
+/// bytes. Small: only files the volume reports with more than one link are
+/// ever entered. Kept after the scan, because a live update meets the same
+/// links again — a rebuilt folder lists a flagged link as a plain file, and
+/// a folder that appears may hold a link to bytes the tree already counts.
+public final class InodeSet: @unchecked Sendable {
     private struct Key: Hashable { let device: Int32; let id: UInt64 }
     private let lock = NSLock()
-    private var seen = Set<Key>()
+    /// The keeper's node, or -1 between the sighting and the append.
+    private var keeper: [Key: Int32] = [:]
+    /// The same the other way, so a node being removed can be asked
+    /// whether it was keeping anything.
+    private var keeperOf: [Int32: Key] = [:]
+    /// Every node met as a link to the inode, keeper included, so another
+    /// can take the bytes over when the keeper goes. Ids go stale as folders
+    /// are rebuilt; the caller checks each is still shown before using it.
+    private var links: [Key: [Int32]] = [:]
+    /// A walk into a store of its own — a folder that appeared, scanned
+    /// before being grafted into the tree — answers sightings against the
+    /// tree's table too, so a link to bytes the tree already counts is
+    /// flagged rather than counted again. Its own entries carry local ids
+    /// until `absorb` moves them over.
+    private let parent: InodeSet?
+
+    public init(parent: InodeSet? = nil) { self.parent = parent }
+
     func isFirstSighting(onDevice device: Int32, _ id: UInt64) -> Bool {
+        if let parent, parent.keeper(onDevice: device, id) != nil { return false }
         lock.lock(); defer { lock.unlock() }
-        return seen.insert(Key(device: device, id: id)).inserted
+        let key = Key(device: device, id: id)
+        guard keeper[key] == nil else { return false }
+        keeper[key] = -1
+        return true
+    }
+
+    /// Takes over a local table's keepers, their ids moved by `offset` to
+    /// where the graft put the nodes.
+    func absorb(_ local: InodeSet, offset: Int32) {
+        local.lock.lock()
+        let entries = local.keeper
+        local.lock.unlock()
+        local.lock.lock()
+        let localLinks = local.links
+        local.lock.unlock()
+        lock.lock(); defer { lock.unlock() }
+        for (key, node) in entries where node >= 0 {
+            keeper[key] = node + offset
+            keeperOf[node + offset] = key
+        }
+        for (key, nodes) in localLinks {
+            links[key, default: []] += nodes.map { $0 + offset }
+        }
+    }
+
+    /// The node that keeps the bytes, once it has an id.
+    func setKeeper(onDevice device: Int32, _ id: UInt64, node: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        let key = Key(device: device, id: id)
+        if let old = keeper[key], old >= 0 { keeperOf[old] = nil }
+        keeper[key] = node
+        keeperOf[node] = key
+        links[key, default: []].append(node)
+    }
+
+    /// A node met as a link to the inode that does not keep its bytes.
+    func noteLink(onDevice device: Int32, _ id: UInt64, node: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        links[Key(device: device, id: id), default: []].append(node)
+    }
+
+    /// The node is gone. If it kept an inode's bytes, hands them to the
+    /// first other link `stillShown` accepts, returning that node so the
+    /// caller can restore its size, or nil when no link is left.
+    func keeperRemoved(_ node: Int32, stillShown: (Int32) -> Bool) -> Int32? {
+        lock.lock(); defer { lock.unlock() }
+        guard let key = keeperOf[node] else { return nil }
+        keeperOf[node] = nil
+        let remaining = (links[key] ?? []).filter { $0 != node && stillShown($0) }
+        links[key] = remaining
+        guard let next = remaining.first else { keeper[key] = nil; return nil }
+        keeper[key] = next
+        keeperOf[next] = key
+        return next
+    }
+
+    /// The node keeping this inode's bytes, or nil if the inode was never
+    /// met with more than one link.
+    func keeper(onDevice device: Int32, _ id: UInt64) -> Int32? {
+        lock.lock(); defer { lock.unlock() }
+        return keeper[Key(device: device, id: id)]
     }
 }
 
@@ -254,7 +340,8 @@ public final class DiskScanner {
     /// found on disk — so the root normalisation `scan` does, which works in
     /// text and answers "is this a folder, is it inside another target", would
     /// be both lossy and redundant here.
-    public func scan(subtree root: RawPath, options rawOptions: ScanOptions) -> ScanResult {
+    public func scan(subtree root: RawPath, options rawOptions: ScanOptions,
+                     inodes known: InodeSet? = nil) -> ScanResult {
         let store = NodeStore()
         store.roots = [root.display]
         let capacity = rawOptions.expectedNodes ?? 4096
@@ -269,14 +356,16 @@ public final class DiskScanner {
                          mtime: Int32(truncatingIfNeeded: rootStat.st_mtimespec.tv_sec),
                          flags: .directory)
         }
+        let inodes = InodeSet(parent: known)
         var stats = scanOne(root: root, into: store, hostNode: host, options: rawOptions,
-                            inodes: InodeSet(), estimate: 0, carry: Carry(), progress: nil)
+                            inodes: inodes, estimate: 0, carry: Carry(), progress: nil)
         store.endInterning()
         store.aggregate()
         stats.cancelled = cancelToken.isCancelled
         stats.totalLogical = store.totalLogical[0]
         stats.totalPhysical = store.totalPhysical[0]
-        return ScanResult(store: store, stats: stats, roots: store.roots, rejectedRoots: [])
+        return ScanResult(store: store, stats: stats, roots: store.roots, rejectedRoots: [],
+                          inodes: inodes)
     }
 
     public static func isVolumeRoot(_ path: String) -> Bool {
@@ -407,7 +496,7 @@ public final class DiskScanner {
                               ["count": .int(Int64(stats.unreadableDirectories))])
         }
         return ScanResult(store: store, stats: stats, roots: normalized.roots,
-                          rejectedRoots: normalized.rejected)
+                          rejectedRoots: normalized.rejected, inodes: inodes)
     }
 
     /// Walks one root into an existing store, beneath a node the caller made.
@@ -477,7 +566,8 @@ public final class DiskScanner {
                     }
 
                     var dirStat = stat()
-                    if fstat(fd, &dirStat) == 0, dirStat.st_dev != rootDev, !options.followMountPoints {
+                    let onDevice = fstat(fd, &dirStat) == 0 ? dirStat.st_dev : rootDev
+                    if onDevice != rootDev, !options.followMountPoints {
                         close(fd)
                         lock.lock()
                         store.flags[Int(task.node)] |= NodeFlags.mountPoint.rawValue
@@ -521,7 +611,7 @@ public final class DiskScanner {
                     var hardlinkLogical: Int64 = 0
                     for i in pending.indices where pending[i].linkCount > 1
                         && !pending[i].flags.contains(.directory) {
-                        guard !inodes.isFirstSighting(onDevice: rootDev, pending[i].fileID) else {
+                        guard !inodes.isFirstSighting(onDevice: onDevice, pending[i].fileID) else {
                             continue
                         }
                         pending[i].flags.insert(.hardlinkDuplicate)
@@ -540,10 +630,17 @@ public final class DiskScanner {
                     nameBuf.withUnsafeBufferPointer { nb in
                         let nbBase = nb.baseAddress!
                         for p in pending {
-                            _ = store.append(name: nbBase + p.nameOffset, nameLength: p.nameLength,
-                                             parent: task.node, logical: p.logical,
-                                             physical: p.physical,
-                                             mtime: p.mtime, flags: p.flags)
+                            let id = store.append(name: nbBase + p.nameOffset, nameLength: p.nameLength,
+                                                  parent: task.node, logical: p.logical,
+                                                  physical: p.physical,
+                                                  mtime: p.mtime, flags: p.flags)
+                            if p.linkCount > 1, !p.flags.contains(.directory) {
+                                if p.flags.contains(.hardlinkDuplicate) {
+                                    inodes.noteLink(onDevice: onDevice, p.fileID, node: id)
+                                } else {
+                                    inodes.setKeeper(onDevice: onDevice, p.fileID, node: id)
+                                }
+                            }
                             if p.flags.contains(.directory) {
                                 stats.directories += 1
                             } else if p.flags.contains(.symlink) {

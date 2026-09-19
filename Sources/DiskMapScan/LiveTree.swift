@@ -104,12 +104,21 @@ public final class LiveTree: @unchecked Sendable {
 
     public private(set) var rejectedRoots: [RejectedRoot]
 
+    /// Which node keeps each multi-link inode's bytes. The walk gives a
+    /// file's bytes to the first link it meets and flags the rest; a relist
+    /// sees a flagged link as a plain file in the listing, and a folder that
+    /// appears may hold a link to bytes the tree already counts. This table
+    /// is how the relist knows. Consulted under the store lock, since who
+    /// keeps what is part of what the tree says.
+    private let inodes: InodeSet
+
     public init(result: ScanResult) {
         self.store = result.store
         self.stats = result.stats
         self.roots = result.roots
         self.rootPaths = result.roots.map(RawPath.init)
         self.rejectedRoots = result.rejectedRoots
+        self.inodes = result.inodes
     }
 
     /// All reads of the tree go through here; live updates mutate under the same lock.
@@ -352,6 +361,22 @@ public final class LiveTree: @unchecked Sendable {
         var physical: Int64
         var mtime: Int32
         var flags: NodeFlags
+        var fileID: UInt64
+        var linkCount: UInt32
+        var isMultiLinkFile: Bool {
+            linkCount > 1 && !flags.contains(.directory) && !flags.contains(.symlink)
+        }
+    }
+
+    /// A node the tree still shows: not removed, and under nothing removed.
+    /// The caller holds the lock.
+    private func isLive(_ node: Int32) -> Bool {
+        var n = node
+        while n >= 0 {
+            if store.flagSet(n).contains(.removed) { return false }
+            n = store.parent[Int(n)]
+        }
+        return true
     }
 
     /// Rebuilds one directory's child list in place. Returns true if anything moved.
@@ -393,6 +418,8 @@ public final class LiveTree: @unchecked Sendable {
             default: return false
             }
         }
+        var dirStat = stat()
+        let device: Int32 = fstat(fd, &dirStat) == 0 ? dirStat.st_dev : 0
         var entries: [DirEntry] = []
         _ = BulkReader().enumerate(dirFD: fd) { e in
             var fl = NodeFlags()
@@ -403,13 +430,14 @@ public final class LiveTree: @unchecked Sendable {
             entries.append(DirEntry(
                 name: Array(UnsafeRawBufferPointer(start: e.name, count: e.nameLen)),
                 logical: e.logicalSize, physical: e.isDataless ? 0 : e.physicalSize,
-                mtime: Int32(truncatingIfNeeded: e.mtime), flags: fl))
+                mtime: Int32(truncatingIfNeeded: e.mtime), flags: fl,
+                fileID: e.fileID, linkCount: e.linkCount))
         }
         close(fd)
 
         // Only genuinely new subdirectories need scanning; the rest keep the
         // subtree they already have.
-        var freshSubtrees: [[UInt8]: NodeStore] = [:]
+        var freshSubtrees: [[UInt8]: ScanResult] = [:]
         for e in entries where e.flags.contains(.directory)
             && !e.flags.contains(.symlink) && !knownFolders.contains(e.name) {
             var options = ScanOptions(rootPath: path.display)
@@ -423,8 +451,30 @@ public final class LiveTree: @unchecked Sendable {
             // And it needs no thread pool. Twelve threads to read one empty
             // directory is most of the cost of reading it.
             options.threadCount = 2
+            // Against the tree's own inode table, so a link in here to bytes
+            // the tree already counts is flagged and not counted again.
             freshSubtrees[e.name] = DiskScanner().scan(subtree: path.appending(e.name),
-                                                       options: options).store
+                                                       options: options, inodes: inodes)
+        }
+
+        // Where a multi-link file's bytes go, decided in phase C under the
+        // lock. A name already held keeps the state the tree gave it: the
+        // keeper stays the keeper and a flagged link stays flagged, whatever
+        // the listing says, since the listing cannot tell them apart. A new
+        // name is a duplicate if the tree still shows a keeper for its inode,
+        // and becomes the keeper otherwise — after a rename, after the old
+        // keeper was deleted, or for a file that only just gained a link.
+        func settleLinks(_ e: inout DirEntry, existing old: Int32?, device: Int32) {
+            guard e.isMultiLinkFile else { return }
+            if let old, !store.isDirectory(old) {
+                if store.flagSet(old).contains(.hardlinkDuplicate) {
+                    e.flags.insert(.hardlinkDuplicate); e.physical = 0
+                }
+                return
+            }
+            if let keeper = inodes.keeper(onDevice: device, e.fileID), keeper >= 0, isLive(keeper) {
+                e.flags.insert(.hardlinkDuplicate); e.physical = 0
+            }
         }
 
         // Phase C: commit. Re-read the node, since the tree may have moved on.
@@ -458,9 +508,11 @@ public final class LiveTree: @unchecked Sendable {
             // and the report cache keyed on it keeps answering for where the
             // link used to point — including "these two folders are copies".
             var touched = false
-            for e in entries {
+            for var e in entries {
                 let c = existing[e.name]!
                 guard !store.isDirectory(c) else { continue }
+                settleLinks(&e, existing: c, device: device)
+                // The node keeps its id here, so the table already has it.
                 delta += e.logical - store.totalLogical[Int(c)]
                 deltaPhysical += e.physical - store.totalPhysical[Int(c)]
                 if store.mtime[Int(c)] != e.mtime
@@ -492,16 +544,24 @@ public final class LiveTree: @unchecked Sendable {
         // `children(node)`, one contiguous run from `base`; a subtree grafted
         // mid-loop put its nodes inside that run, so the folder listed the
         // subtree's nodes as its own and lost every sibling appended after.
-        var grafts: [(under: Int32, sub: NodeStore)] = []
+        var grafts: [(under: Int32, sub: ScanResult)] = []
 
-        for e in entries {
+        for var e in entries {
             let isDir = e.flags.contains(.directory)
+            settleLinks(&e, existing: existing[e.name], device: device)
             let newID: Int32 = e.name.withUnsafeBytes { nb -> Int32 in
                 store.append(name: nb.baseAddress ?? UnsafeRawPointer(bitPattern: 1)!,
                              nameLength: nb.count, parent: node,
                              logical: isDir ? 0 : e.logical,
                              physical: isDir ? 0 : e.physical,
                              mtime: e.mtime, flags: e.flags)
+            }
+            if e.isMultiLinkFile {
+                if e.flags.contains(.hardlinkDuplicate) {
+                    inodes.noteLink(onDevice: device, e.fileID, node: newID)
+                } else {
+                    inodes.setKeeper(onDevice: device, e.fileID, node: newID)
+                }
             }
             // Came back exactly as it was, under a new id only because the
             // block had to be rebuilt. Anything holding the old one can follow.
@@ -516,24 +576,33 @@ public final class LiveTree: @unchecked Sendable {
                     store.reattach(oldNode: old, to: newID)   // keep the subtree
                     reused.insert(old)
                 } else if let sub = freshSubtrees[e.name] {
-                    store.totalLogical[Int(newID)] = sub.totalLogical[0]
-                    store.totalPhysical[Int(newID)] = sub.totalPhysical[0]
+                    store.totalLogical[Int(newID)] = sub.store.totalLogical[0]
+                    store.totalPhysical[Int(newID)] = sub.store.totalPhysical[0]
                     grafts.append((newID, sub))
                 }
             }
             newLogical += store.totalLogical[Int(newID)]
             newPhysical += store.totalPhysical[Int(newID)]
         }
-        for g in grafts { store.graft(g.sub, under: g.under) }
+        for g in grafts {
+            let base = store.graft(g.sub.store, under: g.under)
+            // The subtree's keepers, at the ids the graft gave them.
+            if base >= 0 { inodes.absorb(g.sub.inodes, offset: base - 1) }
+        }
 
+        var gone: [Int32] = []
         for c in oldChildren where !reused.contains(c) {
             store.flags[Int(c)] |= NodeFlags.removed.rawValue
+            gone.append(c)
         }
         store.firstChild[Int(node)] = base
         store.childCount[Int(node)] = Int32(entries.count)
         store.totalLogical[Int(node)] = newLogical
         store.totalPhysical[Int(node)] = newPhysical
         store.propagate(from: node, logical: newLogical - oldLogical, physical: newPhysical - oldPhysical)
+        // After the folder's own totals are settled, so a link promoted
+        // inside this very folder adds its bytes on top of them.
+        for c in gone { handOverKeptBytes(under: c) }
         changes += 1
         entriesSinceFlush += entries.count
         scannedSinceFlush += freshSubtrees.count
@@ -550,8 +619,29 @@ public final class LiveTree: @unchecked Sendable {
         store.childCount[Int(node)] = 0
         store.flags[Int(node)] |= NodeFlags.removed.rawValue
         store.propagate(from: node, logical: dl, physical: dp)
+        handOverKeptBytes(under: node)
         changes += 1
         return true
+    }
+
+    /// A node has just been marked removed. Every multi-link file under it
+    /// that kept its inode's bytes hands them to another link the tree
+    /// still shows, so a file that is still on disk through another name
+    /// does not drop out of the total. The caller holds the lock; the node
+    /// is already marked, so nothing under it counts as shown.
+    private func handOverKeptBytes(under node: Int32) {
+        var queue = [node]
+        while let n = queue.popLast() {
+            if store.isDirectory(n) {
+                queue.append(contentsOf: store.children(n))
+                continue
+            }
+            guard let next = inodes.keeperRemoved(n, stillShown: isLive) else { continue }
+            let bytes = store.totalPhysical[Int(n)]
+            store.flags[Int(next)] &= ~NodeFlags.hardlinkDuplicate.rawValue
+            store.totalPhysical[Int(next)] = bytes
+            store.propagate(from: next, logical: 0, physical: bytes)
+        }
     }
 
     /// Re-reads one directory right now, without waiting for FSEvents. Used
@@ -577,6 +667,7 @@ public final class LiveTree: @unchecked Sendable {
         store.totalLogical[Int(node)] = 0
         store.totalPhysical[Int(node)] = 0
         store.propagate(from: node, logical: dl, physical: dp)
+        handOverKeptBytes(under: node)
         lastChange = Date()
         changes += 1
     }
