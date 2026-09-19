@@ -95,7 +95,7 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 
 | What | When | By whom |
 |---|---|---|
-| Installed build is current (through `2092f84`, live update on bytes) | 2026-09-19 | install.sh; window seen via CGWindowList |
+| Installed build is current (through `6b1f953`, render-safe drop targets) | 2026-09-19 | install.sh; window seen via CGWindowList |
 | Two windows, two independent sessions | 2026-09-09, again 2026-09-19 | CGWindowList by owner name. System Events `process "DiskMap"` finds the process but not its windows; the owner name is the bundle name, "Disk Map" |
 | Two tools side by side in one window | 2026-09-09 | offscreen render, `tmp/split.png` |
 | The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
