@@ -42,8 +42,8 @@ final class SpaceModule: ObservableObject {
         let thresholds = self.thresholds
         task?.cancel()
         task = Task { [weak self] in
-            let report: MatchProgress.Report = { step in
-                Task { @MainActor [weak self] in
+            let report: MatchProgress.Report = { [weak self] step in
+                Task { @MainActor in
                     guard self?.loading == true else { return }
                     self?.progress = step
                 }

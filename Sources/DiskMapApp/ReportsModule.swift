@@ -68,8 +68,8 @@ final class ReportsModule: ObservableObject {
             // The walk runs off the main thread and reports back onto it. The
             // hop is per message, not per node: the passes throttle their own
             // reporting for exactly this reason.
-            let report: MatchProgress.Report = { step in
-                Task { @MainActor [weak self] in
+            let report: MatchProgress.Report = { [weak self] step in
+                Task { @MainActor in
                     guard self?.summarizing == true else { return }
                     self?.progress = step
                 }
