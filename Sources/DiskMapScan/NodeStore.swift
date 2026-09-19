@@ -448,6 +448,13 @@ public final class NodeStore {
             firstChild[n] = base + sub.firstChild[i] - 1
             childCount[n] = sub.childCount[i]
         }
+        // The folder's own children, which the loop above skips because
+        // they hang off the subtree's node 0 and not off a copied node.
+        // Without this the folder carried its total and listed nothing.
+        if sub.childCount[0] > 0 {
+            firstChild[Int(newParent)] = base + sub.firstChild[0] - 1
+            childCount[Int(newParent)] = sub.childCount[0]
+        }
         return base
     }
 

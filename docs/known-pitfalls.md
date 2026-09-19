@@ -120,6 +120,44 @@ store directly, which is what a share serving them would have handed the walk.
 One test asserts the volume still refuses, so that if it ever stops the gap in
 coverage is announced rather than silent.
 
+## Believing the tree still matches the disk
+
+A live tree is a promise: what the map shows is what is there now. The walk
+is exercised on every scan; the update path runs only when the disk moves,
+and its tests called `refresh` by hand rather than letting FSEvents drive it.
+One test that does — create a folder with files in it, wait for the stream —
+found three defects in the path a new folder takes, all older than this
+audit (**run**, `testTheWatcherCarriesNamesThroughToTheStore`):
+
+- **An event for a new folder names the folder**, which the store has never
+  seen. Reducing it to "relist that folder" found no node and did nothing;
+  the folder and everything in it stayed out of the tree until something
+  else touched its parent. A batch is now resolved to the nearest folder
+  the store holds, whose relist measures the new one as a fresh subtree
+  (`testAFolderTheStoreHasNeverSeenIsReachedThroughItsParent`).
+- **A parent's relist does not cover a changed subfolder.** The old batch
+  rule dropped every directory inside another in the same batch, on the
+  theory that the parent's relist covered it. It does not: a known
+  subfolder is reattached as it was. A folder and its subfolder changing
+  within one debounce window lost the subfolder's change until its next
+  event (`testAChangedSubfolderIsNotCoveredByItsParentsRelist`).
+- **A fresh subtree grafted mid-rebuild broke the parent's child run.**
+  `children(node)` is one contiguous run of ids; grafting the new folder's
+  nodes while the run was still being appended put them inside it, so the
+  parent listed the subtree's nodes as its own and every sibling appended
+  after fell out of the tree — reachable by nothing, counted in the total.
+  Which sibling depended on APFS listing order, which is by name hash. And
+  `graft` linked every node it copied except the one it grafted under, so
+  the new folder carried its size and listed nothing. Subtrees now go in
+  after the run, and the folder's own children are linked
+  (`testAFolderThatAppearsWithContentsListsThem`, with a structural check
+  that every live node sits in its parent's run and every run holds only
+  its own).
+
+The class, not the instance: any code that appends into a store while
+another append is in progress breaks the run. The scan takes the lock for a
+whole directory's block; the relist now does the same.
+
 ## Known and accepted
 
 - **Directory inodes** are not counted as bytes of their own. `du` does count

@@ -159,17 +159,7 @@ public final class LiveTree: @unchecked Sendable {
         // filesystem calls during an event burst — the exact thing the
         // three-phase relist below exists to avoid. `roots` is immutable, so
         // this needs no lock at all.
-        var dirs: [RawPath] = []
-        dirs.reserveCapacity(paths.count)
-        for p in paths {
-            // Reduce every event to the directory that must be relisted.
-            var dir = Self.isDirectory(p) ? p : p.parent
-            if !isInsideRoot(dir) {
-                guard let canon = canonicalPath(dir), isInsideRoot(canon) else { continue }
-                dir = canon
-            }
-            dirs.append(dir)
-        }
+        let dirs = paths.compactMap(directoryToRelist)
         guard !dirs.isEmpty else { return }
 
         lock.lock()
@@ -200,6 +190,26 @@ public final class LiveTree: @unchecked Sendable {
         if wake { applyQueue.async { [weak self] in self?.flush() } }
     }
 
+    /// Reduces an event to the directory that must be relisted: the path
+    /// itself when it is a directory, otherwise the one holding it. Inside a
+    /// root in either the reported or the resolved form, or nothing.
+    private func directoryToRelist(for event: RawPath) -> RawPath? {
+        let dir = Self.isDirectory(event) ? event : event.parent
+        if isInsideRoot(dir) { return dir }
+        guard let canon = canonicalPath(dir), isInsideRoot(canon) else { return nil }
+        return canon
+    }
+
+    /// What the watcher would have handed over, applied now and on this
+    /// thread. For tests, which otherwise have to wait on the event stream
+    /// and the debounce to see a batch handled.
+    func flushNow(events: [RawPath]) {
+        lock.lock()
+        for d in events.compactMap(directoryToRelist) { pending.insert(d) }
+        lock.unlock()
+        flush()
+    }
+
     private func flush() {
         lock.lock()
         let dirs = pending
@@ -208,12 +218,21 @@ public final class LiveTree: @unchecked Sendable {
         lock.unlock()
         guard !dirs.isEmpty else { return }
 
-        // A parent relist already covers its descendants in this batch.
-        let sorted = dirs.sorted { $0.bytes.count < $1.bytes.count }
-        var roots: [RawPath] = []
-        for d in sorted where !roots.contains(where: { d.isInside($0) }) {
-            roots.append(d)
-        }
+        // An event names the thing that changed, and a directory that was
+        // just made — or deleted and made again — is a thing the store has
+        // never seen. Relisting it would find nothing and nothing would be
+        // added; what has to be relisted is the nearest folder above it the
+        // store does hold, whose relist then measures it as a fresh subtree.
+        //
+        // Nothing below that is dropped. A parent's relist keeps a known
+        // subfolder's subtree exactly as it was, so a subfolder that changed
+        // in the same batch as its parent needs its own relist as well.
+        // Parents go first, so the child's relist finds the node its parent
+        // just moved.
+        lock.lock()
+        let known = Set(dirs.compactMap { nearestKnown($0) })
+        lock.unlock()
+        let roots = known.sorted { $0.bytes.count < $1.bytes.count }
 
         // No lock across the loop: relist takes it only for the two short
         // phases that touch the store.
@@ -270,6 +289,22 @@ public final class LiveTree: @unchecked Sendable {
             let cb = onChange
             lock.unlock()
             DispatchQueue.main.async { cb?() }
+        }
+    }
+
+    /// The nearest directory at or above `dir` that the store holds and has
+    /// not marked removed, or nil when the walk leaves every root. The caller
+    /// holds the lock. The chain is short: it ends at the scan root at the
+    /// latest, and a fresh folder is normally one step below a known one.
+    private func nearestKnown(_ dir: RawPath) -> RawPath? {
+        var d = dir
+        while true {
+            if let node = store.find(d), store.isDirectory(node),
+               !store.flagSet(node).contains(.removed) {
+                return d
+            }
+            guard !d.isRoot, isInsideRoot(d.parent) else { return nil }
+            d = d.parent
         }
     }
 
@@ -413,6 +448,11 @@ public final class LiveTree: @unchecked Sendable {
         let base = Int32(store.count)
         var newLogical: Int64 = 0, newPhysical: Int64 = 0
         var reused = Set<Int32>()
+        // Fresh subtrees go in after the block, not into it. The block is
+        // `children(node)`, one contiguous run from `base`; a subtree grafted
+        // mid-loop put its nodes inside that run, so the folder listed the
+        // subtree's nodes as its own and lost every sibling appended after.
+        var grafts: [(under: Int32, sub: NodeStore)] = []
 
         for e in entries {
             let isDir = e.flags.contains(.directory)
@@ -436,14 +476,15 @@ public final class LiveTree: @unchecked Sendable {
                     store.reattach(oldNode: old, to: newID)   // keep the subtree
                     reused.insert(old)
                 } else if let sub = freshSubtrees[e.name] {
-                    store.graft(sub, under: newID)
                     store.totalLogical[Int(newID)] = sub.totalLogical[0]
                     store.totalPhysical[Int(newID)] = sub.totalPhysical[0]
+                    grafts.append((newID, sub))
                 }
             }
             newLogical += store.totalLogical[Int(newID)]
             newPhysical += store.totalPhysical[Int(newID)]
         }
+        for g in grafts { store.graft(g.sub, under: g.under) }
 
         for c in oldChildren where !reused.contains(c) {
             store.flags[Int(c)] |= NodeFlags.removed.rawValue

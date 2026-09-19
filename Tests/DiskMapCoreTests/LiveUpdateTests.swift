@@ -434,6 +434,143 @@ extension LiveUpdateTests {
         }
     }
 
+    /// A folder that appears is announced by an event naming the folder,
+    /// which the store has never seen. Reducing that event to "relist the
+    /// folder" found nothing and added nothing: the folder, and everything
+    /// written into it since, stayed out of the tree until something else
+    /// happened to touch its parent. Found by the watcher test below; kept
+    /// here without the watcher so it runs in a millisecond.
+    func testAFolderTheStoreHasNeverSeenIsReachedThroughItsParent() throws {
+        try write("albüm/bystander.bin", 100)
+        let tree = self.tree()
+        try write("yeni klasör/derin/içerik.bin", 7_000)
+        try write("albüm/ölçüm.bin", 4_000)
+
+        // What the watcher hands over: the new folders and files themselves,
+        // in the same batch as a change inside a folder the store knows.
+        tree.flushNow(events: ["yeni klasör", "yeni klasör/derin", "yeni klasör/derin/içerik.bin",
+                               "albüm/ölçüm.bin"].map { RawPath(root.appendingPathComponent($0).path) })
+
+        tree.withStore { store in
+            XCTAssertEqual(store.find(path: root.appendingPathComponent("yeni klasör/derin/içerik.bin").path)
+                               .map { store.totalLogical[Int($0)] }, 7_000)
+            XCTAssertEqual(store.find(path: root.appendingPathComponent("albüm").path)
+                               .map { store.totalLogical[Int($0)] }, 4_100,
+                           "the known sibling's change was dropped from the batch")
+            XCTAssertEqual(store.find(path: root.path).map { store.totalLogical[Int($0)] }, 11_100)
+            assertWellFormed(store)
+        }
+    }
+
+    /// A folder that appeared with things in it is listed with those things.
+    /// `graft` set the child ranges of every node it copied except the one it
+    /// was grafting under, so the folder carried its total and listed nothing;
+    /// and grafted in the middle of its parent's rebuild, its nodes landed
+    /// inside the parent's child run, which then listed the subtree's nodes
+    /// as its own and lost every sibling appended after. Listing order on
+    /// APFS is not alphabetical, so which sibling vanished depended on the
+    /// hash of its name.
+    func testAFolderThatAppearsWithContentsListsThem() throws {
+        for n in ["a", "b", "c", "d", "e", "f", "g", "h"] { try write("\(n)/x.bin", 10) }
+        let tree = self.tree()
+        try write("fresh/deep/one.bin", 500)
+        try write("fresh/two.bin", 300)
+        XCTAssertTrue(tree.refresh(directory: root.path))
+
+        tree.withStore { store in
+            let rootNode = store.find(path: root.path)!
+            XCTAssertEqual(store.children(rootNode).count, 9)
+            for n in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+                XCTAssertNotNil(store.find(path: root.appendingPathComponent("\(n)/x.bin").path),
+                                "\(n) fell out of the tree")
+            }
+            let fresh = store.find(path: root.appendingPathComponent("fresh").path)!
+            XCTAssertEqual(store.children(fresh).count, 2)
+            XCTAssertEqual(store.totalLogical[Int(fresh)], 800)
+            XCTAssertNotNil(store.find(path: root.appendingPathComponent("fresh/deep/one.bin").path))
+            XCTAssertEqual(store.totalLogical[Int(rootNode)], 880)
+            assertWellFormed(store)
+        }
+    }
+
+    /// Every live node sits inside its parent's child run, and every run holds
+    /// only nodes that name it as their parent. This is what `children(_:)`
+    /// means, and every view and every walk reads the tree through it.
+    private func assertWellFormed(_ store: NodeStore, file: StaticString = #filePath, line: UInt = #line) {
+        for i in 1..<Int32(store.count) where !store.flagSet(i).contains(.removed) {
+            let p = store.parent[Int(i)]
+            XCTAssertTrue(store.children(p).contains(i),
+                          "\(store.path(i)) is not in its parent's child run \(store.children(p))",
+                          file: file, line: line)
+        }
+        // A superseded node keeps its old run; its children now name the
+        // node that took over, and nothing reads the old one again.
+        for i in 0..<Int32(store.count) where !store.flagSet(i).contains(.removed) {
+            for c in store.children(i) where store.parent[Int(c)] != i {
+                XCTFail("\(store.path(c)) is listed under \(store.path(i)) but belongs to \(store.path(store.parent[Int(c)]))",
+                        file: file, line: line)
+            }
+        }
+    }
+
+    /// A folder and one of its subfolders, both known, both changed within
+    /// one debounce window. The parent's relist keeps the child's subtree as
+    /// it was, so the child's own relist must still happen.
+    func testAChangedSubfolderIsNotCoveredByItsParentsRelist() throws {
+        try write("top.bin", 100)
+        try write("iç/old.bin", 100)
+        let tree = self.tree()
+        try write("top2.bin", 1_000)
+        try write("iç/new.bin", 5_000)
+
+        tree.flushNow(events: ["top2.bin", "iç/new.bin"].map { RawPath(root.appendingPathComponent($0).path) })
+
+        tree.withStore { store in
+            XCTAssertEqual(store.find(path: root.appendingPathComponent("iç").path)
+                               .map { store.totalLogical[Int($0)] }, 5_100)
+            XCTAssertEqual(store.find(path: root.path).map { store.totalLogical[Int($0)] }, 6_200)
+        }
+    }
+
+    /// The same road with the file system driving it: FSEvents hands the
+    /// watcher C strings, the watcher hands the tree bytes, the tree relists.
+    /// Every other test here calls `refresh` by hand, so a watcher whose
+    /// callback read the wrong pointer type would pass all of them and update
+    /// nothing in the app. Polled with a deadline: the stream's latency is
+    /// 0.4 s and the flush waits 0.35 s more, so it normally lands in two.
+    func testTheWatcherCarriesNamesThroughToTheStore() throws {
+        try write("albüm/bystander.bin", 100)
+        let tree = self.tree()
+        tree.startWatching()
+        defer { tree.stopWatching() }
+        XCTAssertTrue(tree.liveUpdatesActive)
+
+        try write("albüm/ölçüm–2026 🎞.bin", 4_000)
+        try write("yeni klasör 🎞/içerik.bin", 7_000)
+
+        let deadline = Date().addingTimeInterval(20)
+        while tree.changeCount == 0, Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
+        // Two folders changed; they may land in one flush or two.
+        let secondDeadline = Date().addingTimeInterval(5)
+        while Date() < secondDeadline,
+              tree.withStore({ $0.find(path: root.appendingPathComponent("yeni klasör 🎞").path) == nil
+                  || $0.find(path: root.appendingPathComponent("albüm/ölçüm–2026 🎞.bin").path) == nil }) {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        XCTAssertGreaterThan(tree.changeCount, 0, "no event reached the tree in 20 s")
+
+        tree.withStore { store in
+            let fresh = store.find(path: root.appendingPathComponent("yeni klasör 🎞").path)
+            XCTAssertEqual(fresh.map { store.totalLogical[Int($0)] }, 7_000)
+            XCTAssertEqual(fresh.map { store.nameBytes(of: $0) },
+                           canonicalPath(RawPath(root.appendingPathComponent("yeni klasör 🎞").path))
+                               .map { Array($0.lastComponent) })
+            let file = store.find(path: root.appendingPathComponent("albüm/ölçüm–2026 🎞.bin").path)
+            XCTAssertEqual(file.map { store.totalLogical[Int($0)] }, 4_000)
+            XCTAssertEqual(store.find(path: root.path).map { store.totalLogical[Int($0)] }, 11_100)
+        }
+    }
+
     /// A folder's hash is not a function of the store alone: a symlink
     /// contributes where it points, which is read from disk at hashing time and
     /// never stored. So the report cache — keyed on the tree's change counter —
