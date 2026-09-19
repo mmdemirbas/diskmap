@@ -95,11 +95,12 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 
 | What | When | By whom |
 |---|---|---|
-| Installed build is current (through `d80e94c`, new folders enter the live tree whole) | 2026-09-19 | install.sh; window seen via CGWindowList, centred on the active display. It read `onscreen=false` there because that display was showing a full-screen Brave Space (a 3008×1692 Brave window on screen at the same place); that is the Space, not the app |
+| Installed build is current (through `7977e44`, hard links resolved from disk) | 2026-09-19 | install.sh; window seen `onscreen=1` via CGWindowList |
 | Two windows, two independent sessions | 2026-09-09, again 2026-09-19 | CGWindowList by owner name. System Events `process "DiskMap"` finds the process but not its windows; the owner name is the bundle name, "Disk Map" |
 | Two tools side by side in one window | 2026-09-09 | offscreen render, `tmp/split.png` |
 | The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
 | Finder extension registers and Finder loads it | 2026-09-09 | `pluginkit`, process list |
 | The right-click item appears and works | 2026-09-09 | the user, by right-clicking |
 | The drag gesture on tool tabs | 2026-09-09 | the user |
+| Tests hardened: live tree, sync, copies, scan structure checked against fresh-scan oracles across hundreds of randomised seeds | 2026-09-19 | `swift test` (500 tests); fuzz suites run to 500 seeds by hand |
 | Tabs, flat table, content line | 2026-09-19 | offscreen renders `tmp/look-files.png`, `tmp/look-content.png`. The first look showed a warning glyph over the whole table: the renderer painting the tool-sized drop target, which draws nothing in a window. Fixed in render mode (`acceptsFolders(renderMode:)`) and guarded like `ScrollView`. Not yet seen by a person |
