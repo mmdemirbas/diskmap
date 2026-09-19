@@ -235,6 +235,12 @@ public final class NodeStore {
         (Int(nameOffset[Int(id)]), Int(nameLen[Int(id)]))
     }
 
+    /// The name as the volume holds it.
+    public func nameBytes(of id: Int32) -> [UInt8] {
+        let span = nameSpan(id)
+        return nameBytes.withUnsafeBufferPointer { Array($0[span.offset..<(span.offset + span.length)]) }
+    }
+
     public func name(_ id: Int32) -> String {
         let i = Int(id), off = Int(nameOffset[i]), len = Int(nameLen[i])
         guard len > 0 else { return "" }
@@ -294,7 +300,7 @@ public final class NodeStore {
             spans.append(nameSpan(cur))
             cur = parent[Int(cur)]
         }
-        guard !spans.isEmpty else { return RawPath(roots.count == 1 ? roots[0] : "") }
+        guard !spans.isEmpty else { return roots.count == 1 ? rootBytes(0) : RawPath("") }
         spans.reverse()
 
         return nameBytes.withUnsafeBufferPointer { blob -> RawPath in
@@ -306,7 +312,7 @@ public final class NodeStore {
             let head = spans[0]
             var path = head.length > 0 && base[head.offset] == RawPath.separator
                 ? RawPath(bytes: Array(component(head)))
-                : RawPath(roots.first ?? "/").appending(component(head))
+                : rootBytes(0).appending(component(head))
             for span in spans.dropFirst() { path = path.appending(component(span)) }
             return Firmlinks.displayPath(path)
         }
@@ -322,14 +328,37 @@ public final class NodeStore {
     }
 
     public func childNamed(_ parentID: Int32, _ target: String) -> Int32? {
-        for c in children(parentID) where name(c) == target { return c }
-        return nil
+        childNamed(parentID, bytes: Array(target.utf8))
+    }
+
+    /// The child with exactly these name bytes. Compared on the bytes, so a
+    /// name that is not valid UTF-8 is found and two names that decode to the
+    /// same U+FFFD are not confused.
+    public func childNamed<C: Collection>(_ parentID: Int32, bytes target: C) -> Int32?
+        where C.Element == UInt8 {
+        let wanted = Array(target)
+        return nameBytes.withUnsafeBufferPointer { blob -> Int32? in
+            guard let base = blob.baseAddress else { return nil }
+            for c in children(parentID) {
+                let span = nameSpan(c)
+                guard span.length == wanted.count else { continue }
+                if wanted.withUnsafeBufferPointer({ memcmp(base + span.offset, $0.baseAddress!, span.length) }) == 0 {
+                    return c
+                }
+            }
+            return nil
+        }
     }
 
     /// Resolves an absolute path to a node by walking down from the root.
     /// Depth is small, so this stays cheap without a path index costing
     /// hundreds of megabytes at 12M nodes.
-    public func find(path: String) -> Int32? {
+    public func find(path: String) -> Int32? { find(RawPath(path)) }
+
+    /// The same on bytes, which is what FSEvents and the walk hold. The text
+    /// form above is for callers holding text, and gives the same answer for
+    /// any path text can express.
+    public func find(_ path: RawPath) -> Int32? {
         if let hit = locate(path) { return hit }
         // `/Users/md` and `/System/Volumes/Data/Users/md` are the same folder;
         // callers and FSEvents use the first form, the tree stores the second.
@@ -341,9 +370,19 @@ public final class NodeStore {
         return nil
     }
 
-    private func locate(_ path: String) -> Int32? {
+    /// A root's path, as the bytes its node was named with. `roots` is text
+    /// and would lose a root whose name cannot be decoded; the node cannot.
+    private func rootBytes(_ node: Int32) -> RawPath {
+        let span = nameSpan(node)
+        guard span.length > 0 else { return RawPath("/") }
+        return RawPath(bytes: nameBytes.withUnsafeBufferPointer {
+            Array($0[span.offset..<(span.offset + span.length)])
+        })
+    }
+
+    private func locate(_ path: RawPath) -> Int32? {
         if roots.count <= 1 {
-            return descend(from: 0, rootPath: roots.first ?? "/", to: path)
+            return descend(from: 0, rootPath: rootBytes(0), to: path)
         }
         // Roots are the children of the synthetic node, grafted in order.
         let base = firstChild[0]
@@ -351,24 +390,24 @@ public final class NodeStore {
         // Longest root first: "/" is a prefix of every path, so it would
         // otherwise shadow a more specific root like /System/Volumes/Data and
         // the lookup would stop at an excluded firmlink stub.
-        let ordered = roots.enumerated().sorted { $0.element.count > $1.element.count }
-        for (index, root) in ordered where isAtOrUnder(path, root) {
-            if let hit = descend(from: base + Int32(index), rootPath: root, to: path) { return hit }
+        let ordered = (0..<Int32(roots.count))
+            .map { (index: $0, root: rootBytes(base + $0)) }
+            .sorted { $0.root.bytes.count > $1.root.bytes.count }
+        for entry in ordered where path.isInside(entry.root) {
+            if let hit = descend(from: base + entry.index, rootPath: entry.root, to: path) {
+                return hit
+            }
         }
         return nil
     }
 
-    private func isAtOrUnder(_ path: String, _ root: String) -> Bool {
-        path == root || path.hasPrefix(root == "/" ? "/" : root + "/")
-    }
-
-    private func descend(from node: Int32, rootPath: String, to path: String) -> Int32? {
-        guard isAtOrUnder(path, rootPath) else { return nil }
-        let dropCount = rootPath == "/" ? 1 : rootPath.count + 1
-        let rest = path.count >= dropCount ? String(path.dropFirst(dropCount)) : ""
+    private func descend(from node: Int32, rootPath: RawPath, to path: RawPath) -> Int32? {
+        guard path.isInside(rootPath) else { return nil }
+        let dropCount = rootPath.isRoot ? 1 : rootPath.bytes.count + 1
+        let rest = path.bytes.count >= dropCount ? path.bytes[dropCount...] : []
         var cur = node
-        for part in rest.split(separator: "/") where !part.isEmpty {
-            guard let next = childNamed(cur, String(part)) else { return nil }
+        for part in rest.split(separator: RawPath.separator, omittingEmptySubsequences: true) {
+            guard let next = childNamed(cur, bytes: part) else { return nil }
             cur = next
         }
         return cur

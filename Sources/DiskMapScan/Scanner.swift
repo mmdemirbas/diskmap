@@ -246,6 +246,39 @@ public final class DiskScanner {
         return current
     }
 
+    /// Walks one directory the caller already holds as bytes.
+    ///
+    /// For a live update: a directory that has just appeared inside a watched
+    /// tree is walked to fill in what is under it. Its path came from a
+    /// listing, so it is bytes and may not be text, and it has already been
+    /// found on disk — so the root normalisation `scan` does, which works in
+    /// text and answers "is this a folder, is it inside another target", would
+    /// be both lossy and redundant here.
+    public func scan(subtree root: RawPath, options rawOptions: ScanOptions) -> ScanResult {
+        let store = NodeStore()
+        store.roots = [root.display]
+        let capacity = rawOptions.expectedNodes ?? 4096
+        store.reserve(capacity)
+        store.beginInterning(expectedNodes: capacity)
+
+        var rootStat = stat()
+        _ = root.withCString { lstat($0, &rootStat) }
+        let host = root.bytes.withUnsafeBytes {
+            store.append(name: $0.baseAddress!, nameLength: $0.count, parent: -1,
+                         logical: 0, physical: 0,
+                         mtime: Int32(truncatingIfNeeded: rootStat.st_mtimespec.tv_sec),
+                         flags: .directory)
+        }
+        var stats = scanOne(root: root, into: store, hostNode: host, options: rawOptions,
+                            inodes: InodeSet(), estimate: 0, carry: Carry(), progress: nil)
+        store.endInterning()
+        store.aggregate()
+        stats.cancelled = cancelToken.isCancelled
+        stats.totalLogical = store.totalLogical[0]
+        stats.totalPhysical = store.totalPhysical[0]
+        return ScanResult(store: store, stats: stats, roots: store.roots, rejectedRoots: [])
+    }
+
     public static func isVolumeRoot(_ path: String) -> Bool {
         if path == "/" || path == "/System/Volumes/Data" { return true }
         var here = stat(), up = stat()
@@ -326,7 +359,7 @@ public final class DiskScanner {
         for (index, root) in normalized.roots.enumerated() {
             if cancelToken.isCancelled { break }
             // Straight into the destination store: no second copy to graft.
-            let part = scanOne(root: root, into: store, hostNode: hosts[index],
+            let part = scanOne(root: RawPath(root), into: store, hostNode: hosts[index],
                                options: rawOptions, inodes: inodes,
                                estimate: estimate, carry: carry, progress: progress)
             merged.merge(part)
@@ -372,26 +405,28 @@ public final class DiskScanner {
 
     /// Walks one root into an existing store, beneath a node the caller made.
     /// Aggregation is left to the caller so the combined tree is summed once.
-    private func scanOne(root: String, into store: NodeStore, hostNode: Int32,
+    private func scanOne(root: RawPath, into store: NodeStore, hostNode: Int32,
                          options: ScanOptions, inodes: InodeSet, estimate: Int,
                          carry: Carry,
                          progress: (@Sendable (ScanProgress) -> Void)?) -> ScanStats {
         var stats = ScanStats()
-        let exclusions = options.excludedPaths(for: root)
+        // The exclusion list is ASCII system paths and is keyed on whether the
+        // root is "/", so the shown form of the root answers exactly.
+        let exclusions = options.excludedPaths(for: root.display)
 
         var rootStat = stat()
-        guard lstat(root, &rootStat) == 0 else { return stats }
+        guard root.withCString({ lstat($0, &rootStat) }) == 0 else { return stats }
         let rootDev = rootStat.st_dev
         // st_dev cannot separate APFS volumes inside one container, so mount
         // points are matched by path instead. The root itself is normally a
         // mount point and must not be skipped.
         var crossings: Set<RawPath> = options.followMountPoints
             ? [] : Set(MountTable.mountPoints().map(RawPath.init))
-        crossings.remove(RawPath(root))
+        crossings.remove(root)
 
-        let queue = Queue(seed: Task(path: RawPath(root), node: hostNode))
+        let queue = Queue(seed: Task(path: root, node: hostNode))
         let lock = NSLock()
-        var currentPath = root
+        var currentPath = root.display
 
         let progressTimer: DispatchSourceTimer? = progress.map { callback in
             let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
@@ -564,6 +599,15 @@ public func canonicalPath(_ path: String) -> String? {
     guard let resolved = realpath(path, nil) else { return nil }
     defer { free(resolved) }
     return String(cString: resolved)
+}
+
+/// The same, keeping the bytes: `realpath` neither needs nor produces text.
+public func canonicalPath(_ path: RawPath) -> RawPath? {
+    guard let resolved = path.withCString({ realpath($0, nil) }) else { return nil }
+    defer { free(resolved) }
+    return RawPath(bytes: Array(UnsafeBufferPointer(
+        start: UnsafeRawPointer(resolved).assumingMemoryBound(to: UInt8.self),
+        count: strlen(resolved))))
 }
 
 /// Inodes currently allocated on the filesystem containing `path`.

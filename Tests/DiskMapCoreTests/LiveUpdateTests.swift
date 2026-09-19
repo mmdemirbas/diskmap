@@ -392,6 +392,48 @@ extension LiveUpdateTests {
         }
     }
 
+    /// The listing hands the relist bytes, and the relist writes bytes back.
+    /// Decoding in between — which is what the old path did — would have
+    /// re-appended every name in this folder through a String, and a name
+    /// the String could not carry would have come back as U+FFFD.
+    ///
+    /// The disk refuses to create a name outside UTF-8, so the check is made
+    /// on names outside ASCII, where the bytes on disk are already not the
+    /// bytes of the String: Foundation decomposes "ö" on the way in, and what
+    /// the store must hold is the disk's form, not the caller's.
+    func testARelistKeepsNamesAsTheListingGaveThem() throws {
+        let name = "ölçüm–2026 🎞.bin"
+        try write("albüm/\(name)", 4_000)
+        try write("albüm/bystander.bin", 4_000)
+        let tree = self.tree()
+        let before = try XCTUnwrap(tree.withStore { $0.find(
+            RawPath(root.appendingPathComponent("albüm").path).appending(Array(name.utf8))) })
+        let bytes = tree.withStore { $0.nameBytes(of: before) }
+
+        // Something else changes, so the folder is rebuilt rather than resized.
+        try write("albüm/arrived.bin", 500)
+        // And a folder appears whose name is outside ASCII, so the fresh
+        // subtree is measured through the byte path too.
+        try write("albüm/yeni klasör 🎞/içerik.bin", 7_000)
+        XCTAssertTrue(tree.refresh(directory: root.appendingPathComponent("albüm").path))
+
+        tree.withStore { store in
+            let after = store.current(before)
+            XCTAssertNotEqual(after, before, "the folder was not rebuilt, so nothing was checked")
+            XCTAssertEqual(store.nameBytes(of: after), bytes)
+            XCTAssertEqual(store.find(RawPath(root.appendingPathComponent("albüm").path)
+                                          .appending(Array(name.utf8))), after)
+            let freshURL = root.appendingPathComponent("albüm/yeni klasör 🎞")
+            let fresh = store.find(path: freshURL.path)
+            XCTAssertEqual(fresh.map { store.totalLogical[Int($0)] }, 7_000)
+            XCTAssertEqual(fresh.map { store.nameBytes(of: $0) },
+                           canonicalPath(RawPath(freshURL.path)).map { Array($0.lastComponent) },
+                           "the fresh folder's name is not the disk's form of it")
+            XCTAssertEqual(store.find(path: root.appendingPathComponent("albüm").path)
+                               .map { store.totalLogical[Int($0)] }, 15_500)
+        }
+    }
+
     /// A folder's hash is not a function of the store alone: a symlink
     /// contributes where it points, which is read from disk at hashing time and
     /// never stored. So the report cache — keyed on the tree's change counter —

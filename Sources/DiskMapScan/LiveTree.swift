@@ -16,7 +16,7 @@ public final class LiveTree: @unchecked Sendable {
     private var store: NodeStore
     private let lock = NSRecursiveLock()
     private var watcher: FileSystemWatcher?
-    private var pending = Set<String>()
+    private var pending = Set<RawPath>()
     private var flushScheduled = false
     private let applyQueue = DispatchQueue(label: "diskmap.live", qos: .utility)
 
@@ -49,7 +49,7 @@ public final class LiveTree: @unchecked Sendable {
     /// small one beside it stays immediate.
     ///
     /// Only ever touched from `applyQueue`, which is serial.
-    private var lastRelist: [String: (at: DispatchTime, cost: Double)] = [:]
+    private var lastRelist: [RawPath: (at: DispatchTime, cost: Double)] = [:]
     var lastRelistCount: Int { lastRelist.count }
     private static let holdOffFactor = 10.0
     /// However expensive a folder is, it is never more than this out of date.
@@ -58,6 +58,10 @@ public final class LiveTree: @unchecked Sendable {
     /// Seconds still to wait before this directory is worth relisting again,
     /// or nil if it may be done now.
     func holdOff(_ dir: String, now: DispatchTime) -> Double? {
+        holdOff(RawPath(dir), now: now)
+    }
+
+    func holdOff(_ dir: RawPath, now: DispatchTime) -> Double? {
         guard let last = lastRelist[dir] else { return nil }
         let wait = min(last.cost * Self.holdOffFactor, Self.holdOffCeiling)
         let since = Double(now.uptimeNanoseconds - last.at.uptimeNanoseconds) / 1e9
@@ -65,6 +69,10 @@ public final class LiveTree: @unchecked Sendable {
     }
 
     func noteRelist(_ dir: String, cost: Double, at: DispatchTime) {
+        noteRelist(RawPath(dir), cost: cost, at: at)
+    }
+
+    func noteRelist(_ dir: RawPath, cost: Double, at: DispatchTime) {
         lastRelist[dir] = (at, cost)
         guard lastRelist.count > 4096 else { return }
         // Bounded: drop the quarter that has gone longest without an event.
@@ -124,32 +132,38 @@ public final class LiveTree: @unchecked Sendable {
 
     /// True when `path` is one of the roots or sits beneath one. Compares
     /// against "root/" so `/Users/md/dev` does not swallow `/Users/md/development`.
-    private func isInsideRoot(_ path: String) -> Bool {
+    private func isInsideRoot(_ path: RawPath) -> Bool {
         candidatePaths(path).contains { candidate in
-            roots.contains { candidate == $0 || candidate.hasPrefix($0 == "/" ? "/" : $0 + "/") }
+            roots.contains { candidate.isInside(RawPath($0)) }
         }
     }
 
     /// FSEvents reports `/Users/md/...`; a Data-volume tree stores
     /// `/System/Volumes/Data/Users/md/...`. Both forms have to be considered.
-    private func candidatePaths(_ path: String) -> [String] {
+    private func candidatePaths(_ path: RawPath) -> [RawPath] {
         guard let onData = Firmlinks.onDataVolume(path) else { return [path] }
         return [path, onData]
     }
 
-    private func enqueue(_ paths: [String]) {
+    /// Whether the path names a directory right now. `lstat` on the bytes,
+    /// because `fileExists(atPath:)` takes text.
+    private static func isDirectory(_ path: RawPath) -> Bool {
+        var info = stat()
+        guard path.withCString({ stat($0, &info) }) == 0 else { return false }
+        return (info.st_mode & S_IFMT) == S_IFDIR
+    }
+
+    private func enqueue(_ paths: [RawPath]) {
         // Resolving an event to a directory costs a stat() and sometimes a
         // realpath(). Under the lock that would block every UI read on
         // filesystem calls during an event burst — the exact thing the
         // three-phase relist below exists to avoid. `roots` is immutable, so
         // this needs no lock at all.
-        var dirs: [String] = []
+        var dirs: [RawPath] = []
         dirs.reserveCapacity(paths.count)
         for p in paths {
             // Reduce every event to the directory that must be relisted.
-            var isDir: ObjCBool = false
-            var dir = FileManager.default.fileExists(atPath: p, isDirectory: &isDir) && isDir.boolValue
-                ? p : (p as NSString).deletingLastPathComponent
+            var dir = Self.isDirectory(p) ? p : p.parent
             if !isInsideRoot(dir) {
                 guard let canon = canonicalPath(dir), isInsideRoot(canon) else { continue }
                 dir = canon
@@ -195,9 +209,9 @@ public final class LiveTree: @unchecked Sendable {
         guard !dirs.isEmpty else { return }
 
         // A parent relist already covers its descendants in this batch.
-        let sorted = dirs.sorted { $0.count < $1.count }
-        var roots: [String] = []
-        for d in sorted where !roots.contains(where: { d == $0 || d.hasPrefix($0 + "/") }) {
+        let sorted = dirs.sorted { $0.bytes.count < $1.bytes.count }
+        var roots: [RawPath] = []
+        for d in sorted where !roots.contains(where: { d.isInside($0) }) {
             roots.append(d)
         }
 
@@ -207,7 +221,7 @@ public final class LiveTree: @unchecked Sendable {
         let began = DispatchTime.now()
         var changed = false
         var moved = 0
-        var deferred: [(String, Double)] = []
+        var deferred: [(RawPath, Double)] = []
         for d in roots {
             let now = DispatchTime.now()
             if let wait = holdOff(d, now: now) { deferred.append((d, wait)); continue }
@@ -260,7 +274,10 @@ public final class LiveTree: @unchecked Sendable {
     }
 
     private struct DirEntry {
-        var name: String
+        /// As listed, never decoded: a relist writes these back into the
+        /// store, and a name that went through text on the way would come
+        /// back with U+FFFD in it and stop naming the file it names.
+        var name: [UInt8]
         var logical: Int64
         var physical: Int64
         var mtime: Int32
@@ -273,22 +290,22 @@ public final class LiveTree: @unchecked Sendable {
     /// Scanning a newly appeared folder can take seconds; doing that under the
     /// lock would block every UI read for the whole duration.
     @discardableResult
-    private func relist(directory rawPath: String) -> Bool {
+    private func relist(directory rawPath: RawPath) -> Bool {
         let path = canonicalPath(rawPath) ?? rawPath
 
         // Phase A: locate the node and note the names it already holds.
         lock.lock()
-        guard let node = store.find(path: path), store.isDirectory(node) else {
+        guard let node = store.find(path), store.isDirectory(node) else {
             lock.unlock(); return false
         }
-        var knownNames = Set<String>()
+        var knownNames = Set<[UInt8]>()
         for c in store.children(node) where !store.flagSet(c).contains(.removed) {
-            knownNames.insert(store.name(c))
+            knownNames.insert(store.nameBytes(of: c))
         }
         lock.unlock()
 
         // Phase B: filesystem work, no lock held.
-        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        let fd = path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
         if fd < 0 {
             // Only some of the ways this fails mean the directory is gone.
             // Running out of descriptors, an interrupted call, or a permission
@@ -309,7 +326,7 @@ public final class LiveTree: @unchecked Sendable {
             if e.isDataless { fl.insert(.dataless) }
             if e.stFlags & UF_COMPRESSED_FLAG != 0 { fl.insert(.compressed) }
             entries.append(DirEntry(
-                name: String(decoding: UnsafeRawBufferPointer(start: e.name, count: e.nameLen), as: UTF8.self),
+                name: Array(UnsafeRawBufferPointer(start: e.name, count: e.nameLen)),
                 logical: e.logicalSize, physical: e.isDataless ? 0 : e.physicalSize,
                 mtime: Int32(truncatingIfNeeded: e.mtime), flags: fl))
         }
@@ -317,10 +334,10 @@ public final class LiveTree: @unchecked Sendable {
 
         // Only genuinely new subdirectories need scanning; the rest keep the
         // subtree they already have.
-        var freshSubtrees: [String: NodeStore] = [:]
+        var freshSubtrees: [[UInt8]: NodeStore] = [:]
         for e in entries where e.flags.contains(.directory)
             && !e.flags.contains(.symlink) && !knownNames.contains(e.name) {
-            var options = ScanOptions(rootPath: path + "/" + e.name)
+            var options = ScanOptions(rootPath: path.display)
             // A directory that has just appeared is nearly always empty or
             // close to it — a build creating an output folder, a package
             // manager laying down a tree one level at a time. Sizing for the
@@ -331,7 +348,8 @@ public final class LiveTree: @unchecked Sendable {
             // And it needs no thread pool. Twelve threads to read one empty
             // directory is most of the cost of reading it.
             options.threadCount = 2
-            freshSubtrees[e.name] = DiskScanner().scan(options).store
+            freshSubtrees[e.name] = DiskScanner().scan(subtree: path.appending(e.name),
+                                                       options: options).store
         }
 
         // Phase C: commit. Re-read the node, since the tree may have moved on.
@@ -339,9 +357,9 @@ public final class LiveTree: @unchecked Sendable {
         guard node < Int32(store.count), store.isDirectory(node),
               !store.flagSet(node).contains(.removed) else { return false }
 
-        var existing: [String: Int32] = [:]
+        var existing: [[UInt8]: Int32] = [:]
         for c in store.children(node) where !store.flagSet(c).contains(.removed) {
-            existing[store.name(c)] = c
+            existing[store.nameBytes(of: c)] = c
         }
 
         // The common event by far is "a file in this folder changed size" —
@@ -397,9 +415,8 @@ public final class LiveTree: @unchecked Sendable {
         var reused = Set<Int32>()
 
         for e in entries {
-            let nameBytes = Array(e.name.utf8)
             let isDir = e.flags.contains(.directory)
-            let newID: Int32 = nameBytes.withUnsafeBytes { nb -> Int32 in
+            let newID: Int32 = e.name.withUnsafeBytes { nb -> Int32 in
                 store.append(name: nb.baseAddress ?? UnsafeRawPointer(bitPattern: 1)!,
                              nameLength: nb.count, parent: node,
                              logical: isDir ? 0 : e.logical,
@@ -461,6 +478,11 @@ public final class LiveTree: @unchecked Sendable {
     /// update logic rather than on event delivery timing.
     @discardableResult
     public func refresh(directory path: String) -> Bool {
+        relist(directory: RawPath(path))
+    }
+
+    @discardableResult
+    public func refresh(directory path: RawPath) -> Bool {
         relist(directory: path)
     }
 

@@ -37,6 +37,20 @@ public enum Firmlinks {
         return nil
     }
 
+    /// The same swap on bytes. Both halves of every pair are ASCII mount points
+    /// macOS chose, so nothing is decoded — the tail may be a name that cannot
+    /// be.
+    public static func onDataVolume(_ path: RawPath) -> RawPath? {
+        for (link, data) in pairs {
+            let head = Array(link.utf8)
+            guard path.bytes.count >= head.count, Array(path.bytes.prefix(head.count)) == head,
+                  path.bytes.count == head.count || path.bytes[head.count] == RawPath.separator
+            else { continue }
+            return RawPath(bytes: Array(data.utf8) + path.bytes.dropFirst(head.count))
+        }
+        return nil
+    }
+
     /// `/System/Volumes/Data/Users/md` -> `/Users/md`, the name everything else
     /// on the system uses.
     public static func displayPath(_ path: String) -> String {

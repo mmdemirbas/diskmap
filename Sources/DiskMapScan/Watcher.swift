@@ -7,11 +7,12 @@ import Foundation
 public final class FileSystemWatcher {
     private var stream: FSEventStreamRef?
     private let queue = DispatchQueue(label: "diskmap.fsevents")
-    private let handler: ([String]) -> Void
+    private let handler: ([RawPath]) -> Void
     private let paths: [String]
     private let latency: TimeInterval
 
-    public init(paths: [String], latency: TimeInterval = 0.4, handler: @escaping ([String]) -> Void) {
+    public init(paths: [String], latency: TimeInterval = 0.4,
+                handler: @escaping ([RawPath]) -> Void) {
         self.paths = paths
         self.latency = latency
         self.handler = handler
@@ -24,15 +25,27 @@ public final class FileSystemWatcher {
         var context = FSEventStreamContext(version: 0,
                                            info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
-        let flags = UInt32(kFSEventStreamCreateFlagUseCFTypes
-                         | kFSEventStreamCreateFlagFileEvents
+        // Deliberately not `UseCFTypes`. That hands the paths over as
+        // CFStrings, and a name the volume allowed but Unicode does not comes
+        // back with U+FFFD where the awkward bytes were — after which the
+        // directory it names cannot be found in the tree and stops updating.
+        // Without it the paths are C strings, which are the bytes.
+        let flags = UInt32(kFSEventStreamCreateFlagFileEvents
                          | kFSEventStreamCreateFlagNoDefer
                          | kFSEventStreamCreateFlagWatchRoot)
         let callback: FSEventStreamCallback = { _, info, count, eventPaths, _, _ in
-            guard let info else { return }
+            guard let info, count > 0 else { return }
             let me = Unmanaged<FileSystemWatcher>.fromOpaque(info).takeUnretainedValue()
-            guard let cfPaths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] else { return }
-            me.handler(Array(cfPaths.prefix(count)))
+            let raw = eventPaths.assumingMemoryBound(to: UnsafePointer<CChar>?.self)
+            var out: [RawPath] = []
+            out.reserveCapacity(count)
+            for index in 0..<count {
+                guard let entry = raw[index] else { continue }
+                out.append(RawPath(bytes: Array(UnsafeBufferPointer(
+                    start: UnsafeRawPointer(entry).assumingMemoryBound(to: UInt8.self),
+                    count: strlen(entry)))))
+            }
+            me.handler(out)
         }
         stream = FSEventStreamCreate(kCFAllocatorDefault, callback, &context,
                                      paths as CFArray,

@@ -135,17 +135,28 @@ final class RawPathTests: XCTestCase {
 
     // MARK: - Through the store
 
+    /// What a share serving raw bytes would have handed the walk. This volume
+    /// refuses to create such a name (checked below), so the store is given
+    /// the entry the way the walk would have: appended as the folder's last
+    /// child, with the folder's child range grown over it.
+    private func inject(_ name: [UInt8], into store: NodeStore, under parent: Int32) -> Int32 {
+        let node = name.withUnsafeBufferPointer {
+            store.append(name: UnsafeRawPointer($0.baseAddress!), nameLength: name.count,
+                         parent: parent, logical: 10, physical: 10, mtime: 0, flags: [])
+        }
+        let range = store.children(parent)
+        precondition(range.isEmpty || range.upperBound == node, "children must stay contiguous")
+        if range.isEmpty { store.firstChild[Int(parent)] = node }
+        store.childCount[Int(parent)] += 1
+        return node
+    }
+
     /// A store carrying a name that cannot be written down still names it.
     func testAPathRebuiltFromTheStoreKeepsTheBytes() throws {
         try Data(count: 100).write(to: root.appendingPathComponent("ordinary.bin"))
         let store = DiskScanner().scan(ScanOptions(rootPath: root.path)).store
         let parent = try XCTUnwrap(store.find(path: root.path))
-
-        // What a share serving raw bytes would have handed the walk.
-        let node = awkward.withUnsafeBufferPointer {
-            store.append(name: UnsafeRawPointer($0.baseAddress!), nameLength: awkward.count,
-                         parent: parent, logical: 10, physical: 10, mtime: 0, flags: [])
-        }
+        let node = inject(awkward, into: store, under: parent)
 
         XCTAssertEqual(store.pathBytes(node).bytes, RawPath(root.path).appending(awkward).bytes)
         XCTAssertTrue(store.path(node).contains("\u{FFFD}"), "the display form should be honest")
@@ -155,6 +166,45 @@ final class RawPathTests: XCTestCase {
                 start: UnsafeRawPointer(rep).assumingMemoryBound(to: UInt8.self),
                 count: strlen(rep)))
         }, store.pathBytes(node).bytes, "the URL to act on lost the name")
+    }
+
+    /// The same name, looked up by its bytes. A lookup by the *display* form
+    /// must miss, since U+FFFD is not the byte that was on disk — finding a
+    /// different file under that name would be worse than finding none.
+    func testAStoreFindsANameItCannotWriteDown() throws {
+        try Data(count: 100).write(to: root.appendingPathComponent("ordinary.bin"))
+        let store = DiskScanner().scan(ScanOptions(rootPath: root.path)).store
+        let parent = try XCTUnwrap(store.find(path: root.path))
+        let node = inject(awkward, into: store, under: parent)
+
+        XCTAssertEqual(store.find(RawPath(root.path).appending(awkward)), node)
+        XCTAssertNil(store.find(path: store.path(node)), "the display form found something")
+        XCTAssertEqual(store.find(path: root.appendingPathComponent("ordinary.bin").path),
+                       parent + 1, "the ordinary neighbour is still found")
+    }
+
+    /// A folder scanned on its own — the way a live update measures a folder
+    /// that appeared after the scan — counts the same things a whole scan does.
+    func testASubtreeScanCountsWhatAWholeScanCounts() throws {
+        try Data(count: 1_000).write(to: root.appendingPathComponent("ölçüm.bin"))
+        try fm.createDirectory(at: root.appendingPathComponent("iç/derin"),
+                               withIntermediateDirectories: true)
+        try Data(count: 2_000).write(to: root.appendingPathComponent("iç/derin/dosya.bin"))
+        try fm.createSymbolicLink(at: root.appendingPathComponent("iç/bağ"),
+                                  withDestinationURL: root.appendingPathComponent("ölçüm.bin"))
+
+        let whole = DiskScanner().scan(ScanOptions(rootPath: root.path))
+        let alone = DiskScanner().scan(subtree: RawPath(root.path),
+                                       options: ScanOptions(rootPath: root.path))
+        XCTAssertEqual(alone.store.count, whole.store.count)
+        XCTAssertEqual(alone.stats.files, whole.stats.files)
+        XCTAssertEqual(alone.stats.directories, whole.stats.directories)
+        XCTAssertEqual(alone.stats.symlinks, whole.stats.symlinks)
+        XCTAssertEqual(alone.stats.totalLogical, whole.stats.totalLogical)
+        XCTAssertEqual(alone.stats.totalPhysical, whole.stats.totalPhysical)
+        let deep = root.appendingPathComponent("iç/derin/dosya.bin").path
+        XCTAssertEqual(alone.store.find(path: deep).map { alone.store.totalLogical[Int($0)] },
+                       whole.store.find(path: deep).map { whole.store.totalLogical[Int($0)] })
     }
 
     /// Ordinary names must come out exactly as before.

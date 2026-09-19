@@ -518,8 +518,8 @@ func cmdChurn(_ path: String, _ seconds: Int) {
     let watcher = FileSystemWatcher(paths: [path]) { paths in
         for p in paths {
             var isDir: ObjCBool = false
-            let dir = FileManager.default.fileExists(atPath: p, isDirectory: &isDir) && isDir.boolValue
-                ? p : (p as NSString).deletingLastPathComponent
+            let dir = FileManager.default.fileExists(atPath: p.display, isDirectory: &isDir) && isDir.boolValue
+                ? p.display : (p.display as NSString).deletingLastPathComponent
             tally.bump(dir)
         }
     }

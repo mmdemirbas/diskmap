@@ -103,22 +103,22 @@ So paths are carried as bytes (`RawPath`) from the directory listing to the
   two folders holding the same files digest in the same order whatever their
   names decode to. Exercised end to end on names outside ASCII, which is the
   same road (**run**, `testAMirrorWorksOnNamesOutsideASCII`).
+- **Live updates** take the path from FSEvents as the C string the callback is
+  given, not as a `CFString`, and relist on bytes: the lookup, the listing,
+  the set of names already known, the re-append and the scan of a folder that
+  appeared since — all on the bytes the volume returned. The re-append used to
+  go through a decoded `String`, which on a findable parent would have written
+  an unreadable child's name back into the store as U+FFFD. Now the store
+  holds what the disk reports even where that differs from what the caller
+  typed: Foundation decomposes "ö" on the way to disk, and the relist keeps
+  the decomposed form (**run**, `testARelistKeepsNamesAsTheListingGaveThem`).
+  A folder measured on its own by the live path counts what a whole scan
+  counts (**run**, `testASubtreeScanCountsWhatAWholeScanCounts`).
 
 The name cannot be created on this machine, so the tests put the bytes into the
 store directly, which is what a share serving them would have handed the walk.
 One test asserts the volume still refuses, so that if it ever stops the gap in
 coverage is announced rather than silent.
-
-### Where this stops
-
-**Live updates.** FSEvents hands paths over as CFStrings, so a directory with
-such a name would be reported under a mangled path. The consequence is bounded:
-the lookup fails, the relist returns false, and that directory is not refreshed.
-It fails closed — nothing is corrupted, nothing is acted on, and the totals from
-the scan itself stay right. Left there on purpose: FSEvents is a property of
-HFS+ and APFS volumes, which refuse these names, so the two cannot meet on the
-same volume; and finishing it means byte-converting the relist pipeline through
-to the scanner's root list for a case that cannot occur.
 
 ## Known and accepted
 
