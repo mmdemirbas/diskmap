@@ -124,10 +124,11 @@ coverage is announced rather than silent.
 
 A live tree is a promise: what the map shows is what is there now. The walk
 is exercised on every scan; the update path runs only when the disk moves,
-and its tests called `refresh` by hand rather than letting FSEvents drive it.
-One test that does — create a folder with files in it, wait for the stream —
-found three defects in the path a new folder takes, all older than this
-audit (**run**, `testTheWatcherCarriesNamesThroughToTheStore`):
+and all but one of its tests called `refresh` by hand rather than letting
+FSEvents drive it. The one that did wrote a *file* into a watched folder.
+The first to make a *folder* with files in it and wait for the stream found
+three defects in the path a new folder takes, all older than this audit
+(**run**, `testTheWatcherCarriesNamesThroughToTheStore`):
 
 - **An event for a new folder names the folder**, which the store has never
   seen. Reducing it to "relist that folder" found no node and did nothing;
