@@ -95,7 +95,7 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 
 | What | When | By whom |
 |---|---|---|
-| Installed build is current (through `28e2b9a`) | 2026-09-09 23:12 | install.sh |
+| Installed build is current (through `b1cc031`) | 2026-09-19 | install.sh |
 | Two windows, two independent sessions | 2026-09-09 | System Events window list |
 | Two tools side by side in one window | 2026-09-09 | offscreen render, `tmp/split.png` |
 | The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
