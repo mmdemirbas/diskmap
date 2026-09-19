@@ -493,26 +493,6 @@ extension LiveUpdateTests {
         }
     }
 
-    /// Every live node sits inside its parent's child run, and every run holds
-    /// only nodes that name it as their parent. This is what `children(_:)`
-    /// means, and every view and every walk reads the tree through it.
-    private func assertWellFormed(_ store: NodeStore, file: StaticString = #filePath, line: UInt = #line) {
-        for i in 1..<Int32(store.count) where !store.flagSet(i).contains(.removed) {
-            let p = store.parent[Int(i)]
-            XCTAssertTrue(store.children(p).contains(i),
-                          "\(store.path(i)) is not in its parent's child run \(store.children(p))",
-                          file: file, line: line)
-        }
-        // A superseded node keeps its old run; its children now name the
-        // node that took over, and nothing reads the old one again.
-        for i in 0..<Int32(store.count) where !store.flagSet(i).contains(.removed) {
-            for c in store.children(i) where store.parent[Int(c)] != i {
-                XCTFail("\(store.path(c)) is listed under \(store.path(i)) but belongs to \(store.path(store.parent[Int(c)]))",
-                        file: file, line: line)
-            }
-        }
-    }
-
     /// A folder and one of its subfolders, both known, both changed within
     /// one debounce window. The parent's relist keeps the child's subtree as
     /// it was, so the child's own relist must still happen.

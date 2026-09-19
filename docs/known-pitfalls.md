@@ -158,6 +158,32 @@ The class, not the instance: any code that appends into a store while
 another append is in progress breaks the run. The scan takes the lock for a
 whole directory's block; the relist now does the same.
 
+**Against the only oracle there is.** Each of the above was one shape of
+change, written down with its expectation. `LiveTreeFuzzTests` makes shapes
+up — twelve seeds, sixty batches each, one to four random changes per batch
+(create, resize, delete, rename, move, folder appears with contents, folder
+deleted, folder renamed, file replaced by folder, folder replaced by file,
+symlink made, symlink re-pointed) — hands the tree the events the watcher
+would report, and after every batch compares what the tree shows against a
+fresh scan of the same folder, node for node. It found one more on its
+first run (**run**): a file replaced by a folder of the same name entered
+the tree empty, because "is this name already known" was asked without
+asking what it was known *as*. A name held as a file does not make the
+folder known.
+
+**The name table.** Names are interned through an open-addressed table
+sized from a hint, and the table never grew. A folder that appeared with
+more distinct names than the hint — 4,096 for a live update, 262,144 for a
+comparison side — filled it, and the next new name probed for an empty slot
+without end (**run**, the test ran 150 s to the alarm on the old table).
+The table doubles when half full now, and stops interning past 2^26 slots
+rather than stop returning. A related waste, not a hang: the capacity
+estimate took the volume's used-inode count for every root, so scanning a
+folder of a hundred files reserved for ten million and zeroed a name table
+sized for the disk, and a large folder's progress bar stood near zero
+because its denominator was the disk. Taken only for a root that is a
+volume now.
+
 ## Known and accepted
 
 - **Directory inodes** are not counted as bytes of their own. `du` does count

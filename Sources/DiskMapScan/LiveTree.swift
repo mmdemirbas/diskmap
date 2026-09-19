@@ -208,6 +208,16 @@ public final class LiveTree: @unchecked Sendable {
         for d in events.compactMap(directoryToRelist) { pending.insert(d) }
         lock.unlock()
         flush()
+        // A folder relisted a moment ago is held off, and the flush that
+        // comes back for it is asynchronous. A test wants the tree as it
+        // will be, now: forget the hold-offs and apply what was deferred.
+        lock.lock()
+        let deferred = !pending.isEmpty
+        lock.unlock()
+        if deferred {
+            lastRelist.removeAll()
+            flush()
+        }
     }
 
     private func flush() {
@@ -333,9 +343,14 @@ public final class LiveTree: @unchecked Sendable {
         guard let node = store.find(path), store.isDirectory(node) else {
             lock.unlock(); return false
         }
-        var knownNames = Set<[UInt8]>()
-        for c in store.children(node) where !store.flagSet(c).contains(.removed) {
-            knownNames.insert(store.nameBytes(of: c))
+        // The folders already held under this one, by name. A name held as
+        // a *file* does not count: a file replaced by a folder of the same
+        // name is a new folder, and it has to be measured like one rather
+        // than entering the tree empty because its name was already known.
+        var knownFolders = Set<[UInt8]>()
+        for c in store.children(node) where !store.flagSet(c).contains(.removed)
+            && store.isDirectory(c) && !store.flagSet(c).contains(.symlink) {
+            knownFolders.insert(store.nameBytes(of: c))
         }
         lock.unlock()
 
@@ -371,7 +386,7 @@ public final class LiveTree: @unchecked Sendable {
         // subtree they already have.
         var freshSubtrees: [[UInt8]: NodeStore] = [:]
         for e in entries where e.flags.contains(.directory)
-            && !e.flags.contains(.symlink) && !knownNames.contains(e.name) {
+            && !e.flags.contains(.symlink) && !knownFolders.contains(e.name) {
             var options = ScanOptions(rootPath: path.display)
             // A directory that has just appeared is nearly always empty or
             // close to it — a build creating an output folder, a package
