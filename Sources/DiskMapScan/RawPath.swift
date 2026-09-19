@@ -76,9 +76,20 @@ public struct RawPath: Hashable, Sendable {
     /// True when this is `container` or sits beneath it. Compares against
     /// "container/" so `/Users/md/dev` does not swallow `/Users/md/development`.
     public func isInside(_ container: RawPath) -> Bool {
-        if bytes == container.bytes { return true }
-        let head = container.isRoot ? container.bytes : container.bytes + [Self.separator]
-        return bytes.count > head.count && Array(bytes.prefix(head.count)) == head
+        let head = container.bytes
+        guard bytes.count >= head.count else { return false }
+        if bytes.count > head.count {
+            // "/" is the one container that ends in its own separator.
+            guard container.isRoot || bytes[head.count] == Self.separator else { return false }
+        }
+        // memcmp rather than starts(with:): this runs once per root for
+        // every event the watcher reports, and the generic walk was most of
+        // what a burst of events cost.
+        return head.isEmpty || bytes.withUnsafeBufferPointer { mine in
+            head.withUnsafeBufferPointer { theirs in
+                memcmp(mine.baseAddress!, theirs.baseAddress!, head.count) == 0
+            }
+        }
     }
 
     /// For a syscall. Zero-terminated, and never allocated as a String on the

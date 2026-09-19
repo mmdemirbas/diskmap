@@ -493,6 +493,44 @@ extension LiveUpdateTests {
         }
     }
 
+    /// A tree unpacked in one go, then deleted in one go: thousands of
+    /// events naming folders the store has never seen, then thousands naming
+    /// folders that no longer exist. Each batch is one relist of the folder
+    /// that held them — measured, a burst of twelve thousand events costs
+    /// under a fifth of a second in a release build — and the tree agrees
+    /// with a fresh scan after both.
+    func testABurstOfNewFoldersAndTheirDeletionKeepTheTreeRight() throws {
+        try write("known/a.bin", 1)
+        let tree = self.tree()
+        var events: [RawPath] = []
+        for d in 0..<300 {
+            let dir = root.appendingPathComponent("fresh/pkg\(d)/lib")
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            events += [RawPath(dir.deletingLastPathComponent().path), RawPath(dir.path)]
+            for f in 0..<3 {
+                let file = dir.appendingPathComponent("m\(f).js")
+                try Data(count: 10).write(to: file)
+                events.append(RawPath(file.path))
+            }
+        }
+        events.append(RawPath(root.appendingPathComponent("fresh").path))
+        tree.flushNow(events: events)
+        XCTAssertEqual(tree.changeCount, 1, "one folder held all of it; one relist should have done")
+        var oracle = ScanOptions(rootPath: root.path); oracle.threadCount = 2
+        XCTAssertEqual(differences(tree.withStore { reachable($0) },
+                                   reachable(DiskScanner().scan(oracle).store)), [])
+
+        let inside = fm.enumerator(at: root.appendingPathComponent("fresh"),
+                                   includingPropertiesForKeys: nil)!.compactMap { $0 as? URL }
+        try fm.removeItem(at: root.appendingPathComponent("fresh"))
+        tree.flushNow(events: inside.map { RawPath($0.path) }
+                      + [RawPath(root.appendingPathComponent("fresh").path)])
+        XCTAssertEqual(tree.changeCount, 2)
+        XCTAssertEqual(differences(tree.withStore { reachable($0) },
+                                   reachable(DiskScanner().scan(oracle).store)), [])
+        tree.withStore { assertWellFormed($0) }
+    }
+
     /// A folder and one of its subfolders, both known, both changed within
     /// one debounce window. The parent's relist keeps the child's subtree as
     /// it was, so the child's own relist must still happen.

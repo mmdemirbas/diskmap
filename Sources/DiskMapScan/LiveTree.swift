@@ -11,6 +11,8 @@ public final class LiveTree: @unchecked Sendable {
     /// Every folder being watched. One entry is the ordinary case; several
     /// means the tree has a synthetic node 0 with the roots beneath it.
     public let roots: [String]
+    /// The same, as bytes, made once: every event is checked against them.
+    private let rootPaths: [RawPath]
     public var rootPath: String { roots.first ?? "" }
     public private(set) var stats: ScanStats
     private var store: NodeStore
@@ -106,6 +108,7 @@ public final class LiveTree: @unchecked Sendable {
         self.store = result.store
         self.stats = result.stats
         self.roots = result.roots
+        self.rootPaths = result.roots.map(RawPath.init)
         self.rejectedRoots = result.rejectedRoots
     }
 
@@ -134,7 +137,7 @@ public final class LiveTree: @unchecked Sendable {
     /// against "root/" so `/Users/md/dev` does not swallow `/Users/md/development`.
     private func isInsideRoot(_ path: RawPath) -> Bool {
         candidatePaths(path).contains { candidate in
-            roots.contains { candidate.isInside(RawPath($0)) }
+            rootPaths.contains { candidate.isInside($0) }
         }
     }
 
@@ -239,8 +242,26 @@ public final class LiveTree: @unchecked Sendable {
         // in the same batch as its parent needs its own relist as well.
         // Parents go first, so the child's relist finds the node its parent
         // just moved.
+        //
+        // And a folder that is gone is reduced first to the nearest folder
+        // above it that still exists — with no lock, a stat per step, and
+        // one answer per folder — so a tree deleted whole costs one relist
+        // of the folder that held it rather than a lookup and a failed open
+        // for every folder that was in it.
+        var present: [RawPath: RawPath] = [:]
+        func nearestPresent(_ dir: RawPath) -> RawPath? {
+            if let hit = present[dir] { return hit }
+            var d = dir
+            while !Self.isDirectory(d) {
+                guard !d.isRoot, isInsideRoot(d.parent) else { return nil }
+                d = d.parent
+            }
+            present[dir] = d
+            return d
+        }
+        let standing = Set(dirs.compactMap(nearestPresent))
         lock.lock()
-        let known = Set(dirs.compactMap { nearestKnown($0) })
+        let known = Set(standing.compactMap { nearestKnown($0) })
         lock.unlock()
         let roots = known.sorted { $0.bytes.count < $1.bytes.count }
 
@@ -309,7 +330,11 @@ public final class LiveTree: @unchecked Sendable {
     private func nearestKnown(_ dir: RawPath) -> RawPath? {
         var d = dir
         while true {
-            if let node = store.find(d), store.isDirectory(node),
+            // `lookup`, not `find`: the lock is held, and a miss here is the
+            // ordinary case — a folder that just appeared — not a path in
+            // need of resolving. Resolving would be a syscall per miss under
+            // the lock, thousands of them when a tree is unpacked.
+            if let node = store.lookup(d), store.isDirectory(node),
                !store.flagSet(node).contains(.removed) {
                 return d
             }

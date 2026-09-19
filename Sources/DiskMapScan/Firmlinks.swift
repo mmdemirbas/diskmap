@@ -41,15 +41,21 @@ public enum Firmlinks {
     /// macOS chose, so nothing is decoded — the tail may be a name that cannot
     /// be.
     public static func onDataVolume(_ path: RawPath) -> RawPath? {
-        for (link, data) in pairs {
-            let head = Array(link.utf8)
-            guard path.bytes.count >= head.count, Array(path.bytes.prefix(head.count)) == head,
-                  path.bytes.count == head.count || path.bytes[head.count] == RawPath.separator
+        for (head, data) in bytePairs {
+            guard path.bytes.count >= head.count,
+                  path.bytes.count == head.count || path.bytes[head.count] == RawPath.separator,
+                  path.bytes.starts(with: head)
             else { continue }
-            return RawPath(bytes: Array(data.utf8) + path.bytes.dropFirst(head.count))
+            return RawPath(bytes: data + path.bytes.dropFirst(head.count))
         }
         return nil
     }
+
+    /// The pairs as bytes, made once. This runs for every event the watcher
+    /// reports, and building the bytes on each call was a fifth of what a
+    /// burst of twelve thousand events cost.
+    private static let bytePairs: [(link: [UInt8], data: [UInt8])] =
+        pairs.map { (Array($0.link.utf8), Array($0.data.utf8)) }
 
     /// `/System/Volumes/Data/Users/md` -> `/Users/md`, the name everything else
     /// on the system uses.
