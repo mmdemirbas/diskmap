@@ -65,16 +65,50 @@ public final class NodeStore {
     private var internTable: [UInt64] = []
     private var internMask: Int = 0
 
+    /// Open addressing, linear probing, and — the part that was missing — a
+    /// table that doubles when half full. The hint is a starting size, not a
+    /// promise: a folder that appears with more distinct names than the live
+    /// update allowed for, or a comparison over more names than its fixed
+    /// figure, used to probe for an empty slot that did not exist, forever.
     func beginInterning(expectedNodes: Int) {
         var slots = 1 << 12
-        while slots < expectedNodes && slots < (1 << 24) { slots <<= 1 }
+        while slots < expectedNodes * 2 && slots < Self.internSlotCap { slots <<= 1 }
         internTable = [UInt64](repeating: 0, count: slots)
         internMask = slots - 1
+        internCount = 0
     }
 
     func endInterning() {
         internTable = []
         internMask = 0
+        internCount = 0
+    }
+
+    /// 2^26 slots is 512 MB of table and room for 33 million distinct names
+    /// at half load. Past that, names are stored without interning, which
+    /// costs bytes and never time.
+    static let internSlotCap = 1 << 26
+    private var internCount = 0
+
+    /// Doubles the table, re-placing every entry by its name's hash. False
+    /// when it is at the cap, in which case the caller stops interning.
+    private func growInternTable() -> Bool {
+        let size = internTable.count << 1
+        guard size <= Self.internSlotCap else { return false }
+        var table = [UInt64](repeating: 0, count: size)
+        let mask = size - 1
+        nameBytes.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            for entry in internTable where entry != 0 {
+                let offset = Int(UInt32((entry >> 8) &- 1)), length = Int(entry & 0xFF)
+                var slot = Int(hashName(UnsafeRawPointer(base + offset), length) & UInt64(mask))
+                while table[slot] != 0 { slot = (slot &+ 1) & mask }
+                table[slot] = entry
+            }
+        }
+        internTable = table
+        internMask = mask
+        return true
     }
 
     @inline(__always)
@@ -95,8 +129,18 @@ public final class NodeStore {
         while true {
             let entry = internTable[slot]
             if entry == 0 {
+                // A new name. Half full: double first, or stop interning
+                // when the table cannot double, so a lookup always ends.
+                if (internCount + 1) * 2 > internTable.count {
+                    guard growInternTable() else {
+                        endInterning()
+                        return appendNameBytes(name, length)
+                    }
+                    return internedOffset(name, length)
+                }
                 let offset = appendNameBytes(name, length)
                 internTable[slot] = (UInt64(offset) &+ 1) << 8 | UInt64(length)
+                internCount += 1
                 return offset
             }
             if Int(entry & 0xFF) == length {
