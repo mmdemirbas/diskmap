@@ -95,8 +95,8 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 
 | What | When | By whom |
 |---|---|---|
-| Installed build is current (through `b1cc031`) | 2026-09-19 | install.sh |
-| Two windows, two independent sessions | 2026-09-09 | System Events window list |
+| Installed build is current (through `b1cc031` + warning fix) | 2026-09-19 | install.sh; window seen via CGWindowList |
+| Two windows, two independent sessions | 2026-09-09, again 2026-09-19 | CGWindowList by owner name. System Events `process "DiskMap"` finds the process but not its windows; the owner name is the bundle name, "Disk Map" |
 | Two tools side by side in one window | 2026-09-09 | offscreen render, `tmp/split.png` |
 | The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
 | Finder extension registers and Finder loads it | 2026-09-09 | `pluginkit`, process list |
