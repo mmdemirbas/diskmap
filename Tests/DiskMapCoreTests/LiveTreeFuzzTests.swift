@@ -14,8 +14,13 @@ import DiskMapCore
 ///
 /// Events are the ones the watcher would hand over: the paths of the things
 /// that changed, files and folders alike, old and new names both for a
-/// rename. Hard links are left out on purpose — a scan and a relist count a
-/// second link differently, and that is a known gap with its own note.
+/// rename. Hard links are in the mix: which link keeps a file's bytes is
+/// whichever a walk met first, and two walks need not agree, so where the
+/// tree holds any the comparison is on what does not depend on it — the
+/// same files, the same logical size on each, the same bytes on disk at the
+/// root. Twelve seeds here in the suite; run with more before trusting a
+/// change to the hard-link path, which is where the subtle ones hide.
+
 final class LiveTreeFuzzTests: XCTestCase {
     private var root: URL!
     private let fm = FileManager.default
@@ -55,26 +60,45 @@ final class LiveTreeFuzzTests: XCTestCase {
                 events += try mutate(kind, &rng, &log)
             }
             tree.flushNow(events: events)
-
             let live = tree.withStore { reachable($0) }
+            let linked = tree.withStore { store in
+                (0..<Int32(store.count)).contains { store.flagSet($0).contains(.hardlinkDuplicate) }
+            }
             // A few dozen nodes; the sixteen workers a real scan starts cost
             // more than the walk here, two hundred times over.
             var oracle = ScanOptions(rootPath: root.path)
             oracle.threadCount = 2
             let fresh = DiskScanner().scan(oracle).store
             let scanned = reachable(fresh)
-            let diff = differences(live, scanned)
+            let diff = linked ? differencesIgnoringWhoKeepsTheBytes(live, scanned) : differences(live, scanned)
             if !diff.isEmpty {
                 XCTFail("""
                     seed \(seed), batch \(batch): the live tree and a fresh scan disagree
                     \(diff.prefix(12).joined(separator: "\n"))
                     last steps:
-                    \(log.suffix(8).joined(separator: "\n"))
+                    \(log.suffix(10).joined(separator: "\n"))
                     """)
                 return
             }
             tree.withStore { assertWellFormed($0) }
         }
+    }
+
+    private func differencesIgnoringWhoKeepsTheBytes(_ live: [String: TreeEntry], _ scanned: [String: TreeEntry]) -> [String] {
+        var lines: [String] = []
+        for k in Set(live.keys).union(scanned.keys).sorted() {
+            switch (live[k], scanned[k]) {
+            case let (a?, b?) where a.logical != b.logical || a.isDirectory != b.isDirectory || a.children != b.children:
+                lines.append("\(k): live \(a)  scan \(b)")
+            case (nil, let b?): lines.append("\(k): only in scan \(b)")
+            case (let a?, nil): lines.append("\(k): only in live \(a)")
+            default: break
+            }
+        }
+        if let a = live[root.path]?.physical, let b = scanned[root.path]?.physical, a != b {
+            lines.append("bytes on disk: live \(a)  scan \(b)")
+        }
+        return lines
     }
 
     // MARK: - Mutations
@@ -84,6 +108,7 @@ final class LiveTreeFuzzTests: XCTestCase {
         case createDirWithFiles, deleteDir, renameDir
         case replaceFileWithDir, replaceDirWithFile
         case createSymlink, repointSymlink
+        case hardLink
     }
 
     private var counter = 0
@@ -192,6 +217,13 @@ final class LiveTreeFuzzTests: XCTestCase {
             try fm.removeItem(at: l)
             try fm.createSymbolicLink(at: l, withDestinationURL: target)
             log.append("repoint \(rel(l)) -> \(rel(target))")
+            return ev(l)
+        case .hardLink:
+            guard let target = pick(files) else { return [] }
+            let dir = pick(dirs) ?? root!
+            let l = dir.appendingPathComponent(freshName("h"))
+            try fm.linkItem(at: target, to: l)
+            log.append("hardlink \(rel(l)) = \(rel(target))")
             return ev(l)
         }
     }

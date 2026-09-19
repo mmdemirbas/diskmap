@@ -119,7 +119,11 @@ public final class LiveTree: @unchecked Sendable {
         self.rootPaths = result.roots.map(RawPath.init)
         self.rejectedRoots = result.rejectedRoots
         self.inodes = result.inodes
+        var st = stat()
+        self.rootDevice = result.roots.first.flatMap { RawPath($0).withCString { lstat($0, &st) } == 0 ? st.st_dev : nil } ?? 0
     }
+
+    private let rootDevice: Int32
 
     /// All reads of the tree go through here; live updates mutate under the same lock.
     public func withStore<T>(_ body: (NodeStore) -> T) -> T {
@@ -291,6 +295,8 @@ public final class LiveTree: @unchecked Sendable {
             if did { changed = true; moved += 1 }
         }
 
+        resolveTouchedInodes()
+
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds
                              - began.uptimeNanoseconds) / 1e9
         lock.lock()
@@ -365,6 +371,74 @@ public final class LiveTree: @unchecked Sendable {
         var linkCount: UInt32
         var isMultiLinkFile: Bool {
             linkCount > 1 && !flags.contains(.directory) && !flags.contains(.symlink)
+        }
+    }
+
+    struct InodeRef: Hashable { let device: Int32; let id: UInt64 }
+    /// Inodes met during this flush whose keeper the table could not name.
+    /// Only ever touched from `applyQueue`, like `lastRelist`.
+    private var unresolvedInodes = Set<InodeRef>()
+
+    /// The one pass that needs the inode column. For every inode the batch
+    /// met without a keeper it could name, every live node holding that
+    /// inode is found — the file that had one link at scan time and was
+    /// just given another is the usual find — and the bytes are settled on
+    /// exactly one of them: the one already keeping them if any, else the
+    /// oldest. Every other link is flagged and zeroed. One walk over the
+    /// column however many inodes are in question, so a package manager
+    /// linking a thousand files costs one pass, not a thousand.
+    private func resolveTouchedInodes() {
+        guard !unresolvedInodes.isEmpty else { return }
+        let wanted = unresolvedInodes
+        unresolvedInodes.removeAll()
+        lock.lock(); defer { lock.unlock() }
+        //
+        // The inode column can lie in one direction: a deleted file's number
+        // is reassigned by the volume to the next new file, so a stored id
+        // may now belong to something else. Each candidate is confirmed by
+        // its current path: only a node whose file still carries that inode
+        // is a link of the group. A node whose file was replaced lstats to a
+        // different number and drops out — it is settled by its own listing.
+        var holders: [UInt64: [Int32]] = [:]
+        let ids = Set(wanted.map(\.id))
+        for i in 0..<store.count where ids.contains(store.fileID[i]) {
+            let n = Int32(i)
+            guard !store.isDirectory(n), !store.flagSet(n).contains(.symlink), isLive(n) else { continue }
+            var info = stat()
+            guard store.pathBytes(n).withCString({ lstat($0, &info) }) == 0,
+                  info.st_ino == store.fileID[i] else { continue }
+            holders[store.fileID[i], default: []].append(n)
+        }
+        for ref in wanted {
+            guard let nodes = holders[ref.id], !nodes.isEmpty else { continue }
+            // The keeper: whoever holds the bytes now, else the oldest name.
+            let current = nodes.filter { !store.flagSet($0).contains(.hardlinkDuplicate) }
+            let keeper = current.min() ?? nodes.min()!
+            // The sizes come from the disk. Nothing stored can be trusted
+            // here: a link met by a subtree walk was zeroed, a keeper handed
+            // its bytes over at whatever size it last had, and the write that
+            // made this inode a question may have gone through any name.
+            var logical = store.totalLogical[Int(keeper)]
+            var bytes = nodes.map { store.totalPhysical[Int($0)] }.max() ?? 0
+            var info = stat()
+            if store.pathBytes(keeper).withCString({ lstat($0, &info) }) == 0 {
+                logical = Int64(info.st_size)
+                if !store.flagSet(keeper).contains(.dataless) { bytes = Int64(info.st_blocks) * 512 }
+            }
+            for n in nodes {
+                let isKeeper = n == keeper
+                let want = isKeeper ? bytes : 0
+                let dl = logical - store.totalLogical[Int(n)]
+                let dp = want - store.totalPhysical[Int(n)]
+                if isKeeper { store.flags[Int(n)] &= ~NodeFlags.hardlinkDuplicate.rawValue }
+                else { store.flags[Int(n)] |= NodeFlags.hardlinkDuplicate.rawValue }
+                if dl != 0 || dp != 0 {
+                    store.totalLogical[Int(n)] = logical
+                    store.totalPhysical[Int(n)] = want
+                    store.propagate(from: n, logical: dl, physical: dp)
+                }
+            }
+            inodes.settle(onDevice: ref.device, ref.id, keeper: keeper)
         }
     }
 
@@ -457,26 +531,6 @@ public final class LiveTree: @unchecked Sendable {
                                                        options: options, inodes: inodes)
         }
 
-        // Where a multi-link file's bytes go, decided in phase C under the
-        // lock. A name already held keeps the state the tree gave it: the
-        // keeper stays the keeper and a flagged link stays flagged, whatever
-        // the listing says, since the listing cannot tell them apart. A new
-        // name is a duplicate if the tree still shows a keeper for its inode,
-        // and becomes the keeper otherwise — after a rename, after the old
-        // keeper was deleted, or for a file that only just gained a link.
-        func settleLinks(_ e: inout DirEntry, existing old: Int32?, device: Int32) {
-            guard e.isMultiLinkFile else { return }
-            if let old, !store.isDirectory(old) {
-                if store.flagSet(old).contains(.hardlinkDuplicate) {
-                    e.flags.insert(.hardlinkDuplicate); e.physical = 0
-                }
-                return
-            }
-            if let keeper = inodes.keeper(onDevice: device, e.fileID), keeper >= 0, isLive(keeper) {
-                e.flags.insert(.hardlinkDuplicate); e.physical = 0
-            }
-        }
-
         // Phase C: commit. Re-read the node, since the tree may have moved on.
         lock.lock(); defer { lock.unlock() }
         guard node < Int32(store.count), store.isDirectory(node),
@@ -508,19 +562,24 @@ public final class LiveTree: @unchecked Sendable {
             // and the report cache keyed on it keeps answering for where the
             // link used to point — including "these two folders are copies".
             var touched = false
-            for var e in entries {
+            for e in entries {
                 let c = existing[e.name]!
                 guard !store.isDirectory(c) else { continue }
-                settleLinks(&e, existing: c, device: device)
-                // The node keeps its id here, so the table already has it.
                 delta += e.logical - store.totalLogical[Int(c)]
                 deltaPhysical += e.physical - store.totalPhysical[Int(c)]
                 if store.mtime[Int(c)] != e.mtime
                     || store.flags[Int(c)] != e.flags.rawValue { touched = true }
+                let wasInode = store.fileID[Int(c)]
                 store.totalLogical[Int(c)] = e.logical
                 store.totalPhysical[Int(c)] = e.physical
                 store.mtime[Int(c)] = e.mtime
                 store.flags[Int(c)] = e.flags.rawValue
+                noteMultiLink(e, at: c, device: device)
+                // A name that was a link and is now a different file leaves
+                // its old inode a name short; recompute that one too.
+                if wasInode != 0, wasInode != e.fileID {
+                    unresolvedInodes.insert(InodeRef(device: device, id: wasInode))
+                }
             }
             guard delta != 0 || deltaPhysical != 0 || touched else { return false }
             // Counted as a resize only when something actually resized; this is
@@ -546,21 +605,20 @@ public final class LiveTree: @unchecked Sendable {
         // subtree's nodes as its own and lost every sibling appended after.
         var grafts: [(under: Int32, sub: ScanResult)] = []
 
-        for var e in entries {
+        for e in entries {
             let isDir = e.flags.contains(.directory)
-            settleLinks(&e, existing: existing[e.name], device: device)
             let newID: Int32 = e.name.withUnsafeBytes { nb -> Int32 in
                 store.append(name: nb.baseAddress ?? UnsafeRawPointer(bitPattern: 1)!,
                              nameLength: nb.count, parent: node,
                              logical: isDir ? 0 : e.logical,
                              physical: isDir ? 0 : e.physical,
-                             mtime: e.mtime, flags: e.flags)
+                             mtime: e.mtime, flags: e.flags, fileID: e.fileID)
             }
-            if e.isMultiLinkFile {
-                if e.flags.contains(.hardlinkDuplicate) {
-                    inodes.noteLink(onDevice: device, e.fileID, node: newID)
-                } else {
-                    inodes.setKeeper(onDevice: device, e.fileID, node: newID)
+            noteMultiLink(e, at: newID, device: device)
+            if let old = existing[e.name], !store.isDirectory(old) {
+                let wasInode = store.fileID[Int(old)]
+                if wasInode != 0, wasInode != e.fileID {
+                    unresolvedInodes.insert(InodeRef(device: device, id: wasInode))
                 }
             }
             // Came back exactly as it was, under a new id only because the
@@ -586,8 +644,15 @@ public final class LiveTree: @unchecked Sendable {
         }
         for g in grafts {
             let base = store.graft(g.sub.store, under: g.under)
-            // The subtree's keepers, at the ids the graft gave them.
-            if base >= 0 { inodes.absorb(g.sub.inodes, offset: base - 1) }
+            // The subtree's keepers, at the ids the graft gave them. Any of
+            // them may be a link to bytes the tree holds under a name the
+            // subtree walk could not see, so they are all looked at again
+            // once the batch is done.
+            if base >= 0 {
+                for ref in inodes.absorb(g.sub.inodes, offset: base - 1) {
+                    unresolvedInodes.insert(InodeRef(device: ref.device, id: ref.id))
+                }
+            }
         }
 
         var gone: [Int32] = []
@@ -624,25 +689,43 @@ public final class LiveTree: @unchecked Sendable {
         return true
     }
 
+    /// A multi-link file the relist touched — created, resized, renamed,
+    /// relinked or removed — is not settled where it is met. Which of an
+    /// inode's names keeps its bytes is a walk-order fact two walks need
+    /// not share, and tracking it incrementally through a rebuild that may
+    /// touch several names at once drifts by a block. Instead the inode is
+    /// noted, and `resolveTouchedInodes` recomputes it once from the column
+    /// and the disk — the same answer a scan gives — for every inode any
+    /// folder in the batch disturbed. Batches touching no hard link pay
+    /// nothing. The caller holds the lock.
+    private func noteMultiLink(_ e: DirEntry, at node: Int32, device: Int32) {
+        guard e.isMultiLinkFile else { return }
+        store.fileID[Int(node)] = e.fileID
+        unresolvedInodes.insert(InodeRef(device: device, id: e.fileID))
+    }
+
     /// A node has just been marked removed. Every multi-link file under it
-    /// that kept its inode's bytes hands them to another link the tree
-    /// still shows, so a file that is still on disk through another name
-    /// does not drop out of the total. The caller holds the lock; the node
-    /// is already marked, so nothing under it counts as shown.
+    /// puts its inode on the list the flush resolves at the end: which name
+    /// keeps the bytes, and what those bytes are, is a question best answered
+    /// once from the column and the disk than tracked through a rebuild that
+    /// may remove several names of one inode at once. A file still on disk
+    /// under another name keeps its bytes; one whose last name went drops
+    /// out, as it should. The caller holds the lock.
     private func handOverKeptBytes(under node: Int32) {
         var queue = [node]
         while let n = queue.popLast() {
             if store.isDirectory(n) {
-                queue.append(contentsOf: store.children(n))
-                continue
+                queue.append(contentsOf: store.children(n)); continue
             }
-            guard let next = inodes.keeperRemoved(n, stillShown: isLive) else { continue }
-            let bytes = store.totalPhysical[Int(n)]
-            store.flags[Int(next)] &= ~NodeFlags.hardlinkDuplicate.rawValue
-            store.totalPhysical[Int(next)] = bytes
-            store.propagate(from: next, logical: 0, physical: bytes)
+            guard store.fileID[Int(n)] != 0, !store.flagSet(n).contains(.symlink) else { continue }
+            unresolvedInodes.insert(InodeRef(device: device(of: n), id: store.fileID[Int(n)]))
         }
     }
+
+    /// The device an inode was recorded against. The relist keys by the
+    /// directory's device; between scans everything is one volume, so the
+    /// root's device is the answer whenever a folder's own is not to hand.
+    private func device(of node: Int32) -> Int32 { rootDevice }
 
     /// Re-reads one directory right now, without waiting for FSEvents. Used
     /// after an action this app itself performed, and by tests that assert on

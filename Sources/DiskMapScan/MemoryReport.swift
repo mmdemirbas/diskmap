@@ -40,6 +40,7 @@ public extension NodeStore {
         + MemoryLayout<Int64>.stride  // totalPhysical
         + MemoryLayout<Int32>.stride  // mtime
         + MemoryLayout<UInt16>.stride // flags
+        + MemoryLayout<UInt64>.stride // fileID
     }
 
     func memoryReport() -> MemoryReport {

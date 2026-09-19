@@ -16,7 +16,7 @@ the mechanism was read in the source. Nothing here is marked from memory.
 | **Following symlinks** | A link to a parent makes the walk loop, or a link to another tree counts it again | Links are recorded and never descended into: only entries that are directories *and* not symlinks are queued (**src**, `Scanner.swift`) |
 | **Crossing mount points** | Another disk's contents added to this disk's total | Refused two ways, because one is not enough: by device number, and by matching the path against the mount table. `st_dev` cannot separate APFS volumes inside one container (**src**) |
 | **APFS firmlinks** | `/Users`, `/Applications` and friends appear under `/` *and* on the Data volume; walking `/` counts most of the disk twice | The firmlinked paths are excluded when the root is `/`, and "the startup disk" expands to both volumes, which are separate devices (**src**, `RootSet.expandStartupVolume`) |
-| **Hard links** | One file's bytes counted once per link | The first link met keeps the bytes, later ones are flagged and count zero. Totals are identical at one thread and at sixteen (**run**). The live update used to lose this: a rebuilt folder listed a flagged link as a plain file and counted it again, and a folder that appeared with a link inside counted it too. The scan's inode table now outlives the scan; a relist keeps a link's state, a new link is a duplicate while the tree shows a keeper, and when the keeper is deleted — alone or with its folder — another link takes the bytes over, since the file is still on disk (**run**, `testARelistDoesNotCountAHardLinkTwice`) |
+| **Hard links** | One file's bytes counted once per link | The first link met keeps the bytes, later ones are flagged and count zero. Totals are identical at one thread and at sixteen (**run**). The live update used to lose this: a rebuilt folder listed a flagged link as a plain file and counted it again, a folder that appeared with a link inside counted it too, and a deleted keeper dropped bytes still on disk under another name. The store now carries the inode of every file; any batch that touches a multi-link file re-resolves that inode once, at flush end, from the inode column and the disk — the same answer a scan gives — picking one keeper and zeroing the rest. Confirmed against a fresh scan across 500 randomised seeds mixing hard links with renames, moves, type flips and deletions (**run**, `LiveTreeFuzzTests`, `testARelistDoesNotCountAHardLinkTwice`) |
 | **Nested scan targets** | Choosing a folder and its parent counts the folder twice | A target inside another chosen target is dropped, with a reason the screen can show (**src**, `RootRejection.containedIn`) |
 
 Cross-checked against the system: `du -sk` on a 3,203-node tree reports
@@ -154,6 +154,13 @@ three defects in the path a new folder takes, all older than this audit
   (`testAFolderThatAppearsWithContentsListsThem`, with a structural check
   that every live node sits in its parent's run and every run holds only
   its own).
+
+A subtlety the fuzz surfaced: a deleted file's inode number is handed by
+the volume to the next new file, so the number stored against a node can
+come to belong to something unrelated. The resolver never trusts the
+stored number alone — it lstats each candidate and keeps only the ones
+whose file still carries that inode, so a name that was replaced drops out
+of the group rather than being wrongly flagged as a duplicate of it.
 
 The class, not the instance: any code that appends into a store while
 another append is in progress breaks the run. The scan takes the lock for a

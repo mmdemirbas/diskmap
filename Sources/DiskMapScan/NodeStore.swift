@@ -56,6 +56,11 @@ public final class NodeStore {
     public internal(set) var totalPhysical: [Int64] = []
     public internal(set) var mtime: [Int32] = []
     public internal(set) var flags: [UInt16] = []
+    /// The inode, as the volume numbers it. Eight bytes a node, kept for
+    /// one reason: a hard link made after the scan names bytes the tree
+    /// already holds under another name, and this column is the only way
+    /// to find that name. Zero where the walk did not record one.
+    public internal(set) var fileID: [UInt64] = []
 
     public var count: Int { parent.count }
 
@@ -170,7 +175,7 @@ public final class NodeStore {
         nameOffset.reserveCapacity(n); nameLen.reserveCapacity(n)
         parent.reserveCapacity(n); firstChild.reserveCapacity(n); childCount.reserveCapacity(n)
         totalLogical.reserveCapacity(n); totalPhysical.reserveCapacity(n)
-        mtime.reserveCapacity(n); flags.reserveCapacity(n)
+        mtime.reserveCapacity(n); flags.reserveCapacity(n); fileID.reserveCapacity(n)
         // Interned names measure ~9 bytes per node; 12 leaves headroom without
         // reserving a blob twice the size actually needed.
         nameBytes.reserveCapacity(n * 12)
@@ -178,7 +183,8 @@ public final class NodeStore {
 
     @inline(__always)
     func append(name: UnsafeRawPointer, nameLength: Int, parent p: Int32,
-                logical: Int64, physical: Int64, mtime t: Int32, flags fl: NodeFlags) -> Int32 {
+                logical: Int64, physical: Int64, mtime t: Int32, flags fl: NodeFlags,
+                fileID inode: UInt64 = 0) -> Int32 {
         let id = Int32(parent.count)
         // Offsets are 32-bit to keep the row small; refuse to wrap rather than
         // corrupt every name after the 4 GB mark.
@@ -190,6 +196,7 @@ public final class NodeStore {
         totalLogical.append(logical); totalPhysical.append(physical)
         mtime.append(t)
         flags.append(fl.rawValue)
+        fileID.append(inode)
         return id
     }
 
@@ -249,7 +256,8 @@ public final class NodeStore {
                         parent: isRoot ? -1 : moved[Int(parent[i])],
                         logical: totalLogical[i], physical: totalPhysical[i],
                         mtime: mtime[i],
-                        flags: NodeFlags(rawValue: flags[i]))
+                        flags: NodeFlags(rawValue: flags[i]),
+                        fileID: fileID[i])
                     moved[i] = mapped
                 }
             }
@@ -500,7 +508,8 @@ public final class NodeStore {
             sub.nameBytes.withUnsafeBufferPointer { nb in
                 _ = append(name: nb.baseAddress! + off, nameLength: len, parent: np,
                            logical: sub.totalLogical[i], physical: sub.totalPhysical[i],
-                           mtime: sub.mtime[i], flags: NodeFlags(rawValue: sub.flags[i]))
+                           mtime: sub.mtime[i], flags: NodeFlags(rawValue: sub.flags[i]),
+                           fileID: sub.fileID[i])
             }
         }
         for i in 1..<sub.count where sub.childCount[i] > 0 {
