@@ -76,6 +76,24 @@ saying so. `Scripts/measurements/bulk-eof-cost.swift`.
 **Skipping empty directories** using the same attribute was dropped for a
 duller reason: 11,609 of 427,451 directories are empty here, 2.7%.
 
+## After the walk went over to bytes
+
+Re-measured on 2026-09-19, once every path in the walk was a `RawPath`
+rather than a `String`, and once the name table had learned to grow from a
+small start rather than be sized for the volume. Same tree, grown to
+3,261,225 nodes, 16 threads, three builds run in rotation four times each:
+
+| Build | Runs | Best |
+|---|---|---|
+| Before the byte path (`28e2b9a^`) | 19.4, 14.0, 14.5, 13.5 s | 13.5 s |
+| The byte path (`28e2b9a`) | 15.4, 14.8, 14.4, 15.1 s | 14.4 s |
+| Now (`5a37223`) | 17.0, 13.7, 18.3, 13.8 s | 13.7 s |
+
+The spread within one build is wider than the difference between builds:
+the machine was in ordinary use, and the 12.5 s above was taken on a quieter
+one. What the figures support is that the byte path did not cost anything
+this method can see, and not more than that.
+
 ## Not walking the same folder twice
 
 The walk is at its floor. The saving left is not doing it.
