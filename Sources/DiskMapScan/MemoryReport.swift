@@ -32,7 +32,7 @@ public extension NodeStore {
     /// Per-node cost of the parallel arrays, from their element types.
     static var perNodeArrayBytes: Int {
         MemoryLayout<UInt32>.stride   // nameOffset
-        + MemoryLayout<UInt8>.stride  // nameLen
+        + MemoryLayout<UInt16>.stride  // nameLen
         + MemoryLayout<Int32>.stride  // parent
         + MemoryLayout<Int32>.stride  // firstChild
         + MemoryLayout<Int32>.stride  // childCount

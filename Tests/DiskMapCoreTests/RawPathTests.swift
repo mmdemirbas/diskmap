@@ -230,6 +230,29 @@ final class RawPathTests: XCTestCase {
                        Array(root.appendingPathComponent(name).path.utf8))
     }
 
+    /// NAME_MAX is 255 characters on APFS, not bytes: a name of 250 letters
+    /// outside ASCII is 500 bytes on disk, and the store held one byte for
+    /// the length. The walk saw all of it; the store kept the first 255.
+    ///
+    /// Written through `open(2)`, since Foundation decomposes the name to
+    /// twice the characters and refuses it as too long — which is itself
+    /// why such a name is only ever met, never made, by code like this.
+    func testANameLongerThan255BytesKeepsAllOfThem() throws {
+        let name = String(repeating: "ö", count: 200) + ".txt"
+        XCTAssertGreaterThan(name.utf8.count, 255)
+        let path = RawPath(root.path).appending(Array(name.utf8))
+        let fd = path.withCString { open($0, O_CREAT | O_WRONLY, 0o644) }
+        XCTAssertGreaterThanOrEqual(fd, 0, "the volume refused: \(String(cString: strerror(errno)))")
+        XCTAssertEqual(write(fd, Array(repeating: 0, count: 30), 30), 30)
+        close(fd)
+
+        let store = DiskScanner().scan(ScanOptions(rootPath: root.path)).store
+        let node = try XCTUnwrap(store.find(path))
+        XCTAssertEqual(store.nameBytes(of: node).count, name.utf8.count)
+        XCTAssertEqual(store.pathBytes(node), path, "the path to act on is not the file's")
+        XCTAssertEqual(try Data(contentsOf: store.url(node)).count, 30)
+    }
+
     /// Opening by bytes reaches the same directory opening by text did.
     func testOpeningADirectoryByItsBytes() throws {
         try fm.createDirectory(at: root.appendingPathComponent("üst/alt"),

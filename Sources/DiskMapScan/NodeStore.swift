@@ -41,8 +41,12 @@ public final class NodeStore {
     }
 
     public internal(set) var nameOffset: [UInt32] = []
-    /// A filesystem name is at most 255 bytes, so one byte is enough.
-    public internal(set) var nameLen: [UInt8] = []
+    /// NAME_MAX is 255, but APFS counts it in characters and stores UTF-8:
+    /// a name of 250 letters outside ASCII is 500 bytes, and one of 250
+    /// emoji is a thousand. One byte held the first 255 and lost the rest —
+    /// a truncated span, a path that named nothing, and a file the actions
+    /// could not reach. Two bytes hold any name a volume will make.
+    public internal(set) var nameLen: [UInt16] = []
     public internal(set) var parent: [Int32] = []
     public internal(set) var firstChild: [Int32] = []
     public internal(set) var childCount: [Int32] = []
@@ -100,7 +104,7 @@ public final class NodeStore {
         nameBytes.withUnsafeBufferPointer { buf in
             guard let base = buf.baseAddress else { return }
             for entry in internTable where entry != 0 {
-                let offset = Int(UInt32((entry >> 8) &- 1)), length = Int(entry & 0xFF)
+                let offset = Int(UInt32((entry >> 16) &- 1)), length = Int(entry & 0xFFFF)
                 var slot = Int(hashName(UnsafeRawPointer(base + offset), length) & UInt64(mask))
                 while table[slot] != 0 { slot = (slot &+ 1) & mask }
                 table[slot] = entry
@@ -124,7 +128,7 @@ public final class NodeStore {
     /// Hits are confirmed byte-for-byte, so a hash collision cannot swap names.
     @inline(__always)
     private func internedOffset(_ name: UnsafeRawPointer, _ length: Int) -> UInt32 {
-        guard internMask > 0, length > 0, length <= 255 else { return appendNameBytes(name, length) }
+        guard internMask > 0, length > 0, length <= 0xFFFF else { return appendNameBytes(name, length) }
         var slot = Int(hashName(name, length) & UInt64(internMask))
         while true {
             let entry = internTable[slot]
@@ -139,12 +143,12 @@ public final class NodeStore {
                     return internedOffset(name, length)
                 }
                 let offset = appendNameBytes(name, length)
-                internTable[slot] = (UInt64(offset) &+ 1) << 8 | UInt64(length)
+                internTable[slot] = (UInt64(offset) &+ 1) << 16 | UInt64(length)
                 internCount += 1
                 return offset
             }
-            if Int(entry & 0xFF) == length {
-                let offset = UInt32((entry >> 8) &- 1)
+            if Int(entry & 0xFFFF) == length {
+                let offset = UInt32((entry >> 16) &- 1)
                 let same = nameBytes.withUnsafeBufferPointer { buf -> Bool in
                     guard let base = buf.baseAddress else { return false }
                     return memcmp(base + Int(offset), name, length) == 0
@@ -180,7 +184,7 @@ public final class NodeStore {
         // corrupt every name after the 4 GB mark.
         let room = nameBytes.count <= Int(UInt32.max) - nameLength
         nameOffset.append(room ? internedOffset(name, nameLength) : 0)
-        nameLen.append(room ? UInt8(min(nameLength, Int(UInt8.max))) : 0)
+        nameLen.append(room ? UInt16(min(nameLength, Int(UInt16.max))) : 0)
         self.parent.append(p)
         firstChild.append(-1); childCount.append(0)
         totalLogical.append(logical); totalPhysical.append(physical)
@@ -380,18 +384,22 @@ public final class NodeStore {
     /// same U+FFFD are not confused.
     public func childNamed<C: Collection>(_ parentID: Int32, bytes target: C) -> Int32?
         where C.Element == UInt8 {
-        let wanted = Array(target)
-        return nameBytes.withUnsafeBufferPointer { blob -> Int32? in
-            guard let base = blob.baseAddress else { return nil }
-            for c in children(parentID) {
-                let span = nameSpan(c)
-                guard span.length == wanted.count else { continue }
-                if wanted.withUnsafeBufferPointer({ memcmp(base + span.offset, $0.baseAddress!, span.length) }) == 0 {
-                    return c
+        // The lookup is a walk over the run comparing lengths first, so a
+        // wide folder costs one byte per child and a memcmp per same-length
+        // name. No copy of the wanted bytes unless they are not contiguous.
+        func scan(_ wanted: UnsafeBufferPointer<UInt8>) -> Int32? {
+            guard let want = wanted.baseAddress else { return nil }
+            let n = wanted.count
+            return nameBytes.withUnsafeBufferPointer { blob -> Int32? in
+                guard let base = blob.baseAddress else { return nil }
+                for c in children(parentID) where Int(nameLen[Int(c)]) == n {
+                    if memcmp(base + Int(nameOffset[Int(c)]), want, n) == 0 { return c }
                 }
+                return nil
             }
-            return nil
         }
+        if let hit = target.withContiguousStorageIfAvailable(scan) { return hit }
+        return Array(target).withUnsafeBufferPointer(scan)
     }
 
     /// Resolves an absolute path to a node by walking down from the root.
@@ -403,14 +411,22 @@ public final class NodeStore {
     /// form above is for callers holding text, and gives the same answer for
     /// any path text can express.
     public func find(_ path: RawPath) -> Int32? {
-        if let hit = locate(path) { return hit }
-        // `/Users/md` and `/System/Volumes/Data/Users/md` are the same folder;
-        // callers and FSEvents use the first form, the tree stores the second.
-        if let onData = Firmlinks.onDataVolume(path), let hit = locate(onData) { return hit }
+        if let hit = lookup(path) { return hit }
         // The tree is rooted at resolved paths, but callers pass whatever they
         // happen to hold. Returning nil for "/var/..." when the tree stores
         // "/private/var/..." is a silent wrong answer, so resolve and retry.
         if let canonical = canonicalPath(path), canonical != path { return locate(canonical) }
+        return nil
+    }
+
+    /// `find` without the trip to the filesystem: the path as given, and its
+    /// Data-volume form. For a caller that holds a resolved path already and
+    /// cannot afford a syscall on a miss.
+    func lookup(_ path: RawPath) -> Int32? {
+        if let hit = locate(path) { return hit }
+        // `/Users/md` and `/System/Volumes/Data/Users/md` are the same folder;
+        // callers and FSEvents use the first form, the tree stores the second.
+        if let onData = Firmlinks.onDataVolume(path), let hit = locate(onData) { return hit }
         return nil
     }
 
