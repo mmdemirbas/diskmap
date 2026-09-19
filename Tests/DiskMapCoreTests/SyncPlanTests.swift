@@ -113,7 +113,7 @@ final class SyncPlanTests: XCTestCase {
 
         // Everything is written into the right-hand folder, and nothing else.
         for step in plan.steps {
-            XCTAssertTrue(step.target.hasPrefix(right.path + "/"), step.target)
+            XCTAssertTrue(step.target.isInside(RawPath(right.path)), step.target.display)
         }
         // Figures are on-disk bytes, so they are block-rounded rather than the
         // lengths written above; what matters is which items they add up over.
@@ -124,6 +124,30 @@ final class SyncPlanTests: XCTestCase {
         XCTAssertEqual(plan.bytesToTrash, replace.replacedBytes + remove.bytes,
                        "the version being replaced goes to the Trash too")
         XCTAssertGreaterThan(replace.replacedBytes, 0)
+    }
+
+    /// The runner's every call — copy, trash, rename, the drift check — now
+    /// takes the path as bytes. Names outside ASCII are the ordinary case that
+    /// exercises that road end to end on a volume that allows them; the names
+    /// it exists for cannot be created here and are covered where the bytes
+    /// can be injected, in `RawPathTests`.
+    func testAMirrorWorksOnNamesOutsideASCII() throws {
+        let fresh = "ölçüm 🎞/rapor–2026.txt"
+        let changed = "Çağrı/özet.txt"
+        let stale = "eski/dosya ✓.txt"
+        try write(left, fresh, bytes: 20)
+        try write(left, changed, bytes: 30)
+        try write(right, changed, bytes: 31)
+        try write(right, stale, bytes: 40)
+
+        let plan = try plan(.mirrorLeftToRight)
+        let outcome = run(plan)
+
+        XCTAssertEqual(outcome.failures.map(\.message), [])
+        XCTAssertEqual(outcome.completed, 3)
+        XCTAssertEqual(try tree(right), try tree(left), "the mirror does not match")
+        XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent(changed)).count, 30,
+                       "the replacement did not land under the right name")
     }
 
     func testAMergeCopiesBothWaysAndNeverRemoves() throws {
@@ -159,8 +183,8 @@ final class SyncPlanTests: XCTestCase {
         let plan = try plan(.merge)
         let step = try XCTUnwrap(plan.steps.first)
         XCTAssertEqual(step.action, .replace)
-        XCTAssertEqual(step.source, left.path + "/notes.txt")
-        XCTAssertEqual(step.target, right.path + "/notes.txt")
+        XCTAssertEqual(step.source?.display, left.path + "/notes.txt")
+        XCTAssertEqual(step.target.display, right.path + "/notes.txt")
     }
 
     /// On a case-insensitive volume `README` and `readme` are two entries in
@@ -273,7 +297,7 @@ final class SyncPlanTests: XCTestCase {
                        ["backed-up.bin", "backed-up-folder"],
                        "the matching folder goes whole; the unique file is untouched")
         for step in plan.steps {
-            XCTAssertTrue(step.target.hasPrefix(left.path + "/"), step.target)
+            XCTAssertTrue(step.target.isInside(RawPath(left.path)), step.target.display)
         }
         XCTAssertEqual(plan.bytesToWrite, 0)
         XCTAssertGreaterThan(plan.bytesToTrash, 0)
@@ -380,7 +404,7 @@ final class SyncPlanTests: XCTestCase {
         case .success(let plan):
             XCTAssertEqual(plan.steps.count, 1)
             XCTAssertEqual(plan.steps[0].action, .remove)
-            XCTAssertEqual(plan.steps[0].target, right.path)
+            XCTAssertEqual(plan.steps[0].target.display, right.path)
         case .failure(let f): XCTFail("the right copy is redundant: \(f)")
         }
     }
@@ -469,7 +493,7 @@ final class SyncPlanTests: XCTestCase {
 
         var plan = try plan(.mirrorLeftToRight)
         plan.steps = [SyncStep(id: 0, action: .remove, relativePath: "outsider.txt",
-                               source: nil, target: outsider.path, isDirectory: false,
+                               source: nil, target: RawPath(outsider.path), isDirectory: false,
                                bytes: 10, replacedBytes: 0, syncProvider: nil, dataless: false)]
         let outcome = run(plan)
         XCTAssertEqual(outcome.completed, 0)

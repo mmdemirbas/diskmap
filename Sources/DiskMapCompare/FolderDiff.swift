@@ -60,8 +60,11 @@ public enum DiffKind: String, Sendable, CaseIterable {
 /// whose contents match all the way down.
 public struct DiffEntry: Sendable, Identifiable {
     public var id: Int
-    /// Path below the two folders being compared, with no leading separator.
-    public var relativePath: String
+    /// Path below the two folders being compared, with no leading separator,
+    /// as the bytes the volumes hold. Everything that goes back to the disk
+    /// starts from this; `relativePath` is it shown to a person.
+    public var relativeBytes: [UInt8]
+    public var relativePath: String { String(decoding: relativeBytes, as: UTF8.self) }
     public var kind: DiffKind
     /// The left side's kind. For a clash the right side is the other one,
     /// which is the whole of what a clash is — read it through
@@ -122,7 +125,7 @@ public struct DiffEntry: Sendable, Identifiable {
         }
     }
 
-    public init(id: Int, relativePath: String, kind: DiffKind, isDirectory: Bool,
+    public init(id: Int, relativeBytes: [UInt8], kind: DiffKind, isDirectory: Bool,
                 leftBytes: Int64, rightBytes: Int64, leftModified: Int32, rightModified: Int32,
                 items: Int, dataless: Bool, newerSide: Side? = nil,
                 leftLogical: Int64 = 0, rightLogical: Int64 = 0,
@@ -132,7 +135,7 @@ public struct DiffEntry: Sendable, Identifiable {
         self.leftLogical = leftLogical; self.rightLogical = rightLogical
         self.leftIsFolder = leftIsFolder; self.rightIsFolder = rightIsFolder
         self.coversIgnored = coversIgnored
-        self.id = id; self.relativePath = relativePath; self.kind = kind
+        self.id = id; self.relativeBytes = relativeBytes; self.kind = kind
         self.isDirectory = isDirectory
         self.leftBytes = leftBytes; self.rightBytes = rightBytes
         self.leftModified = leftModified; self.rightModified = rightModified
@@ -203,9 +206,15 @@ public struct FolderComparison: Sendable {
     /// metadata. Empty until `verify` has run.
     public var verifiedAt: Date?
 
-    public func path(_ relative: String, on side: Side) -> String {
-        let base = side == .left ? left : right
-        return relative.isEmpty ? base : base + "/" + relative
+    /// Where an entry is on one side, as something the disk will recognise.
+    public func pathBytes(_ relative: [UInt8], on side: Side) -> RawPath {
+        let base = RawPath(side == .left ? left : right)
+        return relative.isEmpty ? base : base.appending(relative)
+    }
+
+    /// The same, for showing.
+    public func path(_ relative: [UInt8], on side: Side) -> String {
+        pathBytes(relative, on: side).display
     }
 
     public func entries(_ kind: DiffKind) -> [DiffEntry] { entries.filter { $0.kind == kind } }
@@ -309,7 +318,7 @@ public enum FolderDiff {
 
         var entries: [DiffEntry] = []
         var summary = DiffSummary()
-        collect(tree, 0, prefix: "", into: &entries, summary: &summary, cancel: cancel)
+        collect(tree, 0, prefix: [], into: &entries, summary: &summary, cancel: cancel)
         for index in entries.indices { entries[index].id = index }
         summary.ignored = tree.ignored
 
@@ -363,7 +372,7 @@ public enum FolderDiff {
     /// whose contents match all the way down; neither is walked into, so
     /// neither costs anything until somebody opens it on screen. A folder that
     /// differs is walked into, because the differences are why we are here.
-    private static func collect(_ tree: DiffTree, _ id: Int32, prefix: String,
+    private static func collect(_ tree: DiffTree, _ id: Int32, prefix: [UInt8],
                                 into out: inout [DiffEntry], summary: inout DiffSummary,
                                 cancel: CancelToken?) {
         if cancel?.isCancelled == true { return }
@@ -375,8 +384,8 @@ public enum FolderDiff {
         for child in tree.children(of: id) {
             if cancel?.isCancelled == true { return }
             let kind = tree.kind(child)
-            let name = tree.name(child)
-            let relative = prefix.isEmpty ? name : prefix + "/" + name
+            let name = tree.nameBytes(child)
+            let relative = prefix.isEmpty ? name : prefix + [RawPath.separator] + name
 
             // Not descended into: there is another disk behind this name and
             // the walk stopped at the door. It gets a decision of its own so it
@@ -385,7 +394,7 @@ public enum FolderDiff {
                 summary.differing += 1
                 tree.beginDecisions(child, at: out.count)
                 out.append(DiffEntry(
-                    id: 0, relativePath: relative, kind: .differs, isDirectory: true,
+                    id: 0, relativeBytes: relative, kind: .differs, isDirectory: true,
                     leftBytes: 0, rightBytes: 0, leftModified: 0, rightModified: 0,
                     items: 0, dataless: false, notCompared: true))
                 tree.endDecisions(child, at: out.count)
@@ -426,7 +435,7 @@ public enum FolderDiff {
 
             tree.beginDecisions(child, at: out.count)
             out.append(DiffEntry(
-                id: 0, relativePath: relative, kind: kind, isDirectory: isDirectory,
+                id: 0, relativeBytes: relative, kind: kind, isDirectory: isDirectory,
                 leftBytes: tree.bytes(child, on: .left),
                 rightBytes: tree.bytes(child, on: .right),
                 leftModified: tree.modified(child, on: .left),
@@ -469,11 +478,11 @@ public enum FolderDiff {
                               progressStep: Int64 = 64 << 20,
                               progress: ((Int64) -> Void)? = nil) -> VerifyDifferences {
         let span = Telemetry.begin("compare.verify")
-        var pairs: [(relative: String, left: String, right: String)] = []
+        var pairs: [(relative: [UInt8], left: RawPath, right: RawPath)] = []
         var notDownloaded: [String] = []
         for entry in comparison.entries where entry.kind == .identical {
             if entry.isDirectory {
-                let below = filePairs(under: entry.relativePath, comparison)
+                let below = filePairs(under: entry.relativeBytes, comparison)
                 pairs += below.settled
                 notDownloaded += below.dataless
             } else if entry.dataless {
@@ -483,9 +492,9 @@ public enum FolderDiff {
                 // than the question.
                 notDownloaded.append(entry.relativePath)
             } else {
-                pairs.append((entry.relativePath,
-                              comparison.path(entry.relativePath, on: .left),
-                              comparison.path(entry.relativePath, on: .right)))
+                pairs.append((entry.relativeBytes,
+                              comparison.pathBytes(entry.relativeBytes, on: .left),
+                              comparison.pathBytes(entry.relativeBytes, on: .right)))
             }
         }
 
@@ -497,10 +506,10 @@ public enum FolderDiff {
             if cancel?.isCancelled == true { break }
             guard let a = DeepVerify.hashFile(pair.left, cancel: cancel, bytesRead: &read),
                   let b = DeepVerify.hashFile(pair.right, cancel: cancel, bytesRead: &read) else {
-                unreadable.append(pair.relative)
+                unreadable.append(String(decoding: pair.relative, as: UTF8.self))
                 continue
             }
-            if a != b { differing.append(pair.relative) }
+            if a != b { differing.append(String(decoding: pair.relative, as: UTF8.self)) }
             if read - reported >= progressStep { reported = read; progress?(read) }
         }
         progress?(read)
@@ -518,32 +527,39 @@ public enum FolderDiff {
     }
 
     /// Every file below a folder the comparison collapsed as identical.
-    private static func filePairs(under relative: String, _ comparison: FolderComparison)
-        -> (settled: [(relative: String, left: String, right: String)], dataless: [String]) {
-        var out: [(String, String, String)] = []
+    ///
+    /// The walk hands back URLs, which keep a name's bytes; `URL.path` would
+    /// not, so the bytes are taken from the URL directly.
+    private static func filePairs(under relative: [UInt8], _ comparison: FolderComparison)
+        -> (settled: [(relative: [UInt8], left: RawPath, right: RawPath)], dataless: [String]) {
+        var out: [([UInt8], RawPath, RawPath)] = []
         var dataless: [String] = []
-        let base = comparison.path(relative, on: .left)
+        let base = comparison.pathBytes(relative, on: .left)
         guard let walker = FileManager.default.enumerator(
-            at: URL(fileURLWithPath: base),
+            at: base.url(isDirectory: true),
             includingPropertiesForKeys: [.isRegularFileKey]) else { return (out, dataless) }
         for case let url as URL in walker {
             guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
             else { continue }
-            let suffix = String(url.path.dropFirst(base.count + 1))
-            let child = relative.isEmpty ? suffix : relative + "/" + suffix
+            let found = RawPath(url: url)
+            let suffix = Array(found.bytes.dropFirst(base.bytes.count + 1))
+            let child = relative.isEmpty ? suffix : relative + [RawPath.separator] + suffix
             // The scan flagged placeholders on the way past, but a folder that
             // collapsed as identical was never walked into, so the flag for
             // what is inside it was never carried out here. One `lstat` per
             // file is cheaper than the download opening one would start.
-            if isDataless(url.path) { dataless.append(child); continue }
-            out.append((child, url.path, comparison.path(child, on: .right)))
+            if isDataless(found) {
+                dataless.append(String(decoding: child, as: UTF8.self))
+                continue
+            }
+            out.append((child, found, comparison.pathBytes(child, on: .right)))
         }
         return (out, dataless)
     }
 
-    static func isDataless(_ path: String) -> Bool {
+    static func isDataless(_ path: RawPath) -> Bool {
         var info = stat()
-        guard lstat(path, &info) == 0 else { return false }
+        guard path.withCString({ lstat($0, &info) }) == 0 else { return false }
         return info.st_flags & SF_DATALESS_FLAG != 0
     }
 

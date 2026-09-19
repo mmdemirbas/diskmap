@@ -571,7 +571,8 @@ struct CompareView: View {
             Text(shortBytes(step.bytes))
                 .font(.system(size: 11, design: .monospaced))
                 .frame(width: 78, alignment: .trailing)
-            Text(step.relativePath.isEmpty ? (step.target as NSString).lastPathComponent
+            Text(step.relativePath.isEmpty
+                 ? String(decoding: step.target.lastComponent, as: UTF8.self)
                                            : step.relativePath)
                 .font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 6)
@@ -1006,7 +1007,7 @@ struct DiffRowList: View {
 
     func reveal(_ tree: DiffTree, _ id: Int32, _ side: Side) {
         guard let comparison = model.folderComparison else { return }
-        let path = comparison.path(tree.relativePath(id), on: side)
-        FileActions.revealInFinder([URL(fileURLWithPath: path)])
+        let path = comparison.pathBytes(tree.relativeBytes(id), on: side)
+        FileActions.revealInFinder([path.url(isDirectory: tree.isDirectory(id, on: side))])
     }
 }

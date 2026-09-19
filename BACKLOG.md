@@ -69,7 +69,7 @@ nine days of work sat in `build/` unseen.
 | 23 | Finish the partials: 2d and 12 | done | `52e0c76`, and drops plus row drags on both lists. |
 | 24 | Share scan data between tools, so one folder is never walked twice | done | `NodeStore.subtree`, `ScanReuse`. A comparison asks the scan first; ~9x on folders it can answer. Refuses where the copy would not be the same answer. |
 | 25 | Faster scanning, still precise and correct | done | Measured first: `docs/scanning-speed.md`. The walk is at the syscall floor — 4.3x faster than `du`, and one thread costs what `du` costs. Thread count raised to where the curve flattens; two obvious ideas measured and dropped. |
-| 27 | Names that are not valid UTF-8 must not lose a subtree | done | `RawPath`: the walk, the store and every action carry bytes. Live updates and the comparison's per-item actions still fail closed; `docs/known-pitfalls.md` says where the line is. |
+| 27 | Names that are not valid UTF-8 must not lose a subtree | done | `RawPath`: the walk, the store, every action, the comparison, the sync runner and the deep check carry bytes. Live updates alone still fail closed, for a reason written down in `docs/known-pitfalls.md`. |
 | 26 | Audit the mistakes tools like this are known to make | done | `docs/known-pitfalls.md`. One real gap found and fixed: the copy hunt matched names by raw bytes on volumes that fold case. |
 
 ---

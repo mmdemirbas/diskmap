@@ -190,23 +190,34 @@ public final class DiffTree: @unchecked Sendable {
         return l > r ? .left : .right
     }
 
-    public func name(_ id: Int32) -> String {
+    /// The name as the volume holds it. Text is for showing; anything that
+    /// goes back to the filesystem — reveal, copy, trash — takes the bytes, so
+    /// a name that is not valid UTF-8 still names the file it names.
+    public func nameBytes(_ id: Int32) -> [UInt8] {
         let n = nodes[Int(id)]
-        if n.leftNode >= 0 { return left.name(n.leftNode) }
-        if n.rightNode >= 0 { return right.name(n.rightNode) }
-        return ""
+        let (store, node): (NodeStore, Int32) = n.leftNode >= 0 ? (left, n.leftNode)
+                                              : (right, n.rightNode)
+        guard node >= 0 else { return [] }
+        let span = store.nameSpan(node)
+        return store.withNameBytes { Array($0[span.offset..<(span.offset + span.length)]) }
     }
+
+    public func name(_ id: Int32) -> String { String(decoding: nameBytes(id), as: UTF8.self) }
 
     /// Below the two folders being compared, with no leading separator.
     /// Rebuilt by walking up, which is a dozen steps at most.
-    public func relativePath(_ id: Int32) -> String {
-        var parts: [String] = []
+    public func relativeBytes(_ id: Int32) -> [UInt8] {
+        var parts: [[UInt8]] = []
         var current = id
         while current > 0 {
-            parts.append(name(current))
+            parts.append(nameBytes(current))
             current = nodes[Int(current)].parent
         }
-        return parts.reversed().joined(separator: "/")
+        return Array(parts.reversed().joined(separator: [RawPath.separator]))
+    }
+
+    public func relativePath(_ id: Int32) -> String {
+        String(decoding: relativeBytes(id), as: UTF8.self)
     }
 
     // MARK: - Opening a folder

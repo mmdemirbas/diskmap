@@ -75,9 +75,11 @@ public struct SyncStep: Sendable, Identifiable {
     public var id: Int
     public var action: SyncAction
     public var relativePath: String
-    /// Absolute. Nil for a removal, which has nothing to read.
-    public var source: String?
-    public var target: String
+    /// Absolute, as bytes: these are what the runner opens, copies, renames
+    /// and moves to the Trash, and a name that is not valid UTF-8 has to reach
+    /// those calls intact. Nil for a removal, which has nothing to read.
+    public var source: RawPath?
+    public var target: RawPath
     public var isDirectory: Bool
     /// Bytes this writes, or for a removal the bytes it moves to the Trash.
     public var bytes: Int64
@@ -101,8 +103,8 @@ public struct SyncStep: Sendable, Identifiable {
 
     public var name: String { (relativePath as NSString).lastPathComponent }
 
-    public init(id: Int, action: SyncAction, relativePath: String, source: String?,
-                target: String, isDirectory: Bool, bytes: Int64, replacedBytes: Int64,
+    public init(id: Int, action: SyncAction, relativePath: String, source: RawPath?,
+                target: RawPath, isDirectory: Bool, bytes: Int64, replacedBytes: Int64,
                 syncProvider: String?, dataless: Bool,
                 targetIsFolder: Bool = false, targetBytes: Int64 = -1,
                 targetModified: Int32 = 0, coversIgnored: Bool = false) {
@@ -171,7 +173,7 @@ public struct SyncPlan: Sendable {
     public var fits: Bool {
         var onLeft: Int64 = 0, onRight: Int64 = 0
         for step in steps where step.action != .remove {
-            if FolderDiff.isInside(step.target, left) { onLeft += step.bytes } else { onRight += step.bytes }
+            if step.target.isInside(RawPath(left)) { onLeft += step.bytes } else { onRight += step.bytes }
         }
         return onLeft <= freeOnLeftVolume && onRight <= freeOnRightVolume
     }
@@ -395,7 +397,7 @@ public enum SyncPlanner {
         var info = stat()
         guard lstat(target, &info) == 0 else { return .failure(.notRedundant) }
         let step = SyncStep(id: 0, action: .remove, relativePath: "", source: nil,
-                            target: target, isDirectory: true, bytes: bytes,
+                            target: RawPath(target), isDirectory: true, bytes: bytes,
                             replacedBytes: 0, syncProvider: syncRoots.provider(for: target),
                             dataless: false,
                             targetIsFolder: true, targetBytes: -1,
@@ -482,8 +484,9 @@ public enum SyncPlanner {
 
     private static func step(_ action: SyncAction, _ entry: DiffEntry, from source: Side,
                              _ comparison: FolderComparison, _ syncRoots: SyncRoots) -> SyncStep {
-        let here = comparison.path(entry.relativePath, on: source)
-        let target = action == .remove ? here : comparison.path(entry.relativePath, on: source.other)
+        let here = comparison.pathBytes(entry.relativeBytes, on: source)
+        let target = action == .remove ? here
+                                       : comparison.pathBytes(entry.relativeBytes, on: source.other)
         let targetSide = action == .remove ? source : source.other
         return SyncStep(
             id: 0, action: action, relativePath: entry.relativePath,
@@ -496,7 +499,9 @@ public enum SyncPlanner {
             // two names for one file makes two files, each the full size.
             bytes: action == .remove ? entry.bytes(on: source) : entry.logical(on: source),
             replacedBytes: action == .replace ? entry.bytes(on: source.other) : 0,
-            syncProvider: syncRoots.provider(for: target),
+            // A provider root is text macOS chose, so matching its prefix
+            // against the shown form is exact even when the tail is not.
+            syncProvider: syncRoots.provider(for: target.display),
             dataless: entry.dataless,
             targetIsFolder: entry.isFolder(on: targetSide),
             targetBytes: entry.logical(on: targetSide),
@@ -643,10 +648,10 @@ public enum SyncRunner {
                                          bytes: step.targetBytes, modified: step.targetModified)
     }
 
-    private static func trash(_ path: String, bytes: Int64) throws -> TrashedItem? {
-        guard FileManager.default.fileExists(atPath: path) else { return nil }
+    private static func trash(_ path: RawPath, bytes: Int64) throws -> TrashedItem? {
+        guard exists(path) else { return nil }
         var resulting: NSURL?
-        let url = URL(fileURLWithPath: path)
+        let url = path.url(isDirectory: false)
         try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
         return TrashedItem(originalURL: url, trashURL: resulting as URL?,
                            bytesFreed: bytes, node: -1)
@@ -661,7 +666,7 @@ public enum SyncRunner {
     /// the file the user was replacing is in the Trash with nothing standing
     /// where it was.
     private static func replace(_ step: SyncStep, fm: FileManager) throws -> TrashedItem? {
-        let staging = step.target + ".diskmap-incoming-\(step.id)"
+        let staging = step.target.appendingSuffix(".diskmap-incoming-\(step.id)")
         do {
             try copy(step.source!, to: staging, fm: fm)
         } catch {
@@ -690,27 +695,38 @@ public enum SyncRunner {
     /// Through the Trash like everything else, because the one thing worse
     /// than a stray file is a delete path that turns out to have been pointed
     /// somewhere else.
-    private static func discard(_ path: String) throws {
-        guard FileManager.default.fileExists(atPath: path) else { return }
-        try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+    private static func discard(_ path: RawPath) throws {
+        guard exists(path) else { return }
+        try FileManager.default.trashItem(at: path.url(isDirectory: false), resultingItemURL: nil)
     }
 
-    private static func copy(_ source: String, to target: String, fm: FileManager) throws {
-        let targetURL = URL(fileURLWithPath: target)
-        try fm.createDirectory(at: targetURL.deletingLastPathComponent(),
+    /// `lstat` rather than `fileExists(atPath:)`, which takes text.
+    private static func exists(_ path: RawPath) -> Bool {
+        var info = stat()
+        return path.withCString { lstat($0, &info) } == 0
+    }
+
+    private static func copy(_ source: RawPath, to target: RawPath, fm: FileManager) throws {
+        try fm.createDirectory(at: target.parent.url(isDirectory: true),
                                withIntermediateDirectories: true)
         // Never over the top of something: if the target reappeared between
         // planning and now, this throws rather than silently taking its place.
-        try fm.copyItem(atPath: source, toPath: target)
+        try fm.copyItem(at: source.url(isDirectory: false), to: target.url(isDirectory: false))
         // copyItem carries the modification date across, but a mirror whose
         // dates drift shows every file as changed on the next comparison, so
         // the top-level item is set explicitly rather than assumed.
-        if let date = (try? fm.attributesOfItem(atPath: source))?[.modificationDate] as? Date {
-            try? fm.setAttributes([.modificationDate: date], ofItemAtPath: target)
+        // Through the URLs' own resource values, since the path forms of these
+        // calls take text.
+        if let date = try? source.url(isDirectory: false)
+            .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+            var values = URLResourceValues()
+            values.contentModificationDate = date
+            var written = target.url(isDirectory: false)
+            try? written.setResourceValues(values)
         }
     }
 
-    private static func isWithin(_ path: String, _ plan: SyncPlan) -> Bool {
-        FolderDiff.isInside(path, plan.left) || FolderDiff.isInside(path, plan.right)
+    private static func isWithin(_ path: RawPath, _ plan: SyncPlan) -> Bool {
+        path.isInside(RawPath(plan.left)) || path.isInside(RawPath(plan.right))
     }
 }

@@ -5,10 +5,11 @@ import DiskMapScan
 import DiskMapActions
 
 public struct VerifyFile: Sendable {
-    public var path: String
+    public var path: RawPath
     /// Position inside the folder being verified, so the same tree under two
-    /// different names compares equal.
-    public var relative: String
+    /// different names compares equal. Bytes, so the position is the one the
+    /// volume holds and not what it happens to decode to.
+    public var relative: [UInt8]
     public var bytes: Int64
 }
 
@@ -65,12 +66,12 @@ public enum DeepVerify {
         for node in nodes {
             var files: [VerifyFile] = []
             var skipped = 0
-            let base = store.path(node)
-            let prefix = base.hasSuffix("/") ? base.count : base.count + 1
+            let base = store.pathBytes(node)
+            let prefix = base.isRoot ? base.bytes.count : base.bytes.count + 1
 
             var stack: [Int32] = [node]
             if !store.isDirectory(node) {
-                files.append(VerifyFile(path: base, relative: store.name(node),
+                files.append(VerifyFile(path: base, relative: Array(base.lastComponent),
                                         bytes: store.totalLogical[Int(node)]))
                 stack = []
                 if store.flagSet(node).contains(.dataless) { files.removeAll(); skipped += 1 }
@@ -82,12 +83,14 @@ public enum DeepVerify {
                     if store.isDirectory(child) { stack.append(child); continue }
                     if flags.contains(.symlink) { continue }
                     if flags.contains(.dataless) { skipped += 1; continue }
-                    let path = store.path(child)
-                    files.append(VerifyFile(path: path, relative: String(path.dropFirst(prefix)),
+                    let path = store.pathBytes(child)
+                    files.append(VerifyFile(path: path, relative: Array(path.bytes.dropFirst(prefix)),
                                             bytes: store.totalLogical[Int(child)]))
                 }
             }
-            files.sort { $0.relative < $1.relative }
+            // Byte order, so two folders holding the same files digest in the
+            // same order whatever their names decode to.
+            files.sort { $0.relative.lexicographicallyPrecedes($1.relative) }
             totalFiles += files.count
             totalBytes += files.reduce(0) { $0 + $1.bytes }
             totalSkipped += skipped
@@ -121,7 +124,7 @@ public enum DeepVerify {
                         unread += 1
                         continue
                     }
-                    folder.update(data: Data(file.relative.utf8))
+                    folder.update(data: Data(file.relative))
                     folder.update(data: Data([0]))
                     folder.update(data: Data(digest))
                 }
@@ -140,7 +143,7 @@ public enum DeepVerify {
         return outcome
     }
 
-    private static func hash(_ path: String, cancel: CancelToken?, tally: Tally) -> [UInt8]? {
+    private static func hash(_ path: RawPath, cancel: CancelToken?, tally: Tally) -> [UInt8]? {
         read(path, cancel: cancel) { tally.add($0) }
     }
 
@@ -148,16 +151,16 @@ public enum DeepVerify {
     /// pairs in order and keeps its own running total, so it has no use for the
     /// shared tally — but it should not carry a second copy of this read loop,
     /// which is where `F_NOCACHE` and cancellation live.
-    static func hashFile(_ path: String, cancel: CancelToken?, bytesRead: inout Int64) -> [UInt8]? {
+    static func hashFile(_ path: RawPath, cancel: CancelToken?, bytesRead: inout Int64) -> [UInt8]? {
         var local: Int64 = 0
         let digest = read(path, cancel: cancel) { local += $0 }
         bytesRead += local
         return digest
     }
 
-    private static func read(_ path: String, cancel: CancelToken?,
+    private static func read(_ path: RawPath, cancel: CancelToken?,
                              count: (Int64) -> Void) -> [UInt8]? {
-        let fd = open(path, O_RDONLY | O_CLOEXEC)
+        let fd = path.withCString { open($0, O_RDONLY | O_CLOEXEC) }
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         // Verifying can read hundreds of gigabytes. Keeping it out of the page

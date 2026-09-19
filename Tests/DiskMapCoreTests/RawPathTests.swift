@@ -83,6 +83,56 @@ final class RawPathTests: XCTestCase {
         XCTAssertEqual(Int(length), path.bytes.count)
     }
 
+    func testTheParentAndTheLastComponentAreCutOnTheSeparator() {
+        let path = RawPath("/tmp/x").appending(awkward)
+        XCTAssertEqual(Array(path.lastComponent), awkward)
+        XCTAssertEqual(path.parent.display, "/tmp/x")
+        XCTAssertEqual(RawPath("/tmp").parent.display, "/")
+        XCTAssertEqual(RawPath("/").parent.display, "/")
+    }
+
+    /// A staging name is ours and ASCII; what it is stuck onto need not be.
+    func testASuffixGoesOnTheEndWithoutTouchingTheName() {
+        let path = RawPath("/tmp").appending(awkward)
+        XCTAssertEqual(path.appendingSuffix(".part").bytes, path.bytes + Array(".part".utf8))
+    }
+
+    /// Compares against "container/", so a sibling with a longer name is not
+    /// swallowed, and does so on the bytes.
+    func testInsideIsAPrefixOnTheBytes() {
+        let container = RawPath("/tmp").appending(awkward)
+        XCTAssertTrue(container.appending(Array("child".utf8)).isInside(container))
+        XCTAssertTrue(container.isInside(container))
+        XCTAssertFalse(RawPath("/tmp").appending(awkward + [0x78]).isInside(container),
+                       "a longer sibling was taken for a child")
+        XCTAssertTrue(container.isInside(RawPath("/")))
+    }
+
+    /// The URL keeps the bytes and gives them back, which is what `FileManager`
+    /// hands the walk that looks inside a folder the comparison collapsed.
+    func testAURLGivesTheBytesBack() {
+        let path = RawPath("/tmp").appending(awkward)
+        XCTAssertEqual(RawPath(url: path.url(isDirectory: false)).bytes, path.bytes)
+    }
+
+    // MARK: - Through the comparison
+
+    /// A relative path that cannot be decoded still reaches the disk intact
+    /// from the comparison's side, which is the road every sync step takes.
+    func testAComparisonBuildsAnActionablePathFromRelativeBytes() throws {
+        let left = root.appendingPathComponent("left"), right = root.appendingPathComponent("right")
+        try fm.createDirectory(at: left, withIntermediateDirectories: true)
+        try fm.createDirectory(at: right, withIntermediateDirectories: true)
+        guard case .success(let comparison) = FolderDiff.compare(left: left.path, right: right.path)
+        else { return XCTFail("two empty folders were refused") }
+
+        let relative = Array("dir/".utf8) + awkward
+        XCTAssertEqual(comparison.pathBytes(relative, on: .left).bytes,
+                       Array((left.path + "/dir/").utf8) + awkward)
+        XCTAssertEqual(comparison.pathBytes([], on: .right).display, right.path)
+        XCTAssertTrue(comparison.path(relative, on: .left).contains("\u{FFFD}"))
+    }
+
     // MARK: - Through the store
 
     /// A store carrying a name that cannot be written down still names it.

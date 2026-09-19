@@ -24,10 +24,20 @@ public struct RawPath: Hashable, Sendable {
     public init(_ text: String) { bytes = Array(text.utf8) }
     public init(bytes: [UInt8]) { self.bytes = bytes }
 
+    /// From a file URL, which keeps the bytes `URL.path` would lose.
+    public init(url: URL) {
+        bytes = url.withUnsafeFileSystemRepresentation { rep in
+            guard let rep else { return [] }
+            return Array(UnsafeBufferPointer(
+                start: UnsafeRawPointer(rep).assumingMemoryBound(to: UInt8.self),
+                count: strlen(rep)))
+        }
+    }
+
     public var isEmpty: Bool { bytes.isEmpty }
     public var isRoot: Bool { bytes == [Self.separator] }
 
-    static let separator: UInt8 = 0x2F  // "/"
+    public static let separator: UInt8 = 0x2F  // "/"
 
     /// This path with one more component on the end.
     ///
@@ -45,6 +55,30 @@ public struct RawPath: Hashable, Sendable {
     /// would produce.
     public var components: [ArraySlice<UInt8>] {
         bytes.split(separator: Self.separator, omittingEmptySubsequences: true)
+    }
+
+    /// The last component, or nothing for the root.
+    public var lastComponent: ArraySlice<UInt8> { components.last ?? [] }
+
+    /// This path with text stuck on the end of its last component — a staging
+    /// name beside the file it will replace. Text, because the suffix is ours
+    /// and is always ASCII; the path it is stuck onto need not be.
+    public func appendingSuffix(_ suffix: String) -> RawPath {
+        RawPath(bytes: bytes + Array(suffix.utf8))
+    }
+
+    /// The folder this is in.
+    public var parent: RawPath {
+        guard let cut = bytes.lastIndex(of: Self.separator) else { return RawPath("") }
+        return cut == 0 ? RawPath("/") : RawPath(bytes: Array(bytes[..<cut]))
+    }
+
+    /// True when this is `container` or sits beneath it. Compares against
+    /// "container/" so `/Users/md/dev` does not swallow `/Users/md/development`.
+    public func isInside(_ container: RawPath) -> Bool {
+        if bytes == container.bytes { return true }
+        let head = container.isRoot ? container.bytes : container.bytes + [Self.separator]
+        return bytes.count > head.count && Array(bytes.prefix(head.count)) == head
     }
 
     /// For a syscall. Zero-terminated, and never allocated as a String on the

@@ -54,10 +54,10 @@ public enum FileActions {
     /// A missing item is not drift: there is nothing there to lose. `bytes`
     /// below zero means the size is not worth re-reading, which is the case
     /// for a folder.
-    public static func changedSincePlanning(_ path: String, isFolder expected: Bool,
+    public static func changedSincePlanning(_ path: RawPath, isFolder expected: Bool,
                                             bytes: Int64, modified: Int32) -> String? {
         var info = stat()
-        guard lstat(path, &info) == 0 else { return nil }
+        guard path.withCString({ lstat($0, &info) }) == 0 else { return nil }
         let isFolder = (info.st_mode & S_IFMT) == S_IFDIR
         if isFolder != expected {
             return isFolder
@@ -102,7 +102,10 @@ public enum FileActions {
         var trashed: [TrashedItem] = []
         var failures: [FileActionError] = []
         for item in urls {
-            if let changed = changedSincePlanning(item.url.path, isFolder: item.isFolder,
+            // From the URL's bytes, not `url.path`: the URL was built to keep a
+            // name text cannot hold, and the check that guards the Trash has
+            // to look at the same file the move will.
+            if let changed = changedSincePlanning(RawPath(url: item.url), isFolder: item.isFolder,
                                                   bytes: item.length, modified: item.modified) {
                 failures.append(.failed(url: item.url, underlying: changed))
                 continue

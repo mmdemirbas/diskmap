@@ -93,7 +93,16 @@ So paths are carried as bytes (`RawPath`) from the directory listing to the
   `URL(fileURLWithPath:)`, which takes a `String` and would lose it again.
 - **Every action** — reveal, Trash, drag — goes from a node id to a URL through
   that one funnel, at the moment of acting, rather than carrying a path
-  through a `String` in a plan (**run**, `RawPathTests`).
+  through a `String` in a plan (**run**, `RawPathTests`). The drift check that
+  guards the Trash reads the URL's bytes too, not `url.path`, so it looks at
+  the same file the move will.
+- **The comparison and the sync plan** carry relative paths as bytes from the
+  two stores' name spans. A sync step's source and target are `RawPath`, and
+  the runner's every call — copy, trash, rename, the drift check — takes them
+  as bytes. The deep check opens files by bytes and orders them by bytes, so
+  two folders holding the same files digest in the same order whatever their
+  names decode to. Exercised end to end on names outside ASCII, which is the
+  same road (**run**, `testAMirrorWorksOnNamesOutsideASCII`).
 
 The name cannot be created on this machine, so the tests put the bytes into the
 store directly, which is what a share serving them would have handed the walk.
@@ -106,12 +115,10 @@ coverage is announced rather than silent.
 such a name would be reported under a mangled path. The consequence is bounded:
 the lookup fails, the relist returns false, and that directory is not refreshed.
 It fails closed — nothing is corrupted, nothing is acted on, and the totals from
-the scan itself stay right.
-
-**The folder comparison** keeps relative paths as text. Its *verdict* is
-unaffected: names are matched on raw bytes, so two such files still compare as
-the same file. What degrades is per-item: the row shows U+FFFD, and Reveal or a
-sync action on that one item fails rather than acting.
+the scan itself stay right. Left there on purpose: FSEvents is a property of
+HFS+ and APFS volumes, which refuse these names, so the two cannot meet on the
+same volume; and finishing it means byte-converting the relist pipeline through
+to the scanner's root list for a case that cannot occur.
 
 ## Known and accepted
 
