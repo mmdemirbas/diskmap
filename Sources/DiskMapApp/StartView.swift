@@ -70,10 +70,10 @@ struct StartView: View {
                 .strokeBorder(isTargeted ? Color.accentColor : Color(nsColor: .separatorColor),
                               style: StrokeStyle(lineWidth: isTargeted ? 2 : 1)))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .dropDestination(for: URL.self) { urls, _ in
+        .acceptsFolders(renderMode: model.renderMode, isTargeted: { isTargeted = $0 }) { urls in
             model.addTargets(urls)
             return true
-        } isTargeted: { isTargeted = $0 }
+        }
     }
 
     /// Every folder that has been added, ticked or not, minus anything that is

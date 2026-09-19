@@ -102,4 +102,4 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 | Finder extension registers and Finder loads it | 2026-09-09 | `pluginkit`, process list |
 | The right-click item appears and works | 2026-09-09 | the user, by right-clicking |
 | The drag gesture on tool tabs | 2026-09-09 | the user |
-| Tabs, flat table, content line | — | needs a look |
+| Tabs, flat table, content line | 2026-09-19 | offscreen renders `tmp/look-files.png`, `tmp/look-content.png`. The first look showed a warning glyph over the whole table: the renderer painting the tool-sized drop target, which draws nothing in a window. Fixed in render mode (`acceptsFolders(renderMode:)`) and guarded like `ScrollView`. Not yet seen by a person |

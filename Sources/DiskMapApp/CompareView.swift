@@ -128,11 +128,12 @@ struct CompareView: View {
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
             hot ? Color.accentColor : Color(nsColor: .separatorColor),
             lineWidth: hot ? 2 : 1))
-        .dropDestination(for: URL.self) { urls, _ in
+        .acceptsFolders(renderMode: model.renderMode,
+                        isTargeted: { dropTarget = $0 ? side : nil }) { urls in
             guard let url = urls.first else { return false }
             model.setCompareSide(side, url)
             return true
-        } isTargeted: { dropTarget = $0 ? side : nil }
+        }
     }
 
     /// The pairs compared before. A sync is a thing you do again next week, and

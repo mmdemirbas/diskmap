@@ -34,7 +34,7 @@ struct DuplicatesView: View {
                 }
             }
         }
-        .dropDestination(for: URL.self) { urls, _ in model.measureAlso(urls) }
+        .acceptsFolders(renderMode: model.renderMode) { model.measureAlso($0) }
     }
 
     // MARK: - Chrome

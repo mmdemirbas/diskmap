@@ -51,7 +51,7 @@ struct FilesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Same as the map: dropping a folder onto a screen that shows a scan
         // means measure that too.
-        .dropDestination(for: URL.self) { urls, _ in model.measureAlso(urls) }
+        .acceptsFolders(renderMode: model.renderMode) { model.measureAlso($0) }
         .background(Color(nsColor: .windowBackgroundColor))
         .task { if model.files.page.rows.isEmpty { model.reloadFiles() } }
     }

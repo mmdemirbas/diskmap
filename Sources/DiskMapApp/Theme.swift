@@ -162,6 +162,29 @@ func percentString(_ fraction: Double) -> String {
     return f.string(from: NSNumber(value: fraction)) ?? "0%"
 }
 
+/// A drop target for folders, except when rendering offscreen.
+///
+/// `dropDestination` puts an AppKit drag view under the content. It draws
+/// nothing in a window, but the offscreen renderer cannot draw AppKit and
+/// paints what it cannot draw as a warning glyph the size of the view. On a
+/// target the size of a tool that is the whole tool, under every row, and a
+/// check of that tool is looking at the glyph rather than the screen. Found
+/// the same way the ScrollView case was: a render that had been clean, and
+/// was not the next day.
+extension View {
+    @ViewBuilder
+    func acceptsFolders(renderMode: Bool,
+                        isTargeted: @escaping (Bool) -> Void = { _ in },
+                        perform: @escaping ([URL]) -> Bool) -> some View {
+        if renderMode {
+            self
+        } else {
+            dropDestination(for: URL.self, action: { urls, _ in perform(urls) },
+                            isTargeted: isTargeted)
+        }
+    }
+}
+
 /// A ScrollView, except when rendering offscreen.
 ///
 /// An offscreen render has no viewport, so a ScrollView measures zero and draws

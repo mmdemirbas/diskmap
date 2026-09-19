@@ -1,6 +1,6 @@
 import XCTest
 
-/// One mistake, made six times.
+/// One mistake, made six times — and then a second of the same shape.
 ///
 /// A `ScrollView` has no viewport when `ImageRenderer` draws it offscreen, so
 /// it measures zero and its contents simply do not appear. Every screenshot
@@ -8,11 +8,23 @@ import XCTest
 /// screen is broken rather than the capture. `viewportScroller(renderMode:)`
 /// exists so this is decided once, and this test is here because knowing about
 /// the helper has repeatedly not been enough to remember to use it.
+///
+/// A `dropDestination` is the other one: it draws nothing in a window and a
+/// warning glyph the size of the view offscreen, which on a whole-tool target
+/// hides the tool. `acceptsFolders(renderMode:)` is its fallback.
 final class OffscreenRenderGuardTests: XCTestCase {
-    /// Where the fallback itself lives, and is allowed to say `ScrollView`.
+    /// Where the fallbacks themselves live, and are allowed to say the words.
     private let home = "Theme.swift"
 
     func testEveryScrollViewGoesThroughTheOffscreenFallback() throws {
+        try assertGuarded("ScrollView", fallback: "viewportScroller(renderMode:)")
+    }
+
+    func testEveryDropTargetGoesThroughTheOffscreenFallback() throws {
+        try assertGuarded("dropDestination", fallback: "acceptsFolders(renderMode:)")
+    }
+
+    private func assertGuarded(_ word: String, fallback: String) throws {
         let app = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()      // DiskMapCoreTests
             .deletingLastPathComponent()      // Tests
@@ -29,7 +41,7 @@ final class OffscreenRenderGuardTests: XCTestCase {
                 .components(separatedBy: "\n")
             for (i, line) in lines.enumerated() {
                 let code = line.trimmingCharacters(in: .whitespaces)
-                guard code.contains("ScrollView"), !code.hasPrefix("//") else { continue }
+                guard code.contains(word), !code.hasPrefix("//") else { continue }
                 // A hand-rolled fallback is fine as long as there is one. The
                 // widest legitimate gap in this codebase is 25 lines, where the
                 // offscreen branch renders a fitted prefix rather than simply
@@ -42,7 +54,7 @@ final class OffscreenRenderGuardTests: XCTestCase {
             }
         }
         XCTAssertTrue(offenders.isEmpty, """
-            ScrollView without an offscreen branch — use viewportScroller(renderMode:):
+            \(word) without an offscreen branch — use \(fallback):
             \(offenders.joined(separator: "\n"))
             """)
     }
