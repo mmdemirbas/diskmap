@@ -314,11 +314,18 @@ public final class DiskScanner {
         // A caller-supplied figure says how much to allocate; it says nothing
         // about the volume, so it does not become a progress denominator. The
         // estimate stays nil there rather than becoming a made-up fraction.
+        //
+        // The used-inode count describes a volume, so it is taken only for a
+        // root that is one. For a folder it was taken anyway: a scan of a
+        // hundred files reserved for ten million and zeroed a name table
+        // sized for the whole disk, and the progress bar for a large folder
+        // stood at one percent from start to finish because its denominator
+        // was the disk. A folder starts small and grows.
         let estimate = rawOptions.expectedNodes == nil
-            ? normalized.roots.reduce(0) { $0 + usedInodeCount($1) }
+            ? normalized.roots.reduce(0) { $0 + (Self.isVolumeRoot($1) ? usedInodeCount($1) : 0) }
             : 0
         let capacity = rawOptions.expectedNodes
-            ?? (estimate > 0 ? min(Int(Double(estimate) * 1.05) + 1024, 80_000_000) : 1 << 20)
+            ?? (estimate > 0 ? min(Int(Double(estimate) * 1.05) + 1024, 80_000_000) : 1 << 16)
         store.reserve(capacity)
         store.beginInterning(expectedNodes: capacity)
 
