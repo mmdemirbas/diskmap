@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk Map — a disk space analyzer for macOS that reports numbers you can act on</title>
+<meta name="description" content="Native Swift disk analyzer for macOS: bytes actually allocated, iCloud placeholders counted as zero, hard links once. Treemap, sunburst, icicle, duplicate folders, a plan before anything goes to the Trash.">
+<meta property="og:title" content="Disk Map — a disk space analyzer for macOS that reports numbers you can act on">
+<meta property="og:description" content="Native Swift disk analyzer for macOS: bytes actually allocated, iCloud placeholders counted as zero, hard links once. Treemap, sunburst, icicle, duplicate folders, a plan before anything goes to the Trash.">
+<meta property="og:image" content="https://mmdemirbas.github.io/diskmap/assets/treemap-light.jpg">
+<link rel="canonical" href="https://mmdemirbas.github.io/diskmap/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b45309'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+:root { --accent: #b45309; --accent-2: #3b82f6; --accent-on: #ffffff; --accent-ink-on-paper: #92400e; }
+@media (prefers-color-scheme: dark) { :root { --accent-ink-on-paper: #fcd34d; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#"><span class="mark" aria-hidden="true"></span>Disk Map</a>
+  <nav><a href="#how" class="">Views</a><a href="#install" class="">Install</a><a href="#cost" class="hide-sm">Cost</a><a class="gh" href="https://github.com/mmdemirbas/diskmap" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></nav>
+</div></header>
+
+<main>
+<section class="hero"><div class="wrap">
+  <p class="eyebrow">macOS 14+ · native Swift · English and Turkish · MIT</p>
+  <h1>Free space is not what Finder says it is.</h1>
+  <p class="lead">Finder counts purgeable content — evictable iCloud files, caches, local snapshots — as if it were already free. Disk Map shows capacity, used, purgeable and actually writable side by side, measures the bytes a file really occupies, and explains every byte it cannot attribute to a file instead of rounding the difference away.</p>
+  <div class="cta"><a class="btn btn-solid" href="#install">Install</a><a class="btn btn-quiet" href="https://github.com/mmdemirbas/diskmap" rel=noopener><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Source on GitHub</a></div>
+  <div class="stats"><div><b>66–70 s</b><span>to scan 11.6 million files on an 8 TB disk</span></div><div><b>49 B</b><span>of memory per file in the tree</span></div><div><b>0</b><span>files opened to scan; nothing leaves the Mac</span></div></div>
+  <div class="visual"><figure class="hero-fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/treemap-light.jpg" alt="Disk Map: the volume&#x27;s capacity bar across the top, a treemap of a folder on the left, the same folder as a tree table on the right" loading="eager" width="1920" height="1200"></figure></div>
+</div></section>
+
+<section id="why"><div class="wrap">
+  <p class="pitch">On the machine it was built on, Finder said <em>7.25 TB available</em>. What could actually be written was 1.14 TB; the other 6.12 TB was purgeable content counted as free. A disk analyzer that repeats Finder's number, or sums apparent file sizes to 15 TB on an 8 TB disk, gives advice nobody can act on.</p>
+  <div class="features" style="margin-top: clamp(1.5rem, 4vw, 2.5rem)"><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></div><h3>Bytes on disk, not file sizes</h3><p>The scanner records allocated size, which is what changes when you delete something; apparent size sits beside it. One toggle switches every view between the two.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20a15 15 0 0 1 0-20z"/></svg></div><h3>iCloud placeholders count as zero</h3><p>Dataless stubs report a size but occupy nothing locally, so they are counted as zero and flagged. The scanner never opens a file, so browsing never triggers a download.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/></svg></div><h3>Three pictures of one scan</h3><p>A treemap for what takes the space, a sunburst for the shape of the tree, an icicle for comparing siblings. Colour by kind of file or by how long ago it was touched.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div><h3>Duplicate folders, not just files</h3><p>Folders are matched by a hash of everything below them, so a renamed copy still matches, and partial copies are reported too. <b>Verify</b> reads every byte of a match before you trust it.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><h3>A plan before the Trash</h3><p>Nothing is deleted without seeing what stays: every copy on one card, each row marked <i>Stays</i> or <i>Trash</i>. It goes to the real Trash, so Put Back works, and ⌘Z undoes the batch.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div><h3>What changed since last time</h3><p>Every scan leaves a small digest. ⇧⌘D compares the disk now with an earlier scan and attributes each change to the deepest folder that explains it.</p></div></div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <div class="section-head"><h2>Six ways to look at the same scan</h2><p>They answer different questions, so they are one click apart. The pictures show a made-up folder tree, not a real disk.</p></div>
+  <div class="how split"><div><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/sunburst-dark.jpg" alt="Sunburst in the dark theme: one ring per folder level, arc length proportional to size" loading="lazy" width="1920" height="1200"></figure></div><ol class="steps"><li><div><b>Treemap</b><p>Area is bytes, so the biggest rectangle is the thing worth deleting. Folder frames show which folder owns a block.</p></div></li><li><div><b>Sunburst</b><p>Depth is the radius, so a long chain of nested folders shows as a spoke instead of vanishing into a block.</p></div></li><li><div><b>Icicle</b><p>Size is length and nothing else: siblings line up in a row you can read across.</p></div></li><li><div><b>Largest, by type, by age</b><p>The biggest files anywhere below the current folder; where the space went by kind of file; <i>29.3 GB untouched for over two years</i>.</p></div></li><li><div><b>Copies</b><p>Duplicate folders first, then files, ordered by what deleting the extras would free.</p></div></li></ol></div>
+  
+</div></section>
+<section id="install"><div class="wrap">
+  <div class="section-head"><h2>Install</h2><p>From source, with the Swift toolchain that comes with Xcode or the Command Line Tools. macOS 14 or newer. No password prompt, no sandbox, nothing downloaded at run time.</p></div>
+  <div class="install two"><div><h3>Build and install</h3><pre class="code"><code>git clone https://github.com/mmdemirbas/diskmap.git
+cd diskmap
+./install.sh         <span class="c"># build, sign, install</span>
+./install.sh --dev   <span class="c"># run from ./build instead</span></code></pre><p class=note>The installer creates a local code-signing certificate once, so the Full Disk Access grant survives rebuilds, then opens the Privacy pane for you to drag the app in.</p></div><div><h3>Uninstall</h3><pre class="code"><code>./uninstall.sh --dry-run   <span class="c"># show the plan</span>
+./uninstall.sh             <span class="c"># remove it all</span></code></pre><p class=note>It removes the app, its preferences and the certificate, and resets the Full Disk Access entry, so no dead row stays behind in System Settings.</p></div></div>
+</div></section>
+<section id="pictures"><div class="wrap">
+  <div class="section-head"><h2>More pictures</h2><p>Rendered by the app itself from a made-up folder tree; <code>Scripts/screenshots.sh</code> builds the tree and renders them again.</p></div>
+  <div class="gallery cols-2"><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/age-light.jpg" alt="The treemap coloured by age, from this week to more than two years" loading="lazy" width="1920" height="1200"><figcaption>Coloured by age: the same treemap, each file by how long ago it was last modified.</figcaption></figure><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/duplicates-light.jpg" alt="The Copies panel listing a 942 MB video that exists in two places" loading="lazy" width="1920" height="1200"><figcaption>The Copies panel: matched on name and size without reading anything; Verify compares the contents.</figcaption></figure><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/treemap-dark.jpg" alt="The treemap and tree table in the dark theme" loading="lazy" width="1920" height="1200"><figcaption>The dark theme has its own treemap palette rather than the light one at a different opacity.</figcaption></figure><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/treemap-tr-light.jpg" alt="The interface in Turkish" loading="lazy" width="1920" height="1200"><figcaption>English and Turkish, switchable without a restart; numbers follow the language you pick.</figcaption></figure></div>
+</div></section><section id="numbers"><div class="wrap">
+  <div class="section-head"><h2>Three ways a disk analyzer lies</h2><p>And what Disk Map does instead.</p></div>
+  <div class="table-wrap"><table><thead><tr><th>The trap</th><th>What it does instead</th></tr></thead><tbody><tr><td><b>Apparent size.</b> Summing file sizes over one home folder gave 15.24 TB on an 8 TB disk.</td><td>Records allocated size (<code>ATTR_FILE_ALLOCSIZE</code>) as the primary metric; apparent size is shown next to it.</td></tr><tr><td><b>iCloud placeholders.</b> 1.43 million files on that machine were dataless stubs that free nothing when deleted.</td><td>Detected via <code>SF_DATALESS</code>, counted as zero, flagged in the interface; never opened.</td></tr><tr><td><b>Hard links and firmlinks.</b> A naive walk of <code>/</code> counts <code>/Users</code> and <code>/Applications</code> twice.</td><td>Extra links to one inode are counted once; firmlinked paths are excluded from a volume scan.</td></tr></tbody></table></div>
+</div></section><section id="cost"><div class="wrap">
+  <div class="section-head"><h2>Cost, measured</h2><p>A full scan of an 8 TB startup disk holding 11.6 million files, on an M-series Mac. The figures scope to that machine.</p></div>
+  <div class="table-wrap"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td>Time</td><td>66–70 s, about 166k entries per second on 12 threads</td></tr><tr><td>Peak memory</td><td>0.69 GB; the tree itself is 568 MB, 49 bytes per node</td></tr><tr><td>CPU split</td><td>user 12.7 s, system 288 s: 96% of the work is the kernel reading directories</td></tr><tr><td>Duplicate folders</td><td>0.59 s over 9.6 million nodes, of which 0.23 s hashes all of them</td></tr></tbody></table></div><p class="note">Traversal is <code>getattrlistbulk(2)</code>, one system call per batch of entries rather than <code>readdir</code> plus <code>stat</code> per file. The app records its own timings to a local file with no paths or file names in it; <code>dmbench metrics</code> reads them back.</p>
+</div></section><section id="limits"><div class="wrap">
+  <div class="section-head"><h2>Known limits</h2></div>
+  <ul class="plain"><li><b>APFS clones cannot be detected</b> through any public API; cloned bytes appear in the <i>unaccounted</i> line of the reconciliation panel rather than being silently absorbed.</li><li><b>Directory metadata blocks are not counted</b>; they also show up as unaccounted.</li><li><b>A cancelled scan is discarded</b> rather than shown as a partial tree, because a partial total would read as a real one.</li><li><b>There is no unattended sync.</b> Every folder sync goes through a plan somebody read.</li><li><b>No prebuilt download yet</b>; it builds from source with the Swift toolchain.</li></ul>
+</div></section>
+
+<section id="more"><div class="wrap">
+  <div class="section-head"><h2>Go deeper</h2></div>
+  <div class="links"><a class="link-card" href="https://github.com/mmdemirbas/diskmap#readme" rel=noopener><b>README</b><span>Every view and panel, folder comparison and sync, the installer's macOS details, the full measurements.</span><small>GitHub</small></a><a class="link-card" href="https://github.com/mmdemirbas/diskmap/blob/main/docs/scanning-speed.md" rel=noopener><b>Scanning speed</b><span>How fast the walk is, why it is not faster, and where the time goes, measured.</span><small>docs/scanning-speed.md</small></a><a class="link-card" href="https://github.com/mmdemirbas/diskmap/blob/main/docs/known-pitfalls.md" rel=noopener><b>Known pitfalls</b><span>The ordinary mistakes of tools like this, counting bytes twice or offering to delete the only copy, and what the code does about each.</span><small>docs/known-pitfalls.md</small></a></div>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  <span>Disk Map</span>
+  <span class="spacer"></span>
+  <a href="https://github.com/mmdemirbas/diskmap" rel="noopener">GitHub</a>
+  <a href="https://mdemirbas.com/en/projects/diskmap/" rel="noopener">Muhammed Demirbaş</a>
+  <a href="https://mdemirbas.com/" rel="noopener">Other projects</a>
+</div></footer>
+</body>
+</html>
