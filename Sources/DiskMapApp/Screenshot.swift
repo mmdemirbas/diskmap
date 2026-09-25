@@ -224,10 +224,14 @@ enum OffscreenRenderer {
         // environment, so both have to be set for an offscreen render.
         let nsAppearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)!
         var image: CGImage?
-        nsAppearance.performAsCurrentDrawingAppearance {
-            let renderer = ImageRenderer(content: view)
-            renderer.scale = 2
-            image = renderer.cgImage
+        if env["DISKMAP_RENDER_WINDOW"] != nil {
+            image = windowImage(of: view, width: width, height: height, appearance: nsAppearance)
+        } else {
+            nsAppearance.performAsCurrentDrawingAppearance {
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 2
+                image = renderer.cgImage
+            }
         }
         guard let cg = image else {
             FileHandle.standardError.write(Data("render produced no image\n".utf8))
@@ -238,5 +242,39 @@ enum OffscreenRenderer {
         try? png.write(to: URL(fileURLWithPath: parts[3]))
         FileHandle.standardError.write(Data("wrote \(parts[3]) (\(cg.width)x\(cg.height))\n".utf8))
         return true
+    }
+
+    /// The same view, hosted in a real window that is never shown, and drawn by
+    /// the view itself. AppKit controls come out as they look in the app rather
+    /// than as placeholders, and because the app draws its own window no Screen
+    /// Recording permission is involved. It does need a window server, so it
+    /// is opt-in (`DISKMAP_RENDER_WINDOW=1`) and the plain render stays the
+    /// default for SSH and CI.
+    private static func windowImage(of view: AnyView, width: Double, height: Double,
+                                    appearance: NSAppearance) -> CGImage? {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: width, height: height)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.appearance = appearance
+        let host = NSHostingView(rootView: view)
+        host.frame = frame
+        window.contentView = host
+        // SwiftUI commits its first layout on a later turn of the run loop;
+        // drawing before that captures an empty window.
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                         pixelsWide: Int(width * 2), pixelsHigh: Int(height * 2),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = frame.size
+        appearance.performAsCurrentDrawingAppearance {
+            host.cacheDisplay(in: frame, to: rep)
+        }
+        return rep.cgImage
     }
 }
