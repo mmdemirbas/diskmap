@@ -205,7 +205,7 @@ Age colouring works on the treemap, the sunburst and the icicle alike.
 | | |
 |---|---|
 | ![Dark theme, treemap](docs/images/treemap-dark.png) | ![Sunburst, dark theme](docs/images/sunburst-dark.png) |
-| ![Treemap coloured by age: this week, this month, six months, a year, two years](docs/images/age-light.png) | ![The Copies panel listing a video that exists twice](docs/images/duplicates-light.png) |
+| ![Treemap coloured by age: this week, this month, six months, a year, two years](docs/images/age-light.png) | ![The Copies panel listing a video and an installer that each exist twice](docs/images/duplicates-light.png) |
 
 The pictures are of a made-up folder tree, not a real disk;
 `Scripts/screenshots.sh` builds the tree and renders them again.

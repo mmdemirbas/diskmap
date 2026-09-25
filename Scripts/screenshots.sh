@@ -15,14 +15,15 @@
 # Rendering uses the app's offscreen mode (DISKMAP_RENDER, see README) with
 # DISKMAP_RENDER_WINDOW=1, so buttons and pickers are drawn as they look in the
 # app. No Screen Recording permission is needed. Build first:
-# Scripts/build-app.sh.
+# Scripts/build-app.sh. The website copies need ImageMagick (brew install
+# imagemagick).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="/Users/Shared/Sample"
 APP="build/DiskMap.app/Contents/MacOS/DiskMap"
 OUT="docs/images"
 
-if [ "${1:-}" = "--help" ]; then sed -n 2,18p "$0"; exit 0; fi
+if [ "${1:-}" = "--help" ]; then sed -n 2,19p "$0"; exit 0; fi
 if [ "${1:-}" = "--clean" ]; then rm -rf "$ROOT" tmp/sample-base.bin; exit 0; fi
 
 # One random block to clone from. 2 GiB covers the largest file below.
@@ -84,8 +85,9 @@ build_tree() {
   many "Documents/Slides" 18 key 9000 60000 500
   f "Archive/backup-2023.tar.gz" 1500000 900
   f "Archive/old-laptop.sparsebundle.zip" 900000 1100
-  # Two genuine duplicates, so the duplicates panel has something to show
-  cp -c "$ROOT/Downloads/photo-editor-2.4.dmg" "$ROOT/Archive/photo-editor-2.4 copy.dmg"
+  # Two genuine duplicates, so the Copies panel has something to show. Files
+  # match on name and size, so each copy keeps its original's name.
+  cp -c "$ROOT/Downloads/photo-editor-2.4.dmg" "$ROOT/Archive/photo-editor-2.4.dmg"
   cp -c "$ROOT/Movies/Drone/lake-4k.mp4" "$ROOT/Pictures/Edits/lake-4k.mp4"
   echo "sample tree: $(du -sh "$ROOT" | cut -f1) reported by du, in $ROOT"
 }
@@ -110,6 +112,7 @@ shot duplicates-light  1440 900 light en "" DISKMAP_PANEL=duplicates DISKMAP_EXP
 shot treemap-tr-light  1440 900 light tr ""
 
 # The README shows the PNGs; the website loads these, a quarter of the bytes.
+command -v magick >/dev/null || { echo "no ImageMagick: web copies not made" >&2; exit 1; }
 mkdir -p "$OUT/web"
 for p in "$OUT"/*.png; do
   magick "$p" -resize 1920x -quality 84 "$OUT/web/$(basename "${p%.png}").jpg"
