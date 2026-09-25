@@ -3,6 +3,10 @@
 A disk space analyzer for macOS, in the spirit of TreeSize. Native Swift, no
 sandbox, built to report numbers you can act on.
 
+![Disk Map: the volume's capacity bar across the top, a treemap of a folder on the left, the same folder as a tree table on the right](docs/images/treemap-light.png)
+
+Website: <https://mmdemirbas.github.io/diskmap/>
+
 ## Why it exists
 
 Finder's "available space" is not free space. Finder shows
@@ -198,10 +202,16 @@ Six ways to look at the same scan, because they answer different questions.
 
 Age colouring works on the treemap, the sunburst and the icicle alike.
 
-Considered and not built: **scan comparison over time** — persisting a scan and
-diffing a later one against it, to answer "what grew since last week" rather
-than only "what is big now". It needs snapshot storage and a diff view, so it is
-a larger piece than the rest.
+| | |
+|---|---|
+| ![Dark theme, treemap](docs/images/treemap-dark.png) | ![Sunburst, dark theme](docs/images/sunburst-dark.png) |
+| ![Treemap coloured by age: this week, this month, six months, a year, two years](docs/images/age-light.png) | ![The Copies panel listing a video that exists twice](docs/images/duplicates-light.png) |
+
+The pictures are of a made-up folder tree, not a real disk;
+`Scripts/screenshots.sh` builds the tree and renders them again.
+
+What grew since the last scan is its own screen; see
+[What changed since last time](#what-changed-since-last-time).
 
 ## Using it
 
@@ -603,7 +613,7 @@ problems. *Scan → Show diagnostics log* reveals the file in Finder.
 ## Development
 
 ```sh
-swift test                                   # 291 tests, including FSEvents end-to-end
+swift test                                   # 500 tests, including FSEvents end-to-end
 .build/release/dmbench volume                # capacity report
 .build/release/dmbench validate <path>       # cross-check bulk attrs against lstat
 .build/release/dmbench scan <path> [path...] # throughput and reconciliation
@@ -628,4 +638,12 @@ DISKMAP_RENDER="<path>|1400|900|/tmp/ui.png||dark|tr" build/DiskMap.app/Contents
 The trailing fields are optional: `subdir`, then `light|dark`, then `en|tr`.
 
 AppKit-backed controls (buttons, pickers, `HSplitView`) draw as placeholders in
-that mode; everything drawn by SwiftUI itself is faithful.
+that mode; everything drawn by SwiftUI itself is faithful. With
+`DISKMAP_RENDER_WINDOW=1` the view is hosted in a window that is never shown and
+drawn by the app itself, so those controls come out as they look. It needs a
+logged-in session with a window server, but still no Screen Recording
+permission. `Scripts/screenshots.sh` uses it for the pictures in this README.
+
+## License
+
+MIT; see [LICENSE](LICENSE).
