@@ -17,10 +17,10 @@ nine days of work sat in `build/` unseen.
 
 Three App Store apps share the name; `docs/competitors-2026-09.md` sets what
 they advertise against what this does. Quick Look and a Home folder target
-were taken the same day (`3dae18c`, `b955bb7`). Ten more are ranked there
-under "Recommendations", none started — the first two are small and about
-safety: refuse to trash the folders macOS depends on, and say before a Trash
-on a volume that has none that nothing will be moved.
+were taken the same day (`3dae18c`, `b955bb7`), and the two small safety
+items from its ranked list: refusing to trash the folders macOS depends on,
+and refusing up front on a volume with no Trash. The other eight are ranked
+there under "Recommendations", not started.
 
 ## From the brief of 2026-09-08
 

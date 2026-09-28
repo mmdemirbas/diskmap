@@ -105,6 +105,16 @@ final class L10n: ObservableObject {
         active == .tr ? "eşleşti, ancak \(fmt(n)) dosya okunamadı"
                       : "matched, but \(count(n, "file was", "files were")) not read"
     }
+    func noTrashOnVolume(_ volume: String) -> String {
+        active == .tr
+            ? "\(volume) biriminde Çöp Kutusu yok. Disk Haritası yalnızca Çöp Kutusu'na taşır, bu yüzden oradaki hiçbir şey kaldırılamaz."
+            : "\(volume) has no Trash. Disk Map only ever moves things to the Trash, so nothing there can be removed."
+    }
+    func macOSDependsOn(_ name: String) -> String {
+        active == .tr
+            ? "macOS \(name) klasörüne ihtiyaç duyar; klasör kalır. İçindekiler Çöp Kutusu'na taşınabilir."
+            : "macOS depends on the \(name) folder, so it stays. What is inside it can go to the Trash."
+    }
     func wouldRemoveEveryCopy(_ name: String) -> String {
         active == .tr
             ? "\(name) için tek kopya bile kalmıyor. En az birini işaretsiz bırakın."

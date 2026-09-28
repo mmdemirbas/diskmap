@@ -144,7 +144,10 @@ one).
   cannot work — macOS answers "The file doesn't exist" about a file it has
   just listed — so the failure now says the name is the reason (**run**,
   `testATrashFailureOnANameThatIsNotUTF8SaysWhy`). The Trash is refused on
-  this share for any name anyway: the volume has none.
+  this share for any name anyway: the volume has none, and the planner now
+  says so by the volume's name before the confirmation rather than failing
+  after it (**run**, against this share and
+  `testAVolumeWithoutATrashIsRefusedBeforeTheConfirmation`).
 - **Changes made on the Linux side reached the live tree** through FSEvents on
   this share (**run**, `dmbench live`). That is OrbStack's; another NFS server
   may not deliver them.

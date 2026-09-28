@@ -126,6 +126,51 @@ final class TrashPlanTests: XCTestCase {
 
     // MARK: - Never trash the ground you are standing on
 
+    /// A share with no Trash — the NFS share checked on 2026-09-28 was one —
+    /// is refused at planning, before the confirmation, and by the volume's
+    /// name. The disk the tests run on has a Trash, so the real check has
+    /// nothing to refuse here.
+    func testAVolumeWithoutATrashIsRefusedBeforeTheConfirmation() throws {
+        try write("a/one.bin", 40_000)
+        scan()
+        let item = try node("a/one.bin")
+        XCTAssertNil(FileActions.volumeWithoutTrash([store.url(item)]))
+        XCTAssertEqual(try refusal(TrashPlanner.plan(store: store, selected: [item],
+                                                     volumeWithoutTrash: { _ in "Share" })),
+                       .noTrashOnVolume("Share"))
+    }
+
+    /// The folders themselves, by the path the tree shows; never what is in
+    /// them, which is where the space is.
+    func testTheFoldersMacOSDependsOnAreKnownByTheirExactPath() {
+        let refused = ["/", "/System", "/Library", "/Applications", "/Users", "/usr", "/private",
+                       "/Users/md", "/Users/Shared", "/Users/md/Library", "/Users/md/Documents",
+                       "/Users/md/Downloads", "/Users/md/Library/Keychains",
+                       "/Users/md/Library/Mobile Documents", "/Users/md/Library/Containers"]
+        let allowed = ["/Users/md/Library/Caches", "/Users/md/Library/Caches/com.apple.Safari",
+                       "/Users/md/Downloads/old.dmg", "/Users/md/Documents/Projects",
+                       "/Users/md/dev", "/Library/Caches", "/Applications/Xcode.app",
+                       "/Users/md/Library/Containers/com.example.app", "/Volumes/Backup",
+                       "/usr/local", "/Users/md/Library/Keychains-old"]
+        for p in refused { XCTAssertTrue(TrashPlanner.macOSDependsOn(p), p) }
+        for p in allowed { XCTAssertFalse(TrashPlanner.macOSDependsOn(p), p) }
+    }
+
+    /// The planner asks, and refuses the folder while still planning what is
+    /// inside it. The rule is swapped for one naming a temporary folder, since
+    /// a test cannot scan the real ones.
+    func testAFolderMacOSDependsOnIsRefusedAndItsContentsAreNot() throws {
+        try write("Library/big.bin", 40_000)
+        scan()
+        let library = try node("Library"), inside = try node("Library/big.bin")
+        let libraryPath = store.path(library)
+        let rule: (String) -> Bool = { $0 == libraryPath }
+        XCTAssertEqual(try refusal(TrashPlanner.plan(store: store, selected: [library], macOSDependsOn: rule)),
+                       .macOSDependsOnIt(libraryPath))
+        let plan = try success(TrashPlanner.plan(store: store, selected: [inside], macOSDependsOn: rule))
+        XCTAssertEqual(plan.items.map(\.node), [inside])
+    }
+
     func testAScanRootIsRefused() throws {
         try write("a/one.bin", 40_000)
         scan()

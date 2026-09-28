@@ -81,8 +81,8 @@ three competitors this is the listing, not a test.
 | Permanent delete | — (on purpose) | — | P | P (asks twice) |
 | One queue of items to delete, across views | ~ (ticks in Copies and Free up space) | — | P | P |
 | Compress to archive | — | — | P | — |
-| Warn before deleting on a network volume | ~ (Trash is refused there with the reason) | — | P | — |
-| Refuse to delete system folders | ~ (scan roots, never-touch list) | — | — | P |
+| Warn before deleting on a network volume | **P, added 2026-09-28** (refused before the confirmation when the volume has no Trash) | — | P | — |
+| Refuse to delete system folders | **P, added 2026-09-28** (the folders themselves; their contents stay removable) | — | — | P |
 | Largest items list, size by type | P | — | — | P |
 | Scan several disks or folders as one total | P | — | — | — |
 | **Home folder as a start target** | **P, added 2026-09-28** | — | — | P |
@@ -105,7 +105,7 @@ three competitors this is the listing, not a test.
 
 ## What was taken from them
 
-Two gaps were bounded and clearly worth closing the same day:
+Four gaps were bounded and clearly worth closing the same day:
 
 - **Quick Look.** FIPLAB and DiskMap AI both let you look at a file before
   deleting it; DiskMap could only reveal it in the Finder. Now: Cmd-Y in the
@@ -114,6 +114,17 @@ Two gaps were bounded and clearly worth closing the same day:
 - **Home folder as a target** (DiskMap AI's start screen). A button beside
   "Add More…". It exposed a wrong label: one folder ticked read "Scan Whole
   Disk"; it now reads "Scan 1 Location" unless the one target is a disk.
+- **Refusing the folders macOS depends on** (DiskMap AI): `/System`,
+  `/Library`, `/Applications`, `/usr` and the like, every account's home
+  folder, its Library, Desktop, Documents, Downloads, Movies, Music,
+  Pictures, Public, and in Library its Keychains, iCloud Drive, cloud drives,
+  app containers, Application Support and Preferences. Exact paths only; a
+  home scan can still clear out everything inside them. Before this, only
+  scan roots and the never-touch list were refused.
+- **No Trash, said first** (FIPLAB warns about network drives). A volume
+  with no Trash is now refused at planning, by name, before the
+  confirmation; on the NFS share checked the same day the Trash failed only
+  after the user had confirmed.
 
 ## Not taken, on purpose
 
@@ -130,12 +141,13 @@ Two gaps were bounded and clearly worth closing the same day:
 
 ## Recommendations
 
-Ordered by what the user gets for the effort. None is started.
+Ordered by what the user gets for the effort. The first two were done the
+same day (above); the rest are not started.
 
 | # | What | Seen in | Effort | Why |
 |---|---|---|---|---|
-| 1 | Refuse to trash the folders macOS depends on (`/System`, `/Library`, `/usr`, `~/Library` itself, the home folder itself), with the reason in the confirmation | DiskMap AI | Small | Today only scan roots and the never-touch list are refused; trashing `~/Library` from a home scan is one confirmation away |
-| 2 | Say before a Trash on a volume with no Trash (network shares, some external disks) that nothing will be moved, instead of failing after the confirmation | FIPLAB (as a warning) | Small | The share checked on 2026-09-28 refuses every Trash; the user learns it only after confirming |
+| 1 | **Done.** Refuse to trash the folders macOS depends on (`/System`, `/Library`, `/usr`, `~/Library` itself, the home folder itself), with the reason in the confirmation | DiskMap AI | Small | Today only scan roots and the never-touch list are refused; trashing `~/Library` from a home scan is one confirmation away |
+| 2 | **Done.** Say before a Trash on a volume with no Trash (network shares, some external disks) that nothing will be moved, instead of failing after the confirmation | FIPLAB (as a warning) | Small | The share checked on 2026-09-28 refuses every Trash; the user learns it only after confirming |
 | 3 | A filter on the map by kind and by size band, shown as a filter (the map says what it hides) | FIPLAB | Medium | The All files table already has these filters; the map has only a name filter |
 | 4 | More or fewer levels drawn, with shortcuts | Tianjin | Small–medium | Depth is fixed at 6; deep trees of small files get noisy |
 | 5 | One delete queue that any view can add to, reviewed in one sheet | FIPLAB, DiskMap AI | Medium | Ticks exist per tool (Copies, Free up space) but not across the map, the table and Find |

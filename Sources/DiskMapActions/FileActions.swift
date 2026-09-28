@@ -128,6 +128,29 @@ public enum FileActions {
         return (trashed, failures)
     }
 
+    /// The name of the first volume among these items that has no Trash, or
+    /// nil when every one of them can be moved to one. Asked once per volume:
+    /// a cleanup plan can hold thousands of items on one disk. On a share
+    /// without one, `trashItem` fails only after the user has confirmed; this
+    /// is the same answer, before.
+    public static func volumeWithoutTrash(_ urls: [URL]) -> String? {
+        var asked: [Int32: Bool] = [:]
+        for url in urls {
+            var info = stat()
+            guard RawPath(url: url).withCString({ lstat($0, &info) }) == 0 else { continue }
+            let hasTrash = asked[info.st_dev] ?? {
+                let answer = (try? FileManager.default.url(for: .trashDirectory, in: .userDomainMask,
+                                                           appropriateFor: url, create: false)) != nil
+                asked[info.st_dev] = answer
+                return answer
+            }()
+            if !hasTrash {
+                return (try? url.resourceValues(forKeys: [.volumeNameKey]).volumeName) ?? url.path
+            }
+        }
+        return nil
+    }
+
     /// The system's own words, except where they are wrong. A name that is
     /// not UTF-8 can only be on a share another system serves, and macOS
     /// lists such a file but will not act on it: asked to move one to the

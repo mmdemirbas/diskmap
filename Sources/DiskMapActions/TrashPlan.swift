@@ -39,6 +39,15 @@ public enum TrashRefusal: Error, Sendable, Equatable {
     /// Should be impossible from the UI, and is checked anyway: the planner
     /// will not hand back a path it cannot show is inside what was scanned.
     case outsideTheScannedTree(String)
+    /// A folder macOS itself depends on: `/System`, an account's home folder,
+    /// its Library, its Documents. Only the folder itself is refused; what is
+    /// inside can still go, and that is where the space is.
+    case macOSDependsOnIt(String)
+    /// The volume holding these has no Trash — a network share, typically —
+    /// and this app never deletes outright, so nothing there can be removed.
+    /// Said before the confirmation rather than after it. Carries the
+    /// volume's name.
+    case noTrashOnVolume(String)
 }
 
 public struct ReviewMember: Sendable, Identifiable {
@@ -72,11 +81,45 @@ public struct ReviewGroup: Sendable, Identifiable {
 /// rules that protect the user's data belong. A checkbox that is hard to tick
 /// by accident is worth having; a rule that a test can prove is worth more.
 public enum TrashPlanner {
+    /// Folders the system or an account cannot do without, by their shown
+    /// path. Moving one to the Trash is undoable, but only if what broke is
+    /// not the thing needed to undo it — the Finder refuses most of these
+    /// for the same reason. Exact matches only: a scan of the home folder can
+    /// still clear out everything inside Library or Downloads.
+    public static func macOSDependsOn(_ path: String) -> Bool {
+        if systemFolders.contains(path) { return true }
+        let parts = path.split(separator: "/")
+        guard parts.first == "Users" else { return false }
+        switch parts.count {
+        case 2: return true   // an account's home folder, or /Users/Shared
+        case 3: return homeFolders.contains(String(parts[2]))
+        case 4: return parts[2] == "Library" && libraryFolders.contains(String(parts[3]))
+        default: return false
+        }
+    }
+
+    private static let systemFolders: Set<String> = [
+        "/", "/System", "/System/Volumes/Data", "/Library", "/Applications", "/Users", "/Volumes",
+        "/usr", "/bin", "/sbin", "/private", "/etc", "/var", "/tmp", "/cores", "/dev",
+    ]
+    private static let homeFolders: Set<String> = [
+        "Library", "Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures", "Public",
+    ]
+    /// Where the account keeps its passwords, its iCloud Drive, other cloud
+    /// drives, and every sandboxed app's data and settings.
+    private static let libraryFolders: Set<String> = [
+        "Keychains", "Mobile Documents", "CloudStorage", "Containers", "Group Containers",
+        "Application Support", "Preferences",
+    ]
+
     public static func plan(store: NodeStore,
                             selected: Set<Int32>,
                             groups: [[Int32]] = [],
                             syncRoots: SyncRoots = SyncRoots(roots: []),
-                            excluded: [String] = []) -> Result<TrashPlan, TrashRefusal> {
+                            excluded: [String] = [],
+                            macOSDependsOn: (String) -> Bool = TrashPlanner.macOSDependsOn,
+                            volumeWithoutTrash: ([URL]) -> String? = FileActions.volumeWithoutTrash)
+        -> Result<TrashPlan, TrashRefusal> {
         guard !selected.isEmpty else { return .failure(.nothingSelected) }
 
         // A firmlinked tree stores one form of a path and shows another, so
@@ -102,6 +145,7 @@ public enum TrashPlanner {
             guard !store.flagSet(node).contains(.removed) else { plan.alreadyGone += 1; continue }
             let path = store.path(node)
             if rootForms.contains(path) { return .failure(.includesAScanRoot(path)) }
+            if macOSDependsOn(path) { return .failure(.macOSDependsOnIt(path)) }
             // A path on the never-touch list is dropped rather than refused:
             // the rest of a selection is still perfectly actionable.
             if excluded.contains(where: { RootSet.isInside(path, $0) }) { plan.excluded += 1; continue }
@@ -140,6 +184,10 @@ public enum TrashPlanner {
                 let name = group.first.map { store.name($0) } ?? ""
                 return .failure(.wouldRemoveEveryCopy(name))
             }
+        }
+
+        if let volume = volumeWithoutTrash(keep.map { store.url($0.node) }) {
+            return .failure(.noTrashOnVolume(volume))
         }
 
         for item in keep {

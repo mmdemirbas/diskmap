@@ -1709,6 +1709,8 @@ final class AppModel: ObservableObject {
         case .wouldRemoveEveryCopy(let name): L10n.shared.wouldRemoveEveryCopy(name)
         case .includesAScanRoot: L10n.shared[.cannotRemoveScanRoot]
         case .outsideTheScannedTree: L10n.shared[.cannotRemoveOutside]
+        case .macOSDependsOnIt(let path): L10n.shared.macOSDependsOn((path as NSString).lastPathComponent)
+        case .noTrashOnVolume(let volume): L10n.shared.noTrashOnVolume(volume)
         }
     }
 
