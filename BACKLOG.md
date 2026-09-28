@@ -17,10 +17,24 @@ nine days of work sat in `build/` unseen.
 
 Three App Store apps share the name; `docs/competitors-2026-09.md` sets what
 they advertise against what this does. Quick Look and a Home folder target
-were taken the same day (`3dae18c`, `b955bb7`), and the two small safety
-items from its ranked list: refusing to trash the folders macOS depends on,
-and refusing up front on a volume with no Trash. The other eight are ranked
-there under "Recommendations", not started.
+were taken the same day (`3dae18c`, `b955bb7`), then from its ranked list:
+refusing to trash the folders macOS depends on and refusing up front on a
+volume with no Trash (`d699035`), Quick Look following the selection
+(`15bd3bc`), the number of levels drawn (`d4993fa`), a legend highlight in
+place of a hiding filter (`98ba94f`) and Reduce Motion (`97995ce`).
+
+Open, and each needs a decision before it is built:
+
+- **One delete queue across views** (5). The ticks are one set per session
+  already, but the copy report clears it on every reload and guards "the
+  last copy" around that; a queue any view adds to changes those rules on
+  the deletion path.
+- **VoiceOver on the map pictures** (rest of 6). The canvases expose no
+  accessibility elements; the list beside them is readable. Needs a way to
+  verify with VoiceOver before it is claimed.
+- **Packages as one item** (7). Needs a default: Finder-style closed, or
+  today's open.
+- Colour by depth (9) and compress (10): low value, not planned.
 
 ## From the brief of 2026-09-08
 
@@ -106,6 +120,7 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 |---|---|---|
 | Installed build is current (through `7977e44`, hard links resolved from disk) | 2026-09-19 | install.sh; window seen `onscreen=1` via CGWindowList |
 | Installed build is current (through `d699035`: hard-link pass off the lock, network bytes on disk, Quick Look, Home target, Trash refusals) | 2026-09-28 | install.sh, no warnings; window seen `onscreen=1` via CGWindowList. Quick Look, the Home button and the refusals not yet tried by hand |
+| Installed build is current (through `97995ce`: map levels, legend highlight, Quick Look following the selection, Reduce Motion) | 2026-09-28 | install.sh, no warnings; window seen `onscreen=1` via CGWindowList. Checklist for trying it by hand: `atolye/raporlar/2026-09-28-diskmap-manual-checks.md` |
 | Two windows, two independent sessions | 2026-09-09, again 2026-09-19 | CGWindowList by owner name. System Events `process "DiskMap"` finds the process but not its windows; the owner name is the bundle name, "Disk Map" |
 | Two tools side by side in one window | 2026-09-09 | offscreen render, `tmp/split.png` |
 | The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
