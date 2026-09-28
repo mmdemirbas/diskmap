@@ -105,6 +105,7 @@ working. Empty rows are not failures; they are things nobody has looked at yet.
 | What | When | By whom |
 |---|---|---|
 | Installed build is current (through `7977e44`, hard links resolved from disk) | 2026-09-19 | install.sh; window seen `onscreen=1` via CGWindowList |
+| Installed build is current (through `d699035`: hard-link pass off the lock, network bytes on disk, Quick Look, Home target, Trash refusals) | 2026-09-28 | install.sh, no warnings; window seen `onscreen=1` via CGWindowList. Quick Look, the Home button and the refusals not yet tried by hand |
 | Two windows, two independent sessions | 2026-09-09, again 2026-09-19 | CGWindowList by owner name. System Events `process "DiskMap"` finds the process but not its windows; the owner name is the bundle name, "Disk Map" |
 | Two tools side by side in one window | 2026-09-09 | offscreen render, `tmp/split.png` |
 | The Tools menu lists all eight | 2026-09-09 | System Events menu dump |
