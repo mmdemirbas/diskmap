@@ -47,7 +47,7 @@ public struct RawEntry {
     /// the length rounded up to 512 bytes rather than what the server
     /// allocated. A 777-byte file on a Linux share read 1 KB where `lstat`,
     /// and `du` on either side, say 4 KB, and a share of 20,000 small files
-    /// came out 13% short. `lstat` carries the server's figure, and is
+    /// came out 17% short. `lstat` carries the server's figure, and is
     /// answered from the attribute cache the listing has just filled: those
     /// 20,000 in 0.24 s. A file in iCloud takes nothing here.
     public func bytesOnDisk(in dirFD: Int32, volumeIsRemote: Bool) -> Int64 {
