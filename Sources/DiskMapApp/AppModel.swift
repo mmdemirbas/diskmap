@@ -885,6 +885,10 @@ final class AppModel: ObservableObject {
         // Moving to another folder makes every open report stale. The map does
         // not know a report exists; this is where that is decided.
         map.onNavigated = { [weak self] in self?.refreshSummary() }
+        // An open Quick Look panel follows the selection, as the Finder's does.
+        quickLookRelay = map.$selection.removeDuplicates().dropFirst().sink { [weak self] node in
+            self?.showInQuickLookIfOpen(node)
+        }
         // A tick refers to a node in the report that produced it — unless a
         // review is open, in which case it refers to a decision being made.
         reports.onLoaded = { [weak self] in
@@ -1888,12 +1892,27 @@ final class AppModel: ObservableObject {
     /// a tool for finding space should not fill it as a side effect.
     func quickLook(_ node: Int32) {
         if quickLookURL != nil { quickLookURL = nil; return }
-        guard let tree, let url = url(of: node) else { return }
+        quickLookURL = previewable(node)
+    }
+
+    private var quickLookRelay: AnyCancellable?
+
+    /// A new selection while the panel is open is shown in it; one that
+    /// cannot be shown closes it rather than leaving the last file up.
+    private func showInQuickLookIfOpen(_ node: Int32?) {
+        guard quickLookURL != nil else { return }
+        quickLookURL = node.flatMap(previewable)
+    }
+
+    /// The URL to show, or nil — with the reason said — for a file whose
+    /// bytes are only in iCloud.
+    private func previewable(_ node: Int32) -> URL? {
+        guard let tree, let url = url(of: node) else { return nil }
         if tree.withStore({ $0.flagSet(node).contains(.dataless) }) {
             toast = L10n.shared[.quickLookInICloud]
-            return
+            return nil
         }
-        quickLookURL = url
+        return url
     }
 
     /// What a node is, as something the rest of the system can act on.

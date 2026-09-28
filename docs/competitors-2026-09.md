@@ -153,6 +153,6 @@ same day (above); the rest are not started.
 | 5 | One delete queue that any view can add to, reviewed in one sheet | FIPLAB, DiskMap AI | Medium | Ticks exist per tool (Copies, Free up space) but not across the map, the table and Find |
 | 6 | VoiceOver labels for map cells and rings; honour Reduce Motion | DiskMap AI | Large | The only accessibility label in the app is on the home view |
 | 7 | Treat `.app` and other packages as one item, with a switch | DiskMap AI | Medium | Navigation only; totals unchanged |
-| 8 | Quick Look follows the selection while its panel is open | Finder | Small | Today the panel keeps the file it opened with |
+| 8 | **Done.** Quick Look follows the selection while its panel is open | Finder | Small | Today the panel keeps the file it opened with |
 | 9 | Colour by depth; more palettes | FIPLAB | Small | Cosmetic; lowest value here |
 | 10 | Compress to archive | FIPLAB | Small | Frees little on the files that fill disks — video, photos and archives are compressed already |
