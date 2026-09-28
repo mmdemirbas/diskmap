@@ -1,6 +1,7 @@
 import XCTest
 import DiskMapCore
 @testable import DiskMapScan
+@testable import DiskMapActions
 
 /// What happens between the review screen appearing and the button being
 /// pressed. Everything here goes to the Trash, so nothing is unrecoverable —
@@ -139,4 +140,23 @@ final class TrashDriftTests: XCTestCase {
                        "undo overwrote the file that was standing there")
     }
 
+    /// A name that is not UTF-8 exists only on a share another system
+    /// serves, and there macOS answers "the file doesn't exist" about a file
+    /// it has just listed (`ForeignNameShareTests` has the setup). What the
+    /// user is told has to be the actual reason, and the name has to read the
+    /// way the rest of the window shows it rather than as percent escapes.
+    func testATrashFailureOnANameThatIsNotUTF8SaysWhy() {
+        let name: [UInt8] = Array("caf".utf8) + [0xE9] + Array(".txt".utf8)
+        let url = RawPath(bytes: Array("/Volumes/share/".utf8) + name).url(isDirectory: false)
+        let missing = NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError,
+                              userInfo: [NSLocalizedDescriptionKey: "The file doesn’t exist."])
+        let message = FileActionError.failed(url: url, underlying: FileActions.reason(missing, name: name[...]))
+            .errorDescription ?? ""
+        XCTAssertTrue(message.hasPrefix("Could not move caf\u{FFFD}.txt to Trash"), message)
+        XCTAssertTrue(message.contains("not valid UTF-8"), message)
+        XCTAssertFalse(message.contains("doesn’t exist"), message)
+
+        // Any other name keeps the system's words.
+        XCTAssertEqual(FileActions.reason(missing, name: Array("cafe.txt".utf8)[...]), "The file doesn’t exist.")
+    }
 }

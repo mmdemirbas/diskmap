@@ -481,6 +481,11 @@ public final class DiskScanner {
         var rootStat = stat()
         guard root.withCString({ lstat($0, &rootStat) }) == 0 else { return stats }
         let rootDev = rootStat.st_dev
+        let rootIsRemote: Bool = {
+            let fd = DiskScanner.openDirectory(root)
+            defer { if fd >= 0 { close(fd) } }
+            return fd >= 0 && RawEntry.isRemote(dirFD: fd)
+        }()
         // st_dev cannot separate APFS volumes inside one container, so mount
         // points are matched by path instead. The root itself is normally a
         // mount point and must not be skipped.
@@ -544,6 +549,10 @@ public final class DiskScanner {
                         continue
                     }
 
+                    // Asked of the root once; only a crossing into another
+                    // volume asks again.
+                    let remote = onDevice == rootDev ? rootIsRemote : RawEntry.isRemote(dirFD: fd)
+
                     pending.removeAll(keepingCapacity: true)
                     nameBuf.removeAll(keepingCapacity: true)
 
@@ -559,8 +568,7 @@ public final class DiskScanner {
                         if e.isDataless { flags.insert(.dataless) }
                         if e.stFlags & UF_COMPRESSED_FLAG != 0 { flags.insert(.compressed) }
 
-                        // A dataless file's bytes live in iCloud, not here.
-                        let physical = e.isDataless ? 0 : e.physicalSize
+                        let physical = e.bytesOnDisk(in: fd, volumeIsRemote: remote)
 
                         pending.append(Pending(nameOffset: offset, nameLength: e.nameLen,
                                                logical: e.logicalSize, physical: physical,

@@ -570,6 +570,7 @@ public final class LiveTree: @unchecked Sendable {
         var dirStat = stat()
         let device: Int32 = fstat(fd, &dirStat) == 0 ? dirStat.st_dev : 0
         var entries: [DirEntry] = []
+        let remote = RawEntry.isRemote(dirFD: fd)
         _ = BulkReader().enumerate(dirFD: fd) { e in
             var fl = NodeFlags()
             if e.isDir { fl.insert(.directory) }
@@ -578,7 +579,7 @@ public final class LiveTree: @unchecked Sendable {
             if e.stFlags & UF_COMPRESSED_FLAG != 0 { fl.insert(.compressed) }
             entries.append(DirEntry(
                 name: Array(UnsafeRawBufferPointer(start: e.name, count: e.nameLen)),
-                logical: e.logicalSize, physical: e.isDataless ? 0 : e.physicalSize,
+                logical: e.logicalSize, physical: e.bytesOnDisk(in: fd, volumeIsRemote: remote),
                 mtime: Int32(truncatingIfNeeded: e.mtime), flags: fl,
                 fileID: e.fileID, linkCount: e.linkCount))
         }

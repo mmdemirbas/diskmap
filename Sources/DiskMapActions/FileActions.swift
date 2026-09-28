@@ -24,7 +24,11 @@ public enum FileActionError: LocalizedError {
     case failed(url: URL, underlying: String)
     public var errorDescription: String? {
         switch self {
-        case .failed(let url, let msg): "Could not move \(url.lastPathComponent) to Trash: \(msg)"
+        // The name from the URL's bytes, shown the way every other view
+        // shows it: `lastPathComponent` hands back percent escapes for a
+        // name that is not UTF-8.
+        case .failed(let url, let msg):
+            "Could not move \(String(decoding: RawPath(url: url).lastComponent, as: UTF8.self)) to Trash: \(msg)"
         }
     }
 }
@@ -117,10 +121,23 @@ public enum FileActions {
                                            trashURL: resulting as URL?,
                                            bytesFreed: item.bytes, node: item.node))
             } catch {
-                failures.append(.failed(url: item.url, underlying: error.localizedDescription))
+                failures.append(.failed(url: item.url,
+                                        underlying: reason(error, name: RawPath(url: item.url).lastComponent)))
             }
         }
         return (trashed, failures)
+    }
+
+    /// The system's own words, except where they are wrong. A name that is
+    /// not UTF-8 can only be on a share another system serves, and macOS
+    /// lists such a file but will not act on it: asked to move one to the
+    /// Trash it answers that the file does not exist — about a file it has
+    /// just listed. Over NFS a rename of it fails and an unlink returns
+    /// success and leaves it where it was.
+    static func reason(_ error: Error, name: ArraySlice<UInt8>) -> String {
+        guard String(bytes: name, encoding: .utf8) == nil else { return error.localizedDescription }
+        return "its name is not valid UTF-8, and macOS cannot move a file named that way. "
+            + "Rename it on the computer that shares it."
     }
 
     /// Undo for a trash operation: moves the item back where it came from.

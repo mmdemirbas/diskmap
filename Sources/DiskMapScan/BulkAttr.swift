@@ -41,6 +41,31 @@ public struct RawEntry {
     public     var isDir: Bool { objType == ObjType.dir.rawValue }
     public     var isSymlink: Bool { objType == ObjType.lnk.rawValue }
     public     var isDataless: Bool { stFlags & SF_DATALESS_FLAG != 0 }
+
+    /// What the entry takes on disk. The bulk read's allocation size, except
+    /// on a volume that is not local: there the macOS NFS client answers with
+    /// the length rounded up to 512 bytes rather than what the server
+    /// allocated. A 777-byte file on a Linux share read 1 KB where `lstat`,
+    /// and `du` on either side, say 4 KB, and a share of 20,000 small files
+    /// came out 13% short. `lstat` carries the server's figure, and is
+    /// answered from the attribute cache the listing has just filled: those
+    /// 20,000 in 0.24 s. A file in iCloud takes nothing here.
+    public func bytesOnDisk(in dirFD: Int32, volumeIsRemote: Bool) -> Int64 {
+        if isDataless { return 0 }
+        guard volumeIsRemote, !isDir else { return physicalSize }
+        var info = stat()
+        guard fstatat(dirFD, name.assumingMemoryBound(to: CChar.self), &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+            return physicalSize
+        }
+        return Int64(info.st_blocks) * 512
+    }
+
+    /// Whether the directory open at `fd` is on a volume served from
+    /// elsewhere: NFS, SMB, AFP, WebDAV.
+    public static func isRemote(dirFD fd: Int32) -> Bool {
+        var fs = statfs()
+        return fstatfs(fd, &fs) == 0 && fs.f_flags & UInt32(MNT_LOCAL) == 0
+    }
 }
 
 /// One reusable buffer + attrlist per worker thread.

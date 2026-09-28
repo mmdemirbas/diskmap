@@ -120,6 +120,38 @@ store directly, which is what a share serving them would have handed the walk.
 One test asserts the volume still refuses, so that if it ever stops the gap in
 coverage is announced rather than silent.
 
+### On a real share
+
+Checked on 2026-09-28 against an NFS 4.0 share served from Linux (OrbStack's
+mount of a Docker volume on btrfs, mounted with `nfc`), holding names with
+0xE9, 0xFF and 0xFE in them, a hard link and a symlink both named that way,
+and a folder named that way with a file inside (**run**,
+`ForeignNameShareTests`, opt-in: it needs such a share and says how to make
+one).
+
+- **The Mac lists them and reads their attributes**: `readdir`,
+  `getattrlistbulk`, `lstat`, `stat`, `readlink`, and `open` on a directory
+  all work on the raw bytes.
+- **The Mac will not act on them**: `open` on a file, `rename`, `unlink` by
+  full path and creating such a name all fail with EINVAL. `unlinkat` relative
+  to the folder returns success and leaves the file where it was, on both
+  sides. The client converts names to NFC before sending them, which bytes
+  that are not UTF-8 cannot go through; that is the likely mechanism, not a
+  checked one.
+- **What DiskMap does**: the scan and a relist of every folder find every entry
+  by its bytes, with the sizes `lstat` gives, the hard link counted once; the
+  path and the URL every action is given name the entry byte for byte. Trash
+  cannot work — macOS answers "The file doesn't exist" about a file it has
+  just listed — so the failure now says the name is the reason (**run**,
+  `testATrashFailureOnANameThatIsNotUTF8SaysWhy`). The Trash is refused on
+  this share for any name anyway: the volume has none.
+- **Changes made on the Linux side reached the live tree** through FSEvents on
+  this share (**run**, `dmbench live`). That is OrbStack's; another NFS server
+  may not deliver them.
+- **SMB is not checked.** SMB carries names as UTF-16, so a Samba server has to
+  translate or mangle a name that is not UTF-8 before the Mac sees it; the bytes
+  above are unlikely to arrive over SMB at all. Not run.
+
 ## Believing the tree still matches the disk
 
 A live tree is a promise: what the map shows is what is there now. The walk
@@ -197,4 +229,14 @@ volume now.
 - **Directory inodes** are not counted as bytes of their own. `du` does count
   them; the difference is a few kilobytes per thousand directories.
 - **A network or FUSE volume** may report attributes this walk trusts —
-  `ATTR_FILE_ALLOCSIZE` in particular — more loosely than a local one.
+  `ATTR_FILE_ALLOCSIZE` in particular — more loosely than a local one. On the
+  NFS share above it did: the bulk read gave the length rounded up to 512
+  bytes, where the server had allocated 4 KB blocks, so a 777-byte file read
+  1 KB against 4 KB from `lstat` and from `du` on either side, and a share of
+  20,000 small files came out at 190.5 MB against 228.6 MB. On a volume that
+  is not local (`MNT_LOCAL` clear) the walk and the relist now take a file's
+  bytes on disk from `fstatat`, which the listing's attribute cache answers:
+  the scan of those 20,000 files took 0.23 s before and after (**run**). SMB,
+  AFP and WebDAV take the same road untested. Whether a FUSE volume counts as
+  local depends on how it was mounted (macFUSE has a `local` option); not
+  checked.
