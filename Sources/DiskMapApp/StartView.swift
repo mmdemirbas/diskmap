@@ -45,6 +45,10 @@ struct StartView: View {
             }
             Divider()
             sectionHeader(loc[.foldersHeader], trailing: {
+                // Present and disabled once added, so the header keeps one shape.
+                Button(loc[.addHome]) { model.addTargets([homeFolder]) }
+                    .controlSize(.mini)
+                    .disabled(model.addedFolders.contains(homeFolder.path))
                 Button(loc[.addMore]) { model.chooseFolders() }.controlSize(.mini)
             })
             Divider()
@@ -75,6 +79,8 @@ struct StartView: View {
             return true
         }
     }
+
+    private var homeFolder: URL { FileManager.default.homeDirectoryForCurrentUser }
 
     /// Every folder that has been added, ticked or not, minus anything that is
     /// really one of the mounted disks.
@@ -180,8 +186,11 @@ struct StartView: View {
     // MARK: - Actions
 
     private var actions: some View {
-        Button(model.scanTargets.count == 1 ? loc[.scanWholeDisk]
-                                            : loc.scanLocations(model.scanTargets.count)) {
+        // "Whole disk" only when the one target is a disk: one folder ticked
+        // on its own — the home folder, say — is one location.
+        let wholeDisk = model.scanTargets.count == 1
+            && model.volumes.contains { $0.path == model.scanTargets[0] }
+        return Button(wholeDisk ? loc[.scanWholeDisk] : loc.scanLocations(model.scanTargets.count)) {
             model.scan()
         }
         .keyboardShortcut(.defaultAction).controlSize(.large)

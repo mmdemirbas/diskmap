@@ -465,7 +465,7 @@ final class L10n: ObservableObject {
         case scanVsFilesystem, volumeReportsUsed, scanAttributed, unaccounted, done
         case filter, onDisk, apparent, rescan, enclosingFolder, sizeMetricHelp
         case watching, notWatching, watchHelp, undoTrash, tryAgain
-        case chooseTarget, volume, scanVolume, scanHome, fdaWarning, openPrivacy
+        case chooseTarget, volume, scanVolume, addHome, fdaWarning, openPrivacy
         case cancel, size, share, name, emptyFolder, noMatches
         case nothingSelected, nothingSelectedHint, ofVolume, reveal, trash
         case apparentMismatch, openHere, revealInFinder, quickLook, quickLookInICloud, copyPath, moveToTrash
@@ -649,7 +649,7 @@ final class L10n: ObservableObject {
         .chooseTarget: ("Choose what to measure", "Neyi ölçeceğinizi seçin"),
         .volume: ("Volume", "Disk"),
         .scanVolume: ("Scan Volume", "Diski tara"),
-        .scanHome: ("Scan Home Folder", "Ana klasörü tara"),
+        .addHome: ("Home Folder", "Ana klasör"),
         .fdaWarning: ("Without Full Disk Access some folders stay invisible and the totals come up short.",
                       "Tam Disk Erişimi olmadan bazı klasörler görünmez ve toplamlar eksik çıkar."),
         .openPrivacy: ("Open Privacy Settings", "Gizlilik ayarlarını aç"),
