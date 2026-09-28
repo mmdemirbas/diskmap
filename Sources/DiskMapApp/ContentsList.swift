@@ -7,6 +7,7 @@ import SwiftUI
 struct ContentsList: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var loc = L10n.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let rowHeight: CGFloat = 22
 
@@ -60,7 +61,8 @@ struct ContentsList: View {
                 }
                 .onChange(of: model.scrollTo) { _, target in
                     guard let target else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
+                    // The one animation in the app, and it is optional.
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
                         proxy.scrollTo(target, anchor: .center)
                     }
                     model.scrollTo = nil
