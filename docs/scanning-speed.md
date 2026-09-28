@@ -136,3 +136,45 @@ refused far more often than it strictly has to be.
 
 A refused side is walked, which is what happened before. The check itself is a
 pass over the subtree in memory.
+
+## The hard-link pass in a live update
+
+A file that had one link at scan time and is given a second one later is
+known by nothing but its inode number, so a flush that meets a multi-link
+file looks through the whole inode column for the other names. The first
+version did it with a set lookup per node and confirmed each candidate with
+an `lstat`, all with the tree lock held — and the window takes the same lock
+to draw.
+
+Measured on 2026-09-28 with `dmbench linkcost ~/dev 2000`: a tree of
+3,530,889 nodes, each timed flush relisting one small folder, and a second
+thread taking the tree lock every 0.2 ms the way drawing does, recording the
+longest it waited. Three runs each; the machine was in ordinary use.
+
+| Change on disk | Before (`8ab91b9`): flush / longest wait | After: flush / longest wait |
+|---|---|---|
+| An ordinary file resized | 0.2–7.5 ms / under 1.6 ms | 0.1–2.9 ms / under 1.2 ms |
+| One new hard link | 69–211 ms / 69–172 ms | 2.4–6.5 ms / 2.1–5.5 ms |
+| 2,000 new hard links in one flush | 248–478 ms / 225–454 ms | 54–91 ms / 11–28 ms |
+
+What changed:
+
+- **The column pass** is a load, a multiply and a bit test per node: a bit
+  filter over the wanted inode numbers turns nearly every node away before
+  the set is asked. For 2,000 inodes over 3.5 million nodes the whole find
+  step, candidates' paths included, held the lock for 7–17 ms.
+- **The `lstat`s run with the lock down**, between the find and the settling.
+  Each candidate is re-checked under the lock before anything is written: a
+  node the tree moved on from in between is left for the next pass.
+- **Building a path** went from a copy of the path so far for every component
+  to one buffer sized up front, and the firmlink prefix check stopped
+  building its byte arrays on every call. Before this, the paths for 8,000
+  candidates were most of the find step. Every path the window builds for a
+  row gets the same saving.
+
+The flush of 2,000 links still takes 54–91 ms; most of that is listing the
+folder and the `lstat`s, neither under the lock. The longest wait left is
+the relist's own commit of 2,000 new entries.
+
+The `live.resolve` telemetry record carries `findMs` and `settleMs`, the two
+spans the lock is held, whenever the pass takes 20 ms or more in all.

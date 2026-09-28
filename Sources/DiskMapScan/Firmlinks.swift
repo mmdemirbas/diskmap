@@ -71,11 +71,10 @@ public enum Firmlinks {
     /// decoded, which matters because the tail may be a name that cannot be.
     public static func displayPath(_ path: RawPath) -> RawPath {
         let bytes = path.bytes
-        for (link, data) in pairs {
-            let head = Array(data.utf8)
-            guard bytes.count >= head.count, Array(bytes.prefix(head.count)) == head,
-                  bytes.count == head.count || bytes[head.count] == 0x2F else { continue }
-            return RawPath(bytes: Array(link.utf8) + bytes.dropFirst(head.count))
+        for (link, data) in bytePairs {
+            guard bytes.count >= data.count, bytes.starts(with: data),
+                  bytes.count == data.count || bytes[data.count] == 0x2F else { continue }
+            return RawPath(bytes: link + bytes.dropFirst(data.count))
         }
         return path
     }

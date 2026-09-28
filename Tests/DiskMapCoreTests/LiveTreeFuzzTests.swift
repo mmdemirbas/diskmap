@@ -19,7 +19,8 @@ import DiskMapCore
 /// tree holds any the comparison is on what does not depend on it — the
 /// same files, the same logical size on each, the same bytes on disk at the
 /// root. Twelve seeds here in the suite; run with more before trusting a
-/// change to the hard-link path, which is where the subtle ones hide.
+/// change to the hard-link path, which is where the subtle ones hide (see
+/// the test for how).
 
 final class LiveTreeFuzzTests: XCTestCase {
     private var root: URL!
@@ -33,8 +34,11 @@ final class LiveTreeFuzzTests: XCTestCase {
     }
     override func tearDownWithError() throws { if let root { try? fm.removeItem(at: root) } }
 
+    /// `DISKMAP_FUZZ_SEEDS=500 swift test --filter LiveTreeFuzzTests` for the
+    /// longer run.
     func testTheLiveTreeMatchesAFreshScanAfterRandomChanges() throws {
-        for seed: UInt64 in 1...12 {
+        let seeds = UInt64(ProcessInfo.processInfo.environment["DISKMAP_FUZZ_SEEDS"] ?? "") ?? 12
+        for seed: UInt64 in 1...seeds {
             try fm.removeItem(at: root)
             try fm.createDirectory(at: root, withIntermediateDirectories: true)
             counter = 0

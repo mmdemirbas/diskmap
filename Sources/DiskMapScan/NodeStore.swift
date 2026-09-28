@@ -365,12 +365,22 @@ public final class NodeStore {
                 UnsafeBufferPointer(start: base + span.offset, count: span.length)
             }
             // In a multi-root tree the first component is already absolute.
+            // One buffer, sized up front: a copy of the path so far for
+            // every component was most of what a path cost, and a path is
+            // built for every row drawn and every candidate a pass confirms.
             let head = spans[0]
-            var path = head.length > 0 && base[head.offset] == RawPath.separator
-                ? RawPath(bytes: Array(component(head)))
-                : rootBytes(0).appending(component(head))
-            for span in spans.dropFirst() { path = path.appending(component(span)) }
-            return Firmlinks.displayPath(path)
+            let absolute = head.length > 0 && base[head.offset] == RawPath.separator
+            let root = absolute ? [] : rootBytes(0).bytes
+            var out: [UInt8] = []
+            out.reserveCapacity(root.count + spans.reduce(0) { $0 + $1.length + 1 })
+            out.append(contentsOf: root)
+            for (i, span) in spans.enumerated() {
+                // As `RawPath.appending`: a separator unless the path so far
+                // is the volume root.
+                if !(i == 0 && absolute), out != [RawPath.separator] { out.append(RawPath.separator) }
+                out.append(contentsOf: component(span))
+            }
+            return Firmlinks.displayPath(RawPath(bytes: out))
         }
     }
 

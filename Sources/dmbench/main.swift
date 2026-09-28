@@ -548,6 +548,86 @@ func cmdChurn(_ path: String, _ seconds: Int) {
 }
 
 
+/// What the live tree pays when hard links move, on a tree of real size.
+///
+/// A batch that touches a file with more than one link is settled at flush
+/// end by a pass over the whole inode column. This times three batches on
+/// the same tree: one touching an ordinary file (the baseline), one making a
+/// single hard link, and one making `links` of them at once — what a
+/// package manager does to a node_modules. The difference from the baseline
+/// is the settling pass. Writes only inside a folder it makes and removes.
+func cmdLinkCost(_ path: String, _ links: Int) {
+    let fm = FileManager.default
+    let lab = URL(fileURLWithPath: path).appendingPathComponent(".dmbench-linkcost-\(getpid())")
+    try? fm.createDirectory(at: lab, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: lab) }
+    // The sources in a folder of their own, and every run's links in empty
+    // folders made before the scan: each timed flush then relists one small
+    // known folder, and what grows with the tree is the hard-link pass alone.
+    let sources = lab.appendingPathComponent("src")
+    try? fm.createDirectory(at: sources, withIntermediateDirectories: true)
+    for i in 0..<links { try? Data(count: 100).write(to: sources.appendingPathComponent("\(i)")) }
+    try? Data(count: 100).write(to: lab.appendingPathComponent("plain"))
+    let runs = 3
+    for run in 0..<runs {
+        for kind in ["one", "many"] {
+            try? fm.createDirectory(at: lab.appendingPathComponent("\(kind)-\(run)"), withIntermediateDirectories: true)
+        }
+    }
+
+    print("scanning \(path) ...")
+    let started = Date()
+    let tree = LiveTree(result: DiskScanner().scan(ScanOptions(rootPath: path)))
+    let nodes = tree.withStore { $0.count }
+    print(String(format: "  %@ nodes in %.1f s\n", nodes.formatted() as NSString,
+                 Date().timeIntervalSince(started)))
+
+    // What the window feels: a reader taking the tree lock over and over, as
+    // drawing does, and the longest it had to wait while the flush ran.
+    final class Reader: @unchecked Sendable {
+        let lock = NSLock()
+        var running = true, longest = 0.0
+    }
+    func timed(_ label: String, _ events: [URL]) {
+        let reader = Reader()
+        let done = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            while true {
+                reader.lock.lock(); let go = reader.running; reader.lock.unlock()
+                guard go else { break }
+                let t = DispatchTime.now().uptimeNanoseconds
+                _ = tree.withStore { $0.count }
+                let waited = Double(DispatchTime.now().uptimeNanoseconds - t) / 1e6
+                reader.lock.lock(); reader.longest = max(reader.longest, waited); reader.lock.unlock()
+                usleep(200)
+            }
+            done.signal()
+        }
+        let t = Date()
+        tree.flushNow(events: events.map { RawPath($0.path) })
+        let took = Date().timeIntervalSince(t) * 1000
+        reader.lock.lock(); reader.running = false; reader.lock.unlock()
+        done.wait()
+        print("  " + label.padding(toLength: 34, withPad: " ", startingAt: 0)
+              + String(format: "%8.1f ms   longest wait for the tree %7.2f ms", took, reader.longest))
+    }
+    for run in 0..<runs {
+        print("run \(run + 1)")
+        try? Data(count: 200 + run).write(to: lab.appendingPathComponent("plain"))
+        timed("ordinary file resized", [lab.appendingPathComponent("plain")])
+        let one = lab.appendingPathComponent("one-\(run)/link")
+        try? fm.linkItem(at: sources.appendingPathComponent("0"), to: one)
+        timed("one hard link made", [one])
+        var made: [URL] = []
+        for i in 0..<links {
+            let l = lab.appendingPathComponent("many-\(run)/\(i)")
+            try? fm.linkItem(at: sources.appendingPathComponent("\(i)"), to: l)
+            made.append(l)
+        }
+        timed("\(links) hard links made at once", made)
+    }
+}
+
 /// What a search costs while somebody is typing.
 func cmdFind(_ path: String, _ needle: String) {
     let store = DiskScanner().scan(ScanOptions(rootPath: path)).store
@@ -770,6 +850,8 @@ case "churn": cmdChurn(args.count > 2 ? args[2] : FileManager.default.homeDirect
                        args.count > 3 ? (Int(args[3]) ?? 120) : 120)
 case "live": cmdLive(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
                      args.count > 3 ? (Int(args[3]) ?? 120) : 120)
+case "linkcost": cmdLinkCost(args.count > 2 ? args[2] : FileManager.default.homeDirectoryForCurrentUser.path,
+                             args.count > 3 ? (Int(args[3]) ?? 2000) : 2000)
 case "relistcost": cmdRelistCost(args.count > 2 ? (Int(args[2]) ?? 8) : 8,
                                  args.count > 3 ? (Int(args[3]) ?? 40) : 40)
 case "metrics": cmdMetrics(args.count > 2 ? (Int(args[2]) ?? 10) : 10)
@@ -783,5 +865,5 @@ default: print("usage: dmbench [volume | validate <path> | scan <path> [path...]
                + " | dupes <path> | compare <left> <right> [--verify]"
                + " | verify <path> <path> | verifytop <path> [GB]"
                + " | cleanup <path> | snapshot <path> [dir] | changes <path> [dir]"
-               + " | table <path> [rows] | content <path> | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | metrics [n]]")
+               + " | table <path> [rows] | content <path> | find <path> <needle> | churn <path> [seconds] | live <path> [seconds] | relistcost [entries] [runs] | linkcost <path> [links] | metrics [n]]")
 }

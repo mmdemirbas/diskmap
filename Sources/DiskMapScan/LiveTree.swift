@@ -216,23 +216,26 @@ public final class LiveTree: @unchecked Sendable {
         return canon
     }
 
-    /// What the watcher would have handed over, applied now and on this
-    /// thread. For tests, which otherwise have to wait on the event stream
-    /// and the debounce to see a batch handled.
-    func flushNow(events: [RawPath]) {
+    /// What the watcher would have handed over, applied now, waited for.
+    /// For tests and `dmbench`, which otherwise have to wait on the event
+    /// stream and the debounce to see a batch handled or to time it. On the
+    /// apply queue like every other flush, so it cannot run beside one.
+    public func flushNow(events: [RawPath]) {
         lock.lock()
         for d in events.compactMap(directoryToRelist) { pending.insert(d) }
         lock.unlock()
-        flush()
-        // A folder relisted a moment ago is held off, and the flush that
-        // comes back for it is asynchronous. A test wants the tree as it
-        // will be, now: forget the hold-offs and apply what was deferred.
-        lock.lock()
-        let deferred = !pending.isEmpty
-        lock.unlock()
-        if deferred {
-            lastRelist.removeAll()
+        applyQueue.sync {
             flush()
+            // A folder relisted a moment ago is held off, and the flush that
+            // comes back for it is asynchronous. A test wants the tree as it
+            // will be, now: forget the hold-offs and apply what was deferred.
+            lock.lock()
+            let deferred = !pending.isEmpty
+            lock.unlock()
+            if deferred {
+                lastRelist.removeAll()
+                flush()
+            }
         }
     }
 
@@ -241,8 +244,9 @@ public final class LiveTree: @unchecked Sendable {
         let dirs = pending
         pending.removeAll()
         flushScheduled = false
+        let owed = !unresolvedInodes.isEmpty
         lock.unlock()
-        guard !dirs.isEmpty else { return }
+        guard !dirs.isEmpty || owed else { return }
 
         // An event names the thing that changed, and a directory that was
         // just made — or deleted and made again — is a thing the store has
@@ -295,7 +299,7 @@ public final class LiveTree: @unchecked Sendable {
             if did { changed = true; moved += 1 }
         }
 
-        resolveTouchedInodes()
+        if resolveTouchedInodes() { changed = true }
 
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds
                              - began.uptimeNanoseconds) / 1e9
@@ -375,8 +379,9 @@ public final class LiveTree: @unchecked Sendable {
     }
 
     struct InodeRef: Hashable { let device: Int32; let id: UInt64 }
-    /// Inodes met during this flush whose keeper the table could not name.
-    /// Only ever touched from `applyQueue`, like `lastRelist`.
+    /// Inodes a relist or a removal met whose keeper the table could not
+    /// name. Guarded by `lock`: relists add to it from the apply queue, and
+    /// `refresh` and `markRemoved` add to it from the main thread.
     private var unresolvedInodes = Set<InodeRef>()
 
     /// The one pass that needs the inode column. For every inode the batch
@@ -387,59 +392,129 @@ public final class LiveTree: @unchecked Sendable {
     /// oldest. Every other link is flagged and zeroed. One walk over the
     /// column however many inodes are in question, so a package manager
     /// linking a thousand files costs one pass, not a thousand.
-    private func resolveTouchedInodes() {
-        guard !unresolvedInodes.isEmpty else { return }
+    ///
+    /// The lock is held only where the store is read or written: the walk
+    /// that finds the candidates, and the settling. The lstat that confirms
+    /// each candidate happens between the two with the lock down. The walk
+    /// is a load, a multiply and a bit test per node; as a set lookup per
+    /// node, with every lstat inside the lock as well, it held a tree of
+    /// 3.5 million nodes for 137 ms, which is a stalled window.
+    @discardableResult
+    private func resolveTouchedInodes() -> Bool {
+        lock.lock()
         let wanted = unresolvedInodes
         unresolvedInodes.removeAll()
-        lock.lock(); defer { lock.unlock() }
-        //
+        guard !wanted.isEmpty else { lock.unlock(); return false }
+        let span = Telemetry.begin("live.resolve")
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let candidates = linkCandidates(of: Set(wanted.map(\.id)))
+        let nodes = store.count
+        lock.unlock()
+        let t1 = DispatchTime.now().uptimeNanoseconds
+
         // The inode column can lie in one direction: a deleted file's number
         // is reassigned by the volume to the next new file, so a stored id
         // may now belong to something else. Each candidate is confirmed by
         // its current path: only a node whose file still carries that inode
         // is a link of the group. A node whose file was replaced lstats to a
         // different number and drops out — it is settled by its own listing.
-        var holders: [UInt64: [Int32]] = [:]
-        let ids = Set(wanted.map(\.id))
-        for i in 0..<store.count where ids.contains(store.fileID[i]) {
-            let n = Int32(i)
-            guard !store.isDirectory(n), !store.flagSet(n).contains(.symlink), isLive(n) else { continue }
+        // The sizes come from the same lstat, since every link reads the one
+        // inode: nothing stored can be trusted here — a link met by a subtree
+        // walk was zeroed, a keeper handed its bytes over at whatever size it
+        // last had, and the write that made this inode a question may have
+        // gone through any name.
+        var confirmed: [LinkOnDisk] = []
+        for c in candidates {
             var info = stat()
-            guard store.pathBytes(n).withCString({ lstat($0, &info) }) == 0,
-                  info.st_ino == store.fileID[i] else { continue }
-            holders[store.fileID[i], default: []].append(n)
+            guard c.path.withCString({ lstat($0, &info) }) == 0, info.st_ino == c.id else { continue }
+            confirmed.append(LinkOnDisk(node: c.node, id: c.id, logical: Int64(info.st_size),
+                                        physical: Int64(info.st_blocks) * 512))
         }
+
+        let t2 = DispatchTime.now().uptimeNanoseconds
+        lock.lock()
+        let changed = settle(wanted, confirmed)
+        lock.unlock()
+        let t3 = DispatchTime.now().uptimeNanoseconds
+        span.end(["inodes": .int(Int64(wanted.count)), "nodes": .int(Int64(nodes)),
+                  "candidates": .int(Int64(candidates.count)),
+                  "findMs": .double(Double(t1 - t0) / 1e6), "settleMs": .double(Double(t3 - t2) / 1e6)],
+                 minMilliseconds: 20)
+        return changed
+    }
+
+    private struct LinkOnDisk { let node: Int32; let id: UInt64; let logical: Int64; let physical: Int64 }
+
+    /// Every live plain-file node whose stored inode is one of `ids`, with
+    /// its path. The caller holds the lock. A bit filter stands in front of
+    /// the set — one bit per hash of an id, sized to stay mostly empty — so
+    /// nearly every node is turned away without a hash lookup.
+    private func linkCandidates(of ids: Set<UInt64>) -> [(node: Int32, id: UInt64, path: RawPath)] {
+        var k = 16
+        while k < 24, 1 << k < ids.count * 32 { k += 1 }
+        let shift = UInt64(64 - k)
+        let mix: UInt64 = 0x9E37_79B9_7F4A_7C15
+        var bits = [UInt64](repeating: 0, count: (1 << k) / 64)
+        for id in ids {
+            let h = Int((id &* mix) >> shift)
+            bits[h >> 6] |= 1 << UInt64(h & 63)
+        }
+        var hits: [Int32] = []
+        store.fileID.withUnsafeBufferPointer { column in
+            bits.withUnsafeBufferPointer { filter in
+                for i in column.indices {
+                    let v = column[i]
+                    let h = Int((v &* mix) >> shift)
+                    if filter[h >> 6] & (1 << UInt64(h & 63)) != 0, ids.contains(v) { hits.append(Int32(i)) }
+                }
+            }
+        }
+        return hits.compactMap { n in
+            guard !store.isDirectory(n), !store.flagSet(n).contains(.symlink), isLive(n) else { return nil }
+            return (n, store.fileID[Int(n)], store.pathBytes(n))
+        }
+    }
+
+    /// Puts each inode's bytes on one of its confirmed links and zeroes the
+    /// rest. The caller holds the lock. A candidate the tree moved on from
+    /// while the lock was down — removed, or relisted to another file — is
+    /// left out; whatever changed it put its own inodes in question, and
+    /// they are settled on the next pass. Returns whether anything changed.
+    private func settle(_ wanted: Set<InodeRef>, _ confirmed: [LinkOnDisk]) -> Bool {
+        var holders: [UInt64: [LinkOnDisk]] = [:]
+        for c in confirmed where store.fileID[Int(c.node)] == c.id && isLive(c.node) {
+            holders[c.id, default: []].append(c)
+        }
+        var changed = false
         for ref in wanted {
-            guard let nodes = holders[ref.id], !nodes.isEmpty else { continue }
+            guard let links = holders[ref.id], !links.isEmpty else { continue }
+            let nodes = links.map(\.node)
             // The keeper: whoever holds the bytes now, else the oldest name.
             let current = nodes.filter { !store.flagSet($0).contains(.hardlinkDuplicate) }
             let keeper = current.min() ?? nodes.min()!
-            // The sizes come from the disk. Nothing stored can be trusted
-            // here: a link met by a subtree walk was zeroed, a keeper handed
-            // its bytes over at whatever size it last had, and the write that
-            // made this inode a question may have gone through any name.
-            var logical = store.totalLogical[Int(keeper)]
-            var bytes = nodes.map { store.totalPhysical[Int($0)] }.max() ?? 0
-            var info = stat()
-            if store.pathBytes(keeper).withCString({ lstat($0, &info) }) == 0 {
-                logical = Int64(info.st_size)
-                if !store.flagSet(keeper).contains(.dataless) { bytes = Int64(info.st_blocks) * 512 }
-            }
+            let logical = links.first { $0.node == keeper }!.logical
+            let bytes = store.flagSet(keeper).contains(.dataless)
+                ? nodes.map { store.totalPhysical[Int($0)] }.max() ?? 0
+                : links.first { $0.node == keeper }!.physical
             for n in nodes {
                 let isKeeper = n == keeper
                 let want = isKeeper ? bytes : 0
                 let dl = logical - store.totalLogical[Int(n)]
                 let dp = want - store.totalPhysical[Int(n)]
+                let flags = store.flags[Int(n)]
                 if isKeeper { store.flags[Int(n)] &= ~NodeFlags.hardlinkDuplicate.rawValue }
                 else { store.flags[Int(n)] |= NodeFlags.hardlinkDuplicate.rawValue }
+                if store.flags[Int(n)] != flags { changed = true }
                 if dl != 0 || dp != 0 {
                     store.totalLogical[Int(n)] = logical
                     store.totalPhysical[Int(n)] = want
                     store.propagate(from: n, logical: dl, physical: dp)
+                    changed = true
                 }
             }
             inodes.settle(onDevice: ref.device, ref.id, keeper: keeper)
         }
+        return changed
     }
 
     /// A node the tree still shows: not removed, and under nothing removed.
@@ -732,12 +807,14 @@ public final class LiveTree: @unchecked Sendable {
     /// update logic rather than on event delivery timing.
     @discardableResult
     public func refresh(directory path: String) -> Bool {
-        relist(directory: RawPath(path))
+        refresh(directory: RawPath(path))
     }
 
     @discardableResult
     public func refresh(directory path: RawPath) -> Bool {
-        relist(directory: path)
+        let did = relist(directory: path)
+        settleLinksLater()
+        return did
     }
 
     /// Applies a deletion immediately, so the UI reflects a trashed item before
@@ -753,5 +830,23 @@ public final class LiveTree: @unchecked Sendable {
         handOverKeptBytes(under: node)
         lastChange = Date()
         changes += 1
+        scheduleSettling()
+    }
+
+    /// Hard links a relist or a removal outside a flush put in question are
+    /// settled by a flush of their own, on the apply queue: the pass over the
+    /// inode column is not something to run on the main thread, and without
+    /// it a trashed link's bytes would stay with the name that went until
+    /// some later event happened to bring a flush.
+    private func settleLinksLater() {
+        lock.lock(); defer { lock.unlock() }
+        scheduleSettling()
+    }
+
+    /// The caller holds the lock.
+    private func scheduleSettling() {
+        guard !unresolvedInodes.isEmpty, !flushScheduled else { return }
+        flushScheduled = true
+        applyQueue.async { [weak self] in self?.flush() }
     }
 }

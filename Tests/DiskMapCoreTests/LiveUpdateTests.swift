@@ -602,6 +602,53 @@ extension LiveUpdateTests {
         agree("after the keeper's folder \(folder.lastPathComponent) was deleted")
     }
 
+    /// The app's own ways into the tree — `markRemoved` after a trash,
+    /// `refresh` after an undo — run on the main thread, outside any flush.
+    /// A hard link either of them puts in question is settled straight after
+    /// on the apply queue, not whenever some later event brings a flush:
+    /// no events are delivered here, and the bytes still have to move.
+    func testTrashingOrRestoringAHardLinkSettlesItsBytesWithoutAnEvent() throws {
+        try write("a/big.bin", 50_000)
+        try fm.createDirectory(at: root.appendingPathComponent("b"), withIntermediateDirectories: true)
+        try fm.linkItem(at: root.appendingPathComponent("a/big.bin"),
+                        to: root.appendingPathComponent("b/big.bin"))
+        let tree = self.tree()
+        let bytes = tree.withStore { $0.totalPhysical[0] }
+        func node(_ rel: String) -> Int32? {
+            tree.withStore { $0.find(path: root.appendingPathComponent(rel).path) }
+        }
+        func duplicate(_ rel: String) -> Bool? {
+            tree.withStore { store in node(rel).map { store.flagSet($0).contains(.hardlinkDuplicate) } }
+        }
+        func eventually(_ why: String, _ holds: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !holds(), Date() < deadline { usleep(10_000) }
+            XCTAssertTrue(holds(), why)
+        }
+        // Which name keeps the bytes is whichever the walk met first.
+        let keeper = duplicate("a/big.bin") == false ? "a/big.bin" : "b/big.bin"
+        let other = keeper == "a/big.bin" ? "b/big.bin" : "a/big.bin"
+
+        // Trashed: moved out of the tree, and the tree told directly.
+        let trashed = try XCTUnwrap(node(keeper))
+        let aside = URL(fileURLWithPath: fm.temporaryDirectory.path)
+            .appendingPathComponent("dmaside-\(UUID().uuidString)")
+        try fm.moveItem(at: root.appendingPathComponent(keeper), to: aside)
+        defer { try? fm.removeItem(at: aside) }
+        tree.markRemoved(trashed)
+        eventually("the name left behind takes the bytes over") {
+            duplicate(other) == false && tree.withStore { $0.totalPhysical[0] } == bytes
+        }
+
+        // Restored: moved back, and its folder refreshed.
+        try fm.moveItem(at: aside, to: root.appendingPathComponent(keeper))
+        tree.refresh(directory: root.appendingPathComponent(keeper).deletingLastPathComponent().path)
+        eventually("two names again, one file, counted once") {
+            [keeper, other].compactMap(duplicate).filter { $0 }.count == 1
+                && tree.withStore { $0.totalPhysical[0] } == bytes
+        }
+    }
+
     /// A folder and one of its subfolders, both known, both changed within
     /// one debounce window. The parent's relist keeps the child's subtree as
     /// it was, so the child's own relist must still happen.
