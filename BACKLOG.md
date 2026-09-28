@@ -13,6 +13,15 @@ nine days of work sat in `build/` unseen.
 
 ---
 
+## From the App Store comparison, 2026-09-28
+
+Three App Store apps share the name; `docs/competitors-2026-09.md` sets what
+they advertise against what this does. Quick Look and a Home folder target
+were taken the same day (`3dae18c`, `b955bb7`). Ten more are ranked there
+under "Recommendations", none started — the first two are small and about
+safety: refuse to trash the folders macOS depends on, and say before a Trash
+on a volume that has none that nothing will be moved.
+
 ## From the brief of 2026-09-08
 
 | # | Request | Status | Where |
