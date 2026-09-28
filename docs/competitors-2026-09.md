@@ -110,7 +110,11 @@ Six gaps were bounded and clearly worth closing the same day:
 - **Quick Look.** FIPLAB and DiskMap AI both let you look at a file before
   deleting it; DiskMap could only reveal it in the Finder. Now: Cmd-Y in the
   Scan menu, the space bar, and a button in the Details panel. An iCloud-only
-  file is not previewed, because previewing downloads it.
+  file is not previewed, because previewing downloads it. An open panel
+  follows the selection, as the Finder's does.
+- **How many levels the map draws** (Tianjin's DiskMap). Cmd-= and Cmd--,
+  from 1 to 12, default 6. Fewer levels showed that a folder at the cut-off
+  was drawn as a blank grey box; it is now named and sized like a file.
 - **Home folder as a target** (DiskMap AI's start screen). A button beside
   "Add More…". It exposed a wrong label: one folder ticked read "Scan Whole
   Disk"; it now reads "Scan 1 Location" unless the one target is a disk.
