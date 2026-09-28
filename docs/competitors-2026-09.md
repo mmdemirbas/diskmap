@@ -71,7 +71,7 @@ three competitors this is the listing, not a test.
 | Colour by age | P (6 bands) | — | P (modified, created) | — |
 | Colour by depth, several themes | — | — | P (10 themes) | ~ (2 palettes) |
 | Legend | P | — | P | — |
-| Filter the map by kind or size | ~ (All files table only) | — | P | — |
+| Filter the map by kind or size | ~ (kind or age: **highlight from the legend, added 2026-09-28**, greys the rest without hiding it; size bands in the All files table) | — | P | — |
 | Hidden files toggle | — (always counted) | — | P | P |
 | Package contents toggle | — (always opened) | — | — | P |
 | Scan-time ignores (extension, folder, min size) | — (on purpose, see below) | — | P | — |
@@ -105,7 +105,7 @@ three competitors this is the listing, not a test.
 
 ## What was taken from them
 
-Four gaps were bounded and clearly worth closing the same day:
+Six gaps were bounded and clearly worth closing the same day:
 
 - **Quick Look.** FIPLAB and DiskMap AI both let you look at a file before
   deleting it; DiskMap could only reveal it in the Finder. Now: Cmd-Y in the
@@ -125,6 +125,13 @@ Four gaps were bounded and clearly worth closing the same day:
   with no Trash is now refused at planning, by name, before the
   confirmation; on the NFS share checked the same day the Trash failed only
   after the user had confirmed.
+
+- **Picking a kind or an age on the map** (FIPLAB filters by kind). Done
+  as a highlight rather than a filter: click a swatch in the legend and
+  everything else in the treemap, sunburst and icicle turns grey. A filter
+  that hides files changes what every folder adds up to, which is the thing
+  this app promises not to do; a highlight answers "where are my videos"
+  with every size still true. Size bands stay in the All files table.
 
 ## Not taken, on purpose
 
@@ -148,7 +155,7 @@ same day (above); the rest are not started.
 |---|---|---|---|---|
 | 1 | **Done.** Refuse to trash the folders macOS depends on (`/System`, `/Library`, `/usr`, `~/Library` itself, the home folder itself), with the reason in the confirmation | DiskMap AI | Small | Today only scan roots and the never-touch list are refused; trashing `~/Library` from a home scan is one confirmation away |
 | 2 | **Done.** Say before a Trash on a volume with no Trash (network shares, some external disks) that nothing will be moved, instead of failing after the confirmation | FIPLAB (as a warning) | Small | The share checked on 2026-09-28 refuses every Trash; the user learns it only after confirming |
-| 3 | A filter on the map by kind and by size band, shown as a filter (the map says what it hides) | FIPLAB | Medium | The All files table already has these filters; the map has only a name filter |
+| 3 | **Done, as a highlight.** A filter on the map by kind and by size band, shown as a filter (the map says what it hides) | FIPLAB | Medium | The All files table already has these filters; the map has only a name filter |
 | 4 | **Done.** More or fewer levels drawn, with shortcuts | Tianjin | Small–medium | Depth is fixed at 6; deep trees of small files get noisy |
 | 5 | One delete queue that any view can add to, reviewed in one sheet | FIPLAB, DiskMap AI | Medium | Ticks exist per tool (Copies, Free up space) but not across the map, the table and Find |
 | 6 | VoiceOver labels for map cells and rings; honour Reduce Motion | DiskMap AI | Large | The only accessibility label in the app is on the home view |

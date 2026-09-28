@@ -62,9 +62,7 @@ struct IcicleView: View {
         return Icicle.hitTest(layout.cells, point: point)
     }
 
-    private func fill(_ meta: CellInfo) -> Color {
-        model.colourMode == .age ? meta.age.color(scheme) : meta.category.color(scheme)
-    }
+    private func fill(_ meta: CellInfo) -> Color { model.map.fill(meta, scheme) }
 
     private func draw(_ layout: IcicleLayout, in ctx: inout GraphicsContext) {
         for cell in layout.cells {

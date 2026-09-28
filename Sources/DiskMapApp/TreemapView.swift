@@ -90,8 +90,7 @@ struct TreemapView: View {
                 continue
             }
 
-            var base = model.colourMode == .age ? meta.age.color(scheme)
-                                                : meta.category.color(scheme)
+            var base = model.map.fill(meta, scheme)
             if meta.flags.contains(.dataless) { base = base.opacity(0.30) }
             let lift = min(Double(cell.depth) * 0.05, 0.25)
             // A folder whose contents lie below the levels drawn is, on this
@@ -108,7 +107,9 @@ struct TreemapView: View {
             if r.width > 3, r.height > 3 {
                 ctx.stroke(path, with: .color(.black.opacity(0.20)), lineWidth: 0.5)
             }
-            if r.width > 58, r.height > 20 {
+            // A greyed-out cell keeps its place and loses its words, so the
+            // highlighted ones are what the eye lands on.
+            if r.width > 58, r.height > 20, !model.map.isDimmed(meta) {
                 var clipped = ctx
                 clipped.clip(to: path)
                 clipped.draw(ctx.resolve(Text(meta.name)

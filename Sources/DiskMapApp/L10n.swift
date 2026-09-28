@@ -105,6 +105,10 @@ final class L10n: ObservableObject {
         active == .tr ? "eşleşti, ancak \(fmt(n)) dosya okunamadı"
                       : "matched, but \(count(n, "file was", "files were")) not read"
     }
+    func legendHighlight(_ label: String) -> String {
+        active == .tr ? "\(label) dışındakileri soluklaştır; boyutlar değişmez"
+                      : "Grey out everything but \(label); no size changes"
+    }
     func levelsShown(_ n: Int) -> String {
         active == .tr ? "Gösterilen düzey: \(n)" : "Levels shown: \(n)"
     }
@@ -481,7 +485,7 @@ final class L10n: ObservableObject {
         case chooseTarget, volume, scanVolume, addHome, fdaWarning, openPrivacy
         case cancel, size, share, name, emptyFolder, noMatches
         case nothingSelected, nothingSelectedHint, ofVolume, reveal, trash
-        case apparentMismatch, openHere, revealInFinder, quickLook, quickLookInICloud, showMoreLevels, showFewerLevels, copyPath, moveToTrash
+        case apparentMismatch, openHere, revealInFinder, quickLook, quickLookInICloud, showMoreLevels, showFewerLevels, legendShowAll, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
         case showDiagnostics, itemGone
@@ -769,6 +773,7 @@ final class L10n: ObservableObject {
         .revealInFinder: ("Reveal in Finder", "Finder'da göster"),
         .quickLook: ("Quick Look", "Hızlı Bakış"),
         .showMoreLevels: ("Show More Levels", "Daha fazla düzey göster"),
+        .legendShowAll: ("Click again to show everything", "Hepsini göstermek için yeniden tıklayın"),
         .showFewerLevels: ("Show Fewer Levels", "Daha az düzey göster"),
         .quickLookInICloud: ("This file is in iCloud only. Showing it would download it.",
                              "Bu dosya yalnızca iCloud'da. Göstermek için indirilmesi gerekir."),

@@ -63,6 +63,10 @@ enum OffscreenRenderer {
         if let l = env["DISKMAP_LEVELS"].flatMap(Int.init), MapModule.levelRange.contains(l) {
             model.map.levels = l
         }
+        if let h = env["DISKMAP_HIGHLIGHT"],
+           let category = FileCategory.allCases.first(where: { "\($0)" == h }) {
+            model.map.highlight = .category(category)
+        }
         if let p = env["DISKMAP_PANEL"], let mode = PanelMode(rawValue: p) {
             model.panel = mode
             model.refreshSummarySync()

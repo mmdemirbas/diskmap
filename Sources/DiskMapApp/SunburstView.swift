@@ -68,9 +68,7 @@ struct SunburstView: View {
         return Sunburst.hitTest(layout.segments, point: point, centre: centre(size))
     }
 
-    private func fill(_ meta: CellInfo) -> Color {
-        model.colourMode == .age ? meta.age.color(scheme) : meta.category.color(scheme)
-    }
+    private func fill(_ meta: CellInfo) -> Color { model.map.fill(meta, scheme) }
 
     /// An annular sector. Angles run clockwise from twelve o'clock, so each is
     /// turned a quarter turn back to match the drawing convention.

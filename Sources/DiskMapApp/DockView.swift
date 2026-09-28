@@ -333,7 +333,7 @@ struct MapDock: View {
             // Only when there is a picture to read it against.
             if model.map.visiblePanes.contains(where: { $0.isPicture }) {
                 Divider()
-                Legend(mode: model.colourMode, renderMode: model.renderMode)
+                Legend(mode: model.colourMode, highlight: $model.map.highlight, renderMode: model.renderMode)
             }
         }
     }

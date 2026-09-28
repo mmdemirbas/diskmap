@@ -2,6 +2,12 @@ import Combine
 import DiskMapCore
 import SwiftUI
 
+/// A swatch picked from the legend under the map.
+enum MapHighlight: Equatable {
+    case category(FileCategory)
+    case age(AgeBucket)
+}
+
 /// *Where the space went* — the map itself, as state rather than as an app.
 ///
 /// Last of the seven extractions, and the one that was always going to be
@@ -75,7 +81,33 @@ final class MapModule: ObservableObject {
     func showFewerLevels() { if canShowFewerLevels { levels -= 1; storeLevels() } }
     private func storeLevels() { UserDefaults.standard.set(levels, forKey: Self.levelsKey) }
 
-    @Published var colourMode: ColourMode = .type
+    @Published var colourMode: ColourMode = .type {
+        // A highlight names a swatch of the legend on screen; another mode
+        // shows another legend.
+        didSet { if colourMode != oldValue { highlight = nil } }
+    }
+
+    /// One kind, or one age, picked from the legend: everything else in the
+    /// pictures is greyed out. Nothing is hidden and nothing moves — the
+    /// sizes, the layout and every total stay what they are, so the map
+    /// never tells a different story about the disk, only points at part of
+    /// it.
+    @Published var highlight: MapHighlight?
+
+    /// The colour a cell is painted: its kind or its age, or grey when a
+    /// highlight is on and this is not what it points at.
+    func fill(_ meta: CellInfo, _ scheme: ColorScheme) -> Color {
+        if isDimmed(meta) { return Color.gray.opacity(scheme == .dark ? 0.35 : 0.30) }
+        return colourMode == .age ? meta.age.color(scheme) : meta.category.color(scheme)
+    }
+
+    func isDimmed(_ meta: CellInfo) -> Bool {
+        switch highlight {
+        case nil: false
+        case .category(let c): meta.category != c
+        case .age(let a): meta.age != a
+        }
+    }
 
     /// How the map's area is divided up, and which pane is in front of each
     /// group. This replaced two segmented pickers — one choosing the picture,
