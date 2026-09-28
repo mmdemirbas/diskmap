@@ -468,7 +468,7 @@ final class L10n: ObservableObject {
         case chooseTarget, volume, scanVolume, scanHome, fdaWarning, openPrivacy
         case cancel, size, share, name, emptyFolder, noMatches
         case nothingSelected, nothingSelectedHint, ofVolume, reveal, trash
-        case apparentMismatch, openHere, revealInFinder, copyPath, moveToTrash
+        case apparentMismatch, openHere, revealInFinder, quickLook, quickLookInICloud, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
         case showDiagnostics, itemGone
@@ -754,6 +754,9 @@ final class L10n: ObservableObject {
                             "Görünen boyut diskteki bayttan çok daha büyük: iCloud yer tutucuları, seyrek dosyalar ya da sıkıştırma."),
         .openHere: ("Open here", "Burada aç"),
         .revealInFinder: ("Reveal in Finder", "Finder'da göster"),
+        .quickLook: ("Quick Look", "Hızlı Bakış"),
+        .quickLookInICloud: ("This file is in iCloud only. Showing it would download it.",
+                             "Bu dosya yalnızca iCloud'da. Göstermek için indirilmesi gerekir."),
         .copyPath: ("Copy Path", "Yolu kopyala"),
         .moveToTrash: ("Move to Trash", "Çöp Kutusu'na taşı"),
         .icloudZero: ("iCloud, 0 bytes here", "iCloud, burada 0 bayt"),

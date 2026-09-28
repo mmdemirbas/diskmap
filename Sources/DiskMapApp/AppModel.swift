@@ -1876,6 +1876,24 @@ final class AppModel: ObservableObject {
         FileActions.revealInFinder([url])
     }
 
+    /// The file Quick Look is showing, or nil. The window's
+    /// `quickLookPreview` shows it and clears it when the panel closes.
+    @Published var quickLookURL: URL?
+
+    /// Shows the item in Quick Look, or closes the panel if it is open —
+    /// the space bar does both, as it does in the Finder. A file whose bytes
+    /// are only in iCloud is not shown: previewing it would download it, and
+    /// a tool for finding space should not fill it as a side effect.
+    func quickLook(_ node: Int32) {
+        if quickLookURL != nil { quickLookURL = nil; return }
+        guard let tree, let url = url(of: node) else { return }
+        if tree.withStore({ $0.flagSet(node).contains(.dataless) }) {
+            toast = L10n.shared[.quickLookInICloud]
+            return
+        }
+        quickLookURL = url
+    }
+
     /// What a node is, as something the rest of the system can act on.
     ///
     /// Built from the stored name bytes rather than from `path`, which is text

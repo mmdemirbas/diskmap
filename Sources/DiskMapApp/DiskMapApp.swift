@@ -1,5 +1,6 @@
 import AppKit
 import DiskMapCore
+import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -54,7 +55,9 @@ private struct SessionWindow: View {
     var body: some View {
         ContentView(model: model)
             .focusedSceneValue(\.appModel, model)
+            .quickLookPreview($model.quickLookURL)
             .onAppear {
+                SpaceBarQuickLook.install()
                 // A service can arrive before anything is on screen, since
                 // choosing one is what launches the app.
                 ServicesProvider.shared.use(model)
@@ -173,6 +176,11 @@ private struct ScanCommands: Commands {
             Divider()
             Button(loc[.revealInFinder]) { if let s = model?.selection { model?.reveal(s) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(model?.selection == nil)
+            // ⌘Y, as in the Finder. The space bar does the same, from
+            // `SpaceBarQuickLook`, since a menu item cannot take a bare space.
+            Button(loc[.quickLook]) { if let s = model?.selection { model?.quickLook(s) } }
+                .keyboardShortcut("y", modifiers: .command)
                 .disabled(model?.selection == nil)
             Button(loc[.moveToTrash]) { if let s = model?.selection { model?.requestTrash(s) } }
                 .keyboardShortcut(.delete, modifiers: .command)

@@ -351,18 +351,54 @@ struct DetailsPanel: View {
 
     /// Present and disabled rather than absent: what can be done with a
     /// selection is worth knowing before there is one.
+    ///
+    /// Three labelled buttons fit the panel in English and not in Turkish.
+    /// Rather than cut every label short, the words go first from the ones
+    /// whose symbols say enough — Quick Look's eye, then all three — with the
+    /// name kept as the tooltip. Which row fits depends on the language only,
+    /// never on what is selected, so the row does not change under the pointer.
     private func actions(_ item: ItemInfo?) -> some View {
-        HStack(spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+            actionRow(item, words: .all)
+            actionRow(item, words: .allButQuickLook)
+            actionRow(item, words: .none)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .controlSize(.small)
+    }
+
+    private enum ActionWords { case all, allButQuickLook, none }
+
+    private func actionRow(_ item: ItemInfo?, words: ActionWords) -> some View {
+        func label(_ title: String, _ symbol: String, shown: Bool) -> some View {
+            Label(title, systemImage: symbol)
+                .labelStyle(ShownOrIcon(shown: shown))
+        }
+        return HStack(spacing: 8) {
             Button { if let item { model.reveal(item.node) } } label: {
-                Label(loc[.reveal], systemImage: "arrow.right.circle")
+                label(loc[.reveal], "arrow.right.circle", shown: words != .none)
             }
+            .help(loc[.revealInFinder])
+            .disabled(item == nil)
+            Button { if let item { model.quickLook(item.node) } } label: {
+                label(loc[.quickLook], "eye", shown: words == .all)
+            }
+            .help(loc[.quickLook] + " (Space)")
             .disabled(item == nil)
             Button(role: .destructive) { if let item { model.requestTrash(item.node) } } label: {
-                Label(loc[.trash], systemImage: "trash")
+                label(loc[.trash], "trash", shown: words != .none)
             }
+            .help(loc[.moveToTrash])
             .disabled(item == nil)
-            Spacer()
         }
-        .controlSize(.small)
+        .fixedSize()
+    }
+}
+
+/// The title and the icon, or the icon alone.
+private struct ShownOrIcon: LabelStyle {
+    let shown: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if shown { Label(configuration) } else { configuration.icon }
     }
 }
