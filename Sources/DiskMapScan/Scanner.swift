@@ -108,7 +108,12 @@ public struct ScanStats: Sendable {
     }
 }
 
-public struct ScanResult: Sendable {
+/// Sent once, from the walk that built the store to the one owner that
+/// reads and updates it from then on; the walk has finished with it by the
+/// time this exists. That hand-over is what makes it safe to send, and the
+/// compiler cannot see it, since `NodeStore` is a plain class guarded by
+/// its owner's lock.
+public struct ScanResult: @unchecked Sendable {
     /// Which node keeps each multi-link inode's bytes, for the live update.
     public let inodes: InodeSet
     public init(store: NodeStore, stats: ScanStats, roots: [String],

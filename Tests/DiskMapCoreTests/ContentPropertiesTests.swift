@@ -26,10 +26,10 @@ final class ContentCacheTests: XCTestCase {
         private let lock = NSLock()
         private(set) var calls: [String] = []
         func fetch(_ path: String) -> ContentProperties {
-            lock.lock(); calls.append(path); lock.unlock()
+            lock.lock(); calls.append(path); let n = calls.count; lock.unlock()
             var out = ContentProperties()
             out.indexed = true
-            out.pixelWidth = calls.count
+            out.pixelWidth = n
             return out
         }
     }
@@ -42,7 +42,7 @@ final class ContentCacheTests: XCTestCase {
 
     func testTheSameFileIsOnlyAskedAboutOnce() throws {
         let counter = Counter()
-        let cache = ContentCache(fetch: counter.fetch)
+        let cache = ContentCache(fetch: { counter.fetch($0) })
         let path = try write("a.bin", 10)
 
         XCTAssertEqual(cache.properties(ofFile: path)?.pixelWidth, 1)
@@ -55,7 +55,7 @@ final class ContentCacheTests: XCTestCase {
     /// dimensions of a picture that has been replaced.
     func testChangingTheFileMakesTheAnswerStale() throws {
         let counter = Counter()
-        let cache = ContentCache(fetch: counter.fetch)
+        let cache = ContentCache(fetch: { counter.fetch($0) })
         let path = try write("a.bin", 10)
         _ = cache.properties(ofFile: path)
 
@@ -71,7 +71,7 @@ final class ContentCacheTests: XCTestCase {
     /// is what the filesystem calls the file, not what it is called today.
     func testTwoDifferentFilesDoNotShareAnAnswer() throws {
         let counter = Counter()
-        let cache = ContentCache(fetch: counter.fetch)
+        let cache = ContentCache(fetch: { counter.fetch($0) })
         let a = try write("a.bin", 10)
         let b = try write("b.bin", 20)
 
@@ -84,14 +84,14 @@ final class ContentCacheTests: XCTestCase {
     /// caller has to be able to tell them apart.
     func testAMissingFileIsNotAnEmptyAnswer() {
         let counter = Counter()
-        let cache = ContentCache(fetch: counter.fetch)
+        let cache = ContentCache(fetch: { counter.fetch($0) })
         XCTAssertNil(cache.properties(ofFile: root.appendingPathComponent("nope").path))
         XCTAssertTrue(counter.calls.isEmpty, "the index was asked about a file that is not there")
     }
 
     func testTheCacheStopsGrowing() throws {
         let counter = Counter()
-        let cache = ContentCache(limit: 3, fetch: counter.fetch)
+        let cache = ContentCache(limit: 3, fetch: { counter.fetch($0) })
         for i in 0..<10 { _ = cache.properties(ofFile: try write("f\(i).bin", i + 1)) }
         XCTAssertEqual(cache.count, 3)
     }

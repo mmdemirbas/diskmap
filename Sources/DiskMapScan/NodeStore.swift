@@ -242,7 +242,7 @@ public final class NodeStore {
         // copy has to do the same or it is not the same store: everything that
         // reads a root — the path builder, the comparison's two headings —
         // would show one folder name where a scan shows a location.
-        var rootName = Array(out.roots[0].utf8)
+        let rootName = Array(out.roots[0].utf8)
         nameBytes.withUnsafeBufferPointer { blob in
             let base = blob.baseAddress!
             rootName.withUnsafeBufferPointer { rootBytes in

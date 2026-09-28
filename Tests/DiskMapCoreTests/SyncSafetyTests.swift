@@ -47,7 +47,7 @@ final class SyncSafetyTests: XCTestCase {
     private func writeRaw(_ base: URL, _ name: String, bytes: Int, fill: UInt8) throws {
         let path = base.path + "/" + name
         let fd = path.withCString { open($0, O_CREAT | O_WRONLY | O_TRUNC, 0o644) }
-        try XCTUnwrap(fd >= 0 ? true : nil, "could not create \(name)")
+        _ = try XCTUnwrap(fd >= 0 ? true : nil, "could not create \(name)")
         var data = [UInt8](repeating: fill, count: bytes)
         _ = data.withUnsafeMutableBytes { Darwin.write(fd, $0.baseAddress, bytes) }
         close(fd)

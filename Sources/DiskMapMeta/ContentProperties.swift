@@ -113,7 +113,7 @@ public final class ContentCache: @unchecked Sendable {
     private let fetch: @Sendable (String) -> ContentProperties
 
     public init(limit: Int = 4096,
-                fetch: @escaping @Sendable (String) -> ContentProperties = Spotlight.properties(ofFile:)) {
+                fetch: @escaping @Sendable (String) -> ContentProperties = { Spotlight.properties(ofFile: $0) }) {
         self.limit = limit
         self.fetch = fetch
     }
