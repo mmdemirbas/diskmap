@@ -174,6 +174,13 @@ private struct ScanCommands: Commands {
                 .keyboardShortcut(.upArrow, modifiers: .command)
                 .disabled(model?.currentDirectory == 0)
             Divider()
+            Button(loc[.showMoreLevels]) { model?.map.showMoreLevels() }
+                .keyboardShortcut("=", modifiers: .command)
+                .disabled(!(model?.map.canShowMoreLevels ?? false))
+            Button(loc[.showFewerLevels]) { model?.map.showFewerLevels() }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(!(model?.map.canShowFewerLevels ?? false))
+            Divider()
             Button(loc[.revealInFinder]) { if let s = model?.selection { model?.reveal(s) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model?.selection == nil)

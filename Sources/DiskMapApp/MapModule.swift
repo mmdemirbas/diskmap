@@ -56,6 +56,25 @@ final class MapModule: ObservableObject {
     @Published var usePhysicalSize = true
     @Published var filterText = ""
 
+    /// How many levels below the folder being looked at the treemap draws;
+    /// the sunburst draws one ring more, as it always has. Six by default.
+    /// Fewer calms a deep tree of small files, more shows where the bulk of
+    /// a folder actually sits. What the user picks is stored, so the next
+    /// window and the next launch start there; setting the value directly —
+    /// a test, a headless render — stores nothing.
+    @Published var levels: Int = MapModule.storedLevels
+    static let levelRange = 1...12
+    private static let levelsKey = "mapLevels"
+    private static var storedLevels: Int {
+        let stored = UserDefaults.standard.integer(forKey: levelsKey)
+        return levelRange.contains(stored) ? stored : 6
+    }
+    var canShowMoreLevels: Bool { levels < Self.levelRange.upperBound }
+    var canShowFewerLevels: Bool { levels > Self.levelRange.lowerBound }
+    func showMoreLevels() { if canShowMoreLevels { levels += 1; storeLevels() } }
+    func showFewerLevels() { if canShowFewerLevels { levels -= 1; storeLevels() } }
+    private func storeLevels() { UserDefaults.standard.set(levels, forKey: Self.levelsKey) }
+
     @Published var colourMode: ColourMode = .type
 
     /// How the map's area is divided up, and which pane is in front of each
@@ -398,7 +417,7 @@ final class MapModule: ObservableObject {
     /// asking for a sunburst layout while the treemap was the chosen one
     /// computed a treemap and filed it under the sunburst's name.
     func layoutKey(_ kind: Visualization, size: CGSize) -> String {
-        "\(kind.rawValue)-\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)"
+        "\(kind.rawValue)-\(currentDirectory)-\(revision)-\(Int(size.width))x\(Int(size.height))-\(usePhysicalSize)-\(filterText)-L\(levels)"
     }
 
     func cachedLayout(for size: CGSize) -> TreemapLayout? {
@@ -406,14 +425,14 @@ final class MapModule: ObservableObject {
     }
 
     nonisolated static func compute(tree: LiveTree, root: Int32, size: CGSize,
-                                    physical: Bool, filter: String, key: String,
+                                    physical: Bool, filter: String, key: String, levels: Int = 6,
                                     rootNames names: [String: String] = [:]) -> TreemapLayout {
         let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
         let needle = filter.lowercased()
         return tree.withStore { store in
             let laid = Treemap.layout(
-                store: store, root: root, in: rect, usePhysicalSize: physical,
+                store: store, root: root, in: rect, usePhysicalSize: physical, maxDepth: levels,
                 includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
             var map: [Int32: CellInfo] = [:]
             map.reserveCapacity(laid.count)
@@ -423,7 +442,7 @@ final class MapModule: ObservableObject {
             span.end(["cells": .int(Int64(laid.count)),
                       "w": .int(Int64(size.width)), "h": .int(Int64(size.height)),
                       "view": .text("treemap")], minMilliseconds: 40)
-            return TreemapLayout(key: key, cells: laid, info: map)
+            return TreemapLayout(key: key, cells: laid, info: map, levels: levels)
         }
     }
 
@@ -442,14 +461,14 @@ final class MapModule: ObservableObject {
     }
 
     nonisolated static func computeSunburst(tree: LiveTree, root: Int32, size: CGSize,
-                                            physical: Bool, filter: String, key: String,
+                                            physical: Bool, filter: String, key: String, levels: Int = 6,
                                             rootNames names: [String: String] = [:]) -> SunburstLayout {
         let span = Telemetry.begin("layout")
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
         let needle = filter.lowercased()
         return tree.withStore { store in
             let segments = Sunburst.layout(
-                store: store, root: root, in: rect, usePhysicalSize: physical,
+                store: store, root: root, in: rect, usePhysicalSize: physical, maxDepth: levels + 1,
                 includeAtRoot: needle.isEmpty ? nil : { store.name($0).lowercased().contains(needle) })
             var map: [Int32: CellInfo] = [:]
             map.reserveCapacity(segments.count)
@@ -508,7 +527,8 @@ final class MapModule: ObservableObject {
         guard let tree, size.width > 16, size.height > 16 else { return nil }
         let layout = Self.computeSunburst(tree: tree, root: currentDirectory, size: size,
                                           physical: usePhysicalSize, filter: filterText,
-                                          key: layoutKey(.sunburst, size: size), rootNames: rootNames)
+                                          key: layoutKey(.sunburst, size: size), levels: levels,
+                                          rootNames: rootNames)
         sunburstCache.set(layout)
         return layout
     }
@@ -518,7 +538,7 @@ final class MapModule: ObservableObject {
         guard let tree, size.width > 8, size.height > 8 else { return nil }
         let l = Self.compute(tree: tree, root: currentDirectory, size: size,
                              physical: usePhysicalSize, filter: filterText,
-                             key: layoutKey(.treemap, size: size), rootNames: rootNames)
+                             key: layoutKey(.treemap, size: size), levels: levels, rootNames: rootNames)
         layoutCache.set(l)
         return l
     }
@@ -532,12 +552,13 @@ final class MapModule: ObservableObject {
         let physical = usePhysicalSize
         let filter = filterText
         let names = rootNames
+        let levels = levels
         switch kind {
         case .treemap:
             if layoutCache.get(key) != nil { return }
             let layout = await Task.detached(priority: .userInitiated) {
                 Self.compute(tree: tree, root: root, size: size, physical: physical,
-                             filter: filter, key: key, rootNames: names)
+                             filter: filter, key: key, levels: levels, rootNames: names)
             }.value
             guard !Task.isCancelled else { return }
             layoutCache.set(layout)
@@ -545,7 +566,7 @@ final class MapModule: ObservableObject {
             if sunburstCache.get(key) != nil { return }
             let layout = await Task.detached(priority: .userInitiated) {
                 Self.computeSunburst(tree: tree, root: root, size: size, physical: physical,
-                                     filter: filter, key: key, rootNames: names)
+                                     filter: filter, key: key, levels: levels, rootNames: names)
             }.value
             guard !Task.isCancelled else { return }
             sunburstCache.set(layout)

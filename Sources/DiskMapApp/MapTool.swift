@@ -186,6 +186,12 @@ struct MapTool: View {
                     Text(l == .system ? loc[.appearanceSystem] : l.nativeName).tag(l)
                 }
             }
+            Section(loc.levelsShown(model.map.levels)) {
+                Button(loc[.showMoreLevels]) { model.map.showMoreLevels() }
+                    .disabled(!model.map.canShowMoreLevels)
+                Button(loc[.showFewerLevels]) { model.map.showFewerLevels() }
+                    .disabled(!model.map.canShowFewerLevels)
+            }
         } label: {
             Image(systemName: "slider.horizontal.3")
         }

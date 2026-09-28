@@ -59,6 +59,10 @@ enum OffscreenRenderer {
         let env = ProcessInfo.processInfo.environment
         if let v = env["DISKMAP_VIEW"], let mode = Visualization(rawValue: v) { model.visualization = mode }
         if let c = env["DISKMAP_COLOUR"], let mode = ColourMode(rawValue: c) { model.colourMode = mode }
+        // Set on this model only, so a render never writes the stored default.
+        if let l = env["DISKMAP_LEVELS"].flatMap(Int.init), MapModule.levelRange.contains(l) {
+            model.map.levels = l
+        }
         if let p = env["DISKMAP_PANEL"], let mode = PanelMode(rawValue: p) {
             model.panel = mode
             model.refreshSummarySync()

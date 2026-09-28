@@ -94,8 +94,12 @@ struct TreemapView: View {
                                                 : meta.category.color(scheme)
             if meta.flags.contains(.dataless) { base = base.opacity(0.30) }
             let lift = min(Double(cell.depth) * 0.05, 0.25)
-            ctx.fill(path, with: .color(base.opacity(meta.isDirectory ? 0.26 : 0.62 + lift)))
-            guard !meta.isDirectory else { continue }
+            // A folder whose contents lie below the levels drawn is, on this
+            // map, a box of a known size and nothing more — drawn and named
+            // like a file, or it is a blank grey rectangle.
+            let showsContents = meta.isDirectory && cell.depth < layout.levels
+            ctx.fill(path, with: .color(base.opacity(showsContents ? 0.26 : 0.62 + lift)))
+            guard !showsContents else { continue }
 
             ctx.fill(path, with: .linearGradient(
                 Gradient(colors: [.white.opacity(scheme == .dark ? 0.14 : 0.20), .clear]),

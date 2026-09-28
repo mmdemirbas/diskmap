@@ -188,6 +188,11 @@ struct TreemapLayout: KeyedLayout {
     var key: String
     var cells: [TreemapCell]
     var info: [Int32: CellInfo]
+    /// The levels it was laid out to. A folder at this depth has contents
+    /// that were not drawn, so it is painted and named like a file. Carried
+    /// here rather than read from the setting, which can be a step ahead of
+    /// the layout on screen while the next one is computed.
+    var levels: Int = 6
 }
 
 /// Holds the most recent layout outside published state, so the Canvas can read

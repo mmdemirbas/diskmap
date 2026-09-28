@@ -66,7 +66,7 @@ three competitors this is the listing, not a test.
 | Treemap, nested with folder headers | P | P | P | — |
 | Sunburst | P (and icicle) | — | — | P |
 | Breadcrumb, back and forward | P | ~ (back/forward) | P | ~ |
-| Change how many levels are drawn | — (fixed at 6) | P, with shortcuts | — | — |
+| Change how many levels are drawn | **P, added 2026-09-28** (1–12, Cmd-= and Cmd--) | P, with shortcuts | — | — |
 | Colour by kind | P (14 kinds) | P | — | ~ (lists only; the sunburst is a rainbow) |
 | Colour by age | P (6 bands) | — | P (modified, created) | — |
 | Colour by depth, several themes | — | — | P (10 themes) | ~ (2 palettes) |
@@ -149,7 +149,7 @@ same day (above); the rest are not started.
 | 1 | **Done.** Refuse to trash the folders macOS depends on (`/System`, `/Library`, `/usr`, `~/Library` itself, the home folder itself), with the reason in the confirmation | DiskMap AI | Small | Today only scan roots and the never-touch list are refused; trashing `~/Library` from a home scan is one confirmation away |
 | 2 | **Done.** Say before a Trash on a volume with no Trash (network shares, some external disks) that nothing will be moved, instead of failing after the confirmation | FIPLAB (as a warning) | Small | The share checked on 2026-09-28 refuses every Trash; the user learns it only after confirming |
 | 3 | A filter on the map by kind and by size band, shown as a filter (the map says what it hides) | FIPLAB | Medium | The All files table already has these filters; the map has only a name filter |
-| 4 | More or fewer levels drawn, with shortcuts | Tianjin | Small–medium | Depth is fixed at 6; deep trees of small files get noisy |
+| 4 | **Done.** More or fewer levels drawn, with shortcuts | Tianjin | Small–medium | Depth is fixed at 6; deep trees of small files get noisy |
 | 5 | One delete queue that any view can add to, reviewed in one sheet | FIPLAB, DiskMap AI | Medium | Ticks exist per tool (Copies, Free up space) but not across the map, the table and Find |
 | 6 | VoiceOver labels for map cells and rings; honour Reduce Motion | DiskMap AI | Large | The only accessibility label in the app is on the home view |
 | 7 | Treat `.app` and other packages as one item, with a switch | DiskMap AI | Medium | Navigation only; totals unchanged |

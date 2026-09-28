@@ -105,6 +105,9 @@ final class L10n: ObservableObject {
         active == .tr ? "eşleşti, ancak \(fmt(n)) dosya okunamadı"
                       : "matched, but \(count(n, "file was", "files were")) not read"
     }
+    func levelsShown(_ n: Int) -> String {
+        active == .tr ? "Gösterilen düzey: \(n)" : "Levels shown: \(n)"
+    }
     func noTrashOnVolume(_ volume: String) -> String {
         active == .tr
             ? "\(volume) biriminde Çöp Kutusu yok. Disk Haritası yalnızca Çöp Kutusu'na taşır, bu yüzden oradaki hiçbir şey kaldırılamaz."
@@ -478,7 +481,7 @@ final class L10n: ObservableObject {
         case chooseTarget, volume, scanVolume, addHome, fdaWarning, openPrivacy
         case cancel, size, share, name, emptyFolder, noMatches
         case nothingSelected, nothingSelectedHint, ofVolume, reveal, trash
-        case apparentMismatch, openHere, revealInFinder, quickLook, quickLookInICloud, copyPath, moveToTrash
+        case apparentMismatch, openHere, revealInFinder, quickLook, quickLookInICloud, showMoreLevels, showFewerLevels, copyPath, moveToTrash
         case icloudZero, pathCopied, scanMenu, appearance, language
         case appearanceSystem, appearanceLight, appearanceDark, cancelScan, scanning
         case showDiagnostics, itemGone
@@ -765,6 +768,8 @@ final class L10n: ObservableObject {
         .openHere: ("Open here", "Burada aç"),
         .revealInFinder: ("Reveal in Finder", "Finder'da göster"),
         .quickLook: ("Quick Look", "Hızlı Bakış"),
+        .showMoreLevels: ("Show More Levels", "Daha fazla düzey göster"),
+        .showFewerLevels: ("Show Fewer Levels", "Daha az düzey göster"),
         .quickLookInICloud: ("This file is in iCloud only. Showing it would download it.",
                              "Bu dosya yalnızca iCloud'da. Göstermek için indirilmesi gerekir."),
         .copyPath: ("Copy Path", "Yolu kopyala"),
