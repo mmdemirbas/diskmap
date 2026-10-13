@@ -1,0 +1,36 @@
+#:schema ../ajans/schema/project-2.schema.json
+contract = 2
+
+[verbs]
+deploy = "Install Disk Map on this Mac"
+
+[operations.dev]
+summary = "Build, sign and open the app from ./build without installing"
+
+[operations.build]
+summary = "Assemble and sign build/DiskMap.app"
+
+[operations.test]
+summary = "swift test"
+
+[operations.bench]
+summary = "Capacity report for every mounted volume (dmbench; other dmbench commands pass through)"
+
+[operations.shot]
+summary = "Render the README pictures from a made-up folder tree (about 2 GB in /Users/Shared/Sample)"
+
+[operations."deploy mac"]
+summary = "Build, sign and install to /Applications, then open Full Disk Access settings (--no-open skips them)"
+target = "local:app"
+
+[operations."deploy cli"]
+summary = "Build the diskmap command and put it in ~/.local/bin"
+target = "local:cli"
+
+[operations.uninstall]
+summary = "Remove the app, its preferences, the signing certificate and the access grant (asks first; --yes, --dry-run)"
+intent = "clean"
+effects = ["destructive"]
+
+[operations.clean]
+summary = "Remove .build/ and build/"
